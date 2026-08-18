@@ -1,0 +1,1 @@
+This is a Windows program for Optimizing Music Libraries. It targets, optimizing FLAC files, image files (mainly by converting to JPEG XL), cue sheets and Lyrics. This program optimizes both the storage space and formatting of all of these fields.
