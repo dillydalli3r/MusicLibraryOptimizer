@@ -1,0 +1,18 @@
+# Downloaded toolchain (flac, libjxl, libjpeg-turbo, oxipng, AudioAuditor)
+.dependencies/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# PyInstaller build output
+build/
+dist/
+Music Library Optimizer.exe
+
+# Local configuration (machine-specific paths; defaults live in mlo/config.py)
+config.json
+
+# OS / editor
+Thumbs.db
+.DS_Store

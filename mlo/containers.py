@@ -1,0 +1,431 @@
+"""Container-level metadata readers/writers for FLAC, JXL, JPEG and PNG.
+
+Implements the ENCODER marker tag standard (see package docstring).
+"""
+import re
+import zlib
+
+from .deps import FLAC
+
+ENCODER_KEYS = ("ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION")
+
+
+def _enabled(enabled, key):
+    """Whether `key` should be written, per the encoder_tags config dict."""
+    if not enabled:
+        return True
+    return bool(enabled.get(key, True))
+
+
+def _build_xmp_packet(quality, version, program, enabled=None):
+    lines = ["<?xpacket begin='\ufeff' id='W5M0MpCehiHzreSzNTczkc9d'?>\n",
+             "<x:xmpmeta xmlns:x='adobe:ns:meta/'>\n",
+             "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n",
+             "<rdf:Description rdf:about=''\n"
+             "  xmlns:enc='http://ns.example.com/encoder/1.0/'>\n"]
+    if _enabled(enabled, "ENCODER_PROGRAM"):
+        lines.append(f"<enc:ENCODER_PROGRAM>{program}</enc:ENCODER_PROGRAM>\n")
+    if _enabled(enabled, "ENCODER_QUALITY"):
+        lines.append(f"<enc:ENCODER_QUALITY>{quality}</enc:ENCODER_QUALITY>\n")
+    if _enabled(enabled, "ENCODER_VERSION"):
+        lines.append(f"<enc:ENCODER_VERSION>{version}</enc:ENCODER_VERSION>\n")
+    lines.append("</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n"
+                 "<?xpacket end='w'?>")
+    return "".join(lines)
+
+
+def _parse_xmp_tags(xmp_str):
+    if not xmp_str:
+        return None, None
+
+    q = re.search(
+        r"<enc:ENCODER_QUALITY>(.*?)</enc:ENCODER_QUALITY>",
+        xmp_str,
+        re.IGNORECASE | re.DOTALL,
+    )
+    v = re.search(
+        r"<enc:ENCODER_VERSION>(.*?)</enc:ENCODER_VERSION>",
+        xmp_str,
+        re.IGNORECASE | re.DOTALL,
+    )
+    return (q.group(1) if q else None, v.group(1) if v else None)
+
+
+def _read_flac_tags(filepath):
+    """Return (quality, version, program) from the ENCODER marker tags."""
+    try:
+        audio = FLAC(filepath)
+        q = audio.get("ENCODER_QUALITY", [None])[0]
+        v = audio.get("ENCODER_VERSION", [None])[0]
+        p = audio.get("ENCODER_PROGRAM", [None])[0]
+        return q, v, p
+    except Exception:
+        return None, None, None
+
+
+def _write_flac_tags(filepath, quality, version, enabled=None):
+    audio = FLAC(filepath)
+    if _enabled(enabled, "ENCODER_PROGRAM"):
+        audio["ENCODER_PROGRAM"] = "FLAC reference encoder"
+    if _enabled(enabled, "ENCODER_QUALITY"):
+        audio["ENCODER_QUALITY"] = str(quality)
+    if _enabled(enabled, "ENCODER_VERSION"):
+        audio["ENCODER_VERSION"] = str(version)
+    audio.save()
+
+
+def _encoder_dict(program, quality, version, enabled=None):
+    tags = {}
+    if _enabled(enabled, "ENCODER_PROGRAM"):
+        tags["ENCODER_PROGRAM"] = program
+    if _enabled(enabled, "ENCODER_QUALITY"):
+        tags["ENCODER_QUALITY"] = str(quality)
+    if _enabled(enabled, "ENCODER_VERSION"):
+        tags["ENCODER_VERSION"] = str(version)
+    return tags
+
+
+def _identity_missing(enabled, q, v):
+    """Whether the enabled identity tags (QUALITY/VERSION) are missing.
+
+    Used by skip-checks: a file can only be skipped when every identity
+    tag that is actually written exists. If neither identity tag is
+    configured, files can never be identified and always re-encode.
+    """
+    need_q = _enabled(enabled, "ENCODER_QUALITY")
+    need_v = _enabled(enabled, "ENCODER_VERSION")
+    if not need_q and not need_v:
+        return True
+    if need_q and (q is None or str(q).strip() == ""):
+        return True
+    if need_v and (v is None or str(v).strip() == ""):
+        return True
+    return False
+
+
+JXL_SIG = b"\x00\x00\x00\x0cJXL \r\n\x87\n"
+
+
+def _jxl_iter_boxes(data):
+    i = 0
+    n = len(data)
+
+    while i + 8 <= n:
+        size = int.from_bytes(data[i:i + 4], "big")
+        btype = data[i + 4:i + 8]
+        header = 8
+
+        if size == 1:
+            if i + 16 > n:
+                break
+            size = int.from_bytes(data[i + 8:i + 16], "big")
+            header = 16
+        elif size == 0:
+            size = n - i
+
+        payload_start = i + header
+        payload_end = i + size
+        if payload_end > n:
+            payload_end = n
+
+        yield btype, data[payload_start:payload_end], i, size
+        i += size
+
+
+def _read_jxl_tags(jxl_path):
+    try:
+        with open(jxl_path, "rb") as f:
+            data = f.read()
+    except Exception:
+        return None, None
+
+    if not data.startswith(JXL_SIG):
+        return None, None
+
+    for btype, payload, _, _ in _jxl_iter_boxes(data):
+        if btype == b"xml ":
+            try:
+                xmp = payload.decode("utf-8", errors="replace")
+                q, v = _parse_xmp_tags(xmp)
+                if q is not None or v is not None:
+                    return q, v
+            except Exception:
+                continue
+
+    return None, None
+
+
+def _write_jxl_tags(jxl_path, quality, version, enabled=None):
+    with open(jxl_path, "rb") as f:
+        data = f.read()
+
+    if not data.startswith(JXL_SIG):
+        wrapped = bytearray(JXL_SIG)
+
+        ftyp_payload = b"jxl \x00\x00\x00\x04jxl "
+        ftyp_size = 8 + len(ftyp_payload)
+        wrapped.extend(ftyp_size.to_bytes(4, "big"))
+        wrapped.extend(b"ftyp")
+        wrapped.extend(ftyp_payload)
+
+        jxlc_size = 8 + len(data)
+        wrapped.extend(jxlc_size.to_bytes(4, "big"))
+        wrapped.extend(b"jxlc")
+        wrapped.extend(data)
+
+        data = bytes(wrapped)
+
+    xmp = _build_xmp_packet(quality, version, "libjxl/cjxl", enabled).encode("utf-8")
+    new_box_size = 8 + len(xmp)
+    new_box = new_box_size.to_bytes(4, "big") + b"xml " + xmp
+
+    out = bytearray()
+    i = 0
+    n = len(data)
+
+    while i + 8 <= n:
+        size = int.from_bytes(data[i:i + 4], "big")
+        btype = data[i + 4:i + 8]
+
+        if size == 1:
+            if i + 16 > n:
+                break
+            size = int.from_bytes(data[i + 8:i + 16], "big")
+        elif size == 0:
+            size = n - i
+
+        if btype == b"xml ":
+            i += size
+            continue
+
+        out.extend(data[i:i + size])
+        i += size
+
+    out.extend(new_box)
+
+    with open(jxl_path, "wb") as f:
+        f.write(bytes(out))
+
+
+XMP_NS = b"http://ns.adobe.com/xap/1.0/\x00"
+
+
+def _read_jpeg_xmp_tags(jpeg_path):
+    try:
+        with open(jpeg_path, "rb") as f:
+            data = f.read()
+    except Exception:
+        return None, None
+
+    if not data.startswith(b"\xff\xd8"):
+        return None, None
+
+    i = 2
+    n = len(data)
+
+    while i < n:
+        while i < n and data[i] == 0xFF:
+            i += 1
+        if i >= n:
+            break
+
+        marker = data[i]
+        i += 1
+
+        if marker == 0xDA or marker == 0xD9:
+            break
+        if 0xD0 <= marker <= 0xD7:
+            continue
+        if i + 1 >= n:
+            break
+
+        length = (data[i] << 8) | data[i + 1]
+        payload = data[i + 2:i + length]
+        i += length
+
+        if marker == 0xE1 and payload.startswith(XMP_NS):
+            xmp = payload[len(XMP_NS):].decode("utf-8", errors="replace")
+            q, v = _parse_xmp_tags(xmp)
+            if q is not None or v is not None:
+                return q, v
+
+    return None, None
+
+
+def _insert_jpeg_xmp(jpeg_path, quality, version, program, enabled=None):
+    with open(jpeg_path, "rb") as f:
+        data = f.read()
+
+    if not data.startswith(b"\xff\xd8"):
+        return False
+
+    out = bytearray(b"\xff\xd8")
+    i = 2
+    n = len(data)
+
+    while i < n:
+        while i < n and data[i] == 0xFF:
+            i += 1
+        if i >= n:
+            break
+
+        marker = data[i]
+        i += 1
+
+        if marker == 0xDA:
+            if i + 1 < n:
+                length = (data[i] << 8) | data[i + 1]
+                out.extend(b"\xff\xda")
+                out.extend(data[i:i + length])
+                i += length
+                out.extend(data[i:])
+            break
+
+        if marker == 0xD9:
+            out.extend(b"\xff\xd9")
+            break
+
+        if 0xD0 <= marker <= 0xD7:
+            out.extend(b"\xff")
+            out.extend(bytes([marker]))
+            continue
+
+        if i + 1 >= n:
+            break
+
+        length = (data[i] << 8) | data[i + 1]
+        payload = data[i + 2:i + length]
+        i += length
+
+        if marker == 0xE1 and payload.startswith(XMP_NS):
+            continue
+
+        out.extend(b"\xff")
+        out.extend(bytes([marker]))
+        out.extend(data[i - length:i])
+
+    xmp = _build_xmp_packet(quality, version, program, enabled).encode("utf-8")
+    app1_payload = XMP_NS + xmp
+    app1_len = 2 + len(app1_payload)
+    app1 = b"\xff\xe1" + app1_len.to_bytes(2, "big") + app1_payload
+
+    new_data = bytes(out[:2]) + app1 + bytes(out[2:])
+
+    with open(jpeg_path, "wb") as f:
+        f.write(new_data)
+
+    return True
+
+
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
+
+def _iter_png_chunks(data):
+    pos = 8
+    n = len(data)
+
+    while pos + 8 <= n:
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        ctype = data[pos + 4:pos + 8]
+        total = 12 + length
+        payload = data[pos + 8:pos + 8 + length]
+
+        yield ctype, payload, pos, total
+
+        if ctype == b"IEND":
+            return
+
+        pos += total
+
+
+def _read_png_text(png_path):
+    try:
+        with open(png_path, "rb") as f:
+            data = f.read()
+    except Exception:
+        return {}
+
+    if not data.startswith(PNG_SIG):
+        return {}
+
+    result = {}
+
+    for ctype, payload, _, _ in _iter_png_chunks(data):
+        if ctype == b"tEXt":
+            null = payload.find(b"\x00")
+            if null != -1:
+                key = payload[:null].decode("latin-1", errors="replace")
+                val = payload[null + 1:].decode("latin-1", errors="replace")
+                result[key] = val
+
+    return result
+
+
+def _strip_png_metadata(png_path):
+    strip = {b"tEXt", b"iTXt", b"zTXt", b"eXIf", b"tIME"}
+
+    with open(png_path, "rb") as f:
+        data = f.read()
+
+    if not data.startswith(PNG_SIG):
+        return False
+
+    out = bytearray(PNG_SIG)
+
+    for ctype, payload, _, _ in _iter_png_chunks(data):
+        if ctype in strip:
+            continue
+
+        out.extend(len(payload).to_bytes(4, "big"))
+        out.extend(ctype)
+        out.extend(payload)
+
+        crc = zlib.crc32(ctype + payload) & 0xFFFFFFFF
+        out.extend(crc.to_bytes(4, "big"))
+
+    with open(png_path, "wb") as f:
+        f.write(bytes(out))
+
+    return True
+
+
+def _inject_png_text(png_path, tags_dict):
+    tags_dict = {k: v for k, v in tags_dict.items() if v is not None}
+    if not tags_dict:
+        return False
+
+    with open(png_path, "rb") as f:
+        data = f.read()
+
+    if not data.startswith(PNG_SIG):
+        return False
+
+    out = bytearray(PNG_SIG)
+    inserted = False
+
+    for ctype, payload, _, _ in _iter_png_chunks(data):
+        out.extend(len(payload).to_bytes(4, "big"))
+        out.extend(ctype)
+        out.extend(payload)
+
+        crc = zlib.crc32(ctype + payload) & 0xFFFFFFFF
+        out.extend(crc.to_bytes(4, "big"))
+
+        if ctype == b"IHDR" and not inserted:
+            for k, v in tags_dict.items():
+                t_payload = k.encode("latin-1") + b"\x00" + str(v).encode("latin-1")
+
+                out.extend(len(t_payload).to_bytes(4, "big"))
+                out.extend(b"tEXt")
+                out.extend(t_payload)
+
+                crc = zlib.crc32(b"tEXt" + t_payload) & 0xFFFFFFFF
+                out.extend(crc.to_bytes(4, "big"))
+
+            inserted = True
+
+    with open(png_path, "wb") as f:
+        f.write(bytes(out))
+
+    return True
+

@@ -1,0 +1,387 @@
+"""Audio integrity auditing via the AudioAuditor CLI.
+
+Wraps AudioAuditorCLI (https://github.com/Angel2mp3/AudioAuditor), a .NET
+tool that detects fake lossless files (frequency cutoffs / upsampled
+lossy sources), clipping, MQA encoding, fake stereo, excessive silence
+and AI-generated audio. The CLI ships as a single self-contained exe and
+is auto-downloaded into .dependencies like the encoder toolchain.
+
+Files are fed to the CLI in batches via stdin (one path per line, its
+documented bulk mode) and results are read back as one JSON array per
+batch with `analyze --json`.
+
+Outputs written to tags:
+  AUDIT      REAL / FAKE - on every audited file. Files that already
+             carry a REAL or FAKE verdict are skipped (force audit
+             overrides this), like the ENCODER markers for optimization.
+  LOG_GRADE  0-100 rip-log score (AudioAuditor/cambia) - written to the
+             tracks of MEDIA=CD releases only, one score per disc, with
+             logs/cues deterministically named CD-N.log / CD-N.cue
+             first (see discs.py).
+"""
+import json
+import os
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+
+from .audio import AudioFile
+from .paths import AUDIO_EXTS, DEPS_DIR
+from .stats import (
+    new_stats, _make_pbar, _pbar_update, _collect_targets, _walk_files,
+    _diff_bytes,
+)
+from .subproc import run_tool
+from .tools import detect_all_tools
+from .ui import print_header, log, c, Color
+
+# Statuses reported by the CLI: Valid (real lossless), Fake (frequency
+# cutoff / transcoded), Unknown (could not classify / decode errors),
+# Corrupt, Optimized (MQA). Anything unknown-but-decoded is treated as
+# a warning rather than a failure.
+STATUS_REAL = "Valid"
+
+# How many paths to pipe per CLI invocation. The CLI accepts up to 50k
+# paths per run; smaller batches give the GUI a usable progress bar.
+BATCH_SIZE = 250
+
+# Map per-file boolean flags to issue labels for the summary.
+FLAG_KEYS = (
+    ("hasClipping", "clipping"),
+    ("isMqa", "MQA"),
+    ("isAiGenerated", "AI-generated"),
+    ("isFakeStereo", "fake stereo"),
+    ("hasExcessiveSilence", "excessive silence"),
+    ("hasScaledClipping", "scaled clipping"),
+)
+
+
+def _audit_batch(cli, paths, thorough):
+    """Run one AudioAuditorCLI analyze batch; returns parsed items."""
+    cmd = [
+        cli, "analyze", "--json",
+        "--no-fun", "--no-tips", "--no-update-check", "--no-config",
+    ]
+    if thorough:
+        cmd.append("--thorough")
+    else:
+        cmd.append("--fast")
+
+    proc = run_tool(
+        cmd,
+        input="\n".join(paths) + "\n",
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=3600,
+    )
+
+    if not (proc.stdout or "").strip():
+        err = (proc.stderr or "").strip()
+        if "No supported audio files" in err:
+            return []
+        raise RuntimeError(f"AudioAuditorCLI failed (rc={proc.returncode}): "
+                           f"{err[:200] or 'no output'}")
+
+    try:
+        items = json.loads(proc.stdout)
+    except ValueError as e:
+        raise RuntimeError(f"unparseable AudioAuditorCLI JSON output: {e}")
+
+    if not isinstance(items, list):
+        raise RuntimeError("unexpected AudioAuditorCLI output shape")
+    return items
+
+
+def _classify(item):
+    """Return (severity, label): 'fail' | 'warn' | 'ok' and a reason."""
+    status = str(item.get("status", "")).strip()
+    err = str(item.get("errorMessage") or "").strip()
+
+    if status == STATUS_REAL:
+        flags = [label for key, label in FLAG_KEYS if item.get(key)]
+        if flags:
+            return "warn", ", ".join(flags)
+        return "ok", ""
+    if status == "Fake":
+        cutoff = item.get("effectiveFrequency")
+        detail = f"cutoff {cutoff} Hz" if cutoff else "spectral cutoff"
+        return "fail", f"fake lossless ({detail})"
+    if status == "Corrupt":
+        return "fail", f"corrupt: {err or 'unreadable'}"
+    if status == "Optimized":
+        return "fail", "MQA (lossy 'optimized')"
+    if status == "Unknown":
+        if err:
+            return "fail", f"unknown: {err}"
+        return "warn", "unclassified"
+
+    return "warn", f"status {status or '?'}"
+
+
+def _audit_file_line(item):
+    """Compact per-file console line with the key metrics."""
+    parts = [
+        f"{item.get('sampleRate', '?')} Hz",
+        f"{item.get('bitsPerSample', '?')}-bit",
+        f"{item.get('channels', '?')}ch",
+        f"{item.get('actualBitrate', '?')} kbps",
+    ]
+    cutoff = item.get("effectiveFrequency")
+    if cutoff:
+        parts.append(f"cutoff {cutoff} Hz")
+    rg = item.get("replayGain") if item.get("hasReplayGain") else None
+    if rg is not None:
+        parts.append(f"RG {rg} dB")
+    return "  ".join(str(p) for p in parts)
+
+
+def _audit_tag_value(severity, cli_status):
+    """The AUDIT tag value for a file. Binary by design: REAL when the
+    CLI confirms genuine lossless (status Valid), FAKE for everything
+    else (fake lossless, corrupt, MQA, unclassifiable)."""
+    return "REAL" if cli_status == "Valid" else "FAKE"
+
+
+def _read_audit_tag(path):
+    """Current AUDIT verdict of a file: REAL / FAKE / None."""
+    try:
+        af = AudioFile(path)
+        v = str(af.get_tag("AUDIT") or "").strip().upper()
+        return v if v in ("REAL", "FAKE") else None
+    except Exception:
+        return None
+
+
+def _normalize_audit_case(path):
+    """Fix legacy mixed-case verdicts (Real -> REAL) in place. Returns
+    True when the tag was rewritten."""
+    try:
+        af = AudioFile(path)
+        raw = str(af.get_tag("AUDIT") or "").strip()
+        if raw and raw.upper() in ("REAL", "FAKE") and raw != raw.upper():
+            return bool(af.set_tag("AUDIT", raw.upper()))
+    except Exception:
+        pass
+    return False
+
+
+def _write_audit_tag(path, value):
+    """Write the AUDIT tag when it differs. Returns
+    (changed: bool, b_rem: int, b_add: int, error: str | None)."""
+    try:
+        before = os.path.getsize(path)
+    except OSError as e:
+        return False, 0, 0, f"stat: {e}"
+
+    try:
+        af = AudioFile(path)
+        if af.audio is None:
+            return False, 0, 0, f"load: {af.error}"
+
+        cur = af.get_tag("AUDIT")
+        cur_clean = str(cur).strip() if cur is not None else ""
+        if cur_clean.lower() == value.lower():
+            return False, 0, 0, None
+
+        if not af.set_tag("AUDIT", value):
+            return False, 0, 0, f"write: {af.error}"
+
+        after = os.path.getsize(path)
+        b_rem, b_add = _diff_bytes(before, after)
+        return True, b_rem, b_add, None
+    except Exception as e:
+        return False, 0, 0, str(e)
+
+
+def run_audit_library(config):
+    folder = config["music_folder"]
+    thorough = config.get("audit_thorough", False)
+
+    stats = new_stats()
+    stats["is_grader"] = True
+    stats["grade_dist"] = {"PASS": 0, "FAIL": 0}
+
+    print_header("Audio Auditor (AudioAuditorCLI)")
+    log(f"music folder: {folder} · thorough={thorough} · writes AUDIT tags")
+
+    tools = detect_all_tools()
+    aa = tools.get("audioauditor")
+    if not aa:
+        log(c("ERROR: Could not auto-detect AudioAuditorCLI in the "
+              ".dependencies folder.", Color.RED))
+        log(f"Expected a folder like: {os.path.join(DEPS_DIR, 'AudioAuditor v2.0.0')}")
+        log("Use Dependencies (GUI sidebar → MANAGE) to download it.")
+        return stats
+
+    cli = aa["cli_exe"]
+    log(f"cli: {cli} · v{aa['version']}")
+
+    if not os.path.isdir(folder):
+        log(c(f"ERROR: folder does not exist: {folder}", Color.RED))
+        return stats
+
+    files = _collect_targets(config.get("targets"), AUDIO_EXTS)
+    if not files:
+        files = sorted(_walk_files(folder, AUDIO_EXTS))
+    if not files:
+        log("No audio files found.")
+        return stats
+
+    force = config.get("force_audit", False)
+    verbose = config.get("grade_verbose", True)
+
+    # Skip files that already carry a REAL/FAKE verdict (normalizing
+    # legacy mixed-case values) unless the audit is forced.
+    todo = files
+    skipped = 0
+    if not force:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            verdicts = list(pool.map(_read_audit_tag, files))
+        todo = []
+        for path, verdict in zip(files, verdicts):
+            if verdict is not None:
+                skipped += 1
+                if _normalize_audit_case(path):
+                    stats["modified_count"] += 1
+            else:
+                todo.append(path)
+        if skipped:
+            log(f"skipping {skipped} file(s) already carrying an AUDIT "
+                f"verdict (force audit overrides)")
+
+    log(f"auditing {len(todo)} file(s) · fast scan "
+        f"{'off (--thorough)' if thorough else 'on'}")
+
+    counts = {"ok": 0, "skip": 0, "fail": 0}
+    status_counts = {"Real": 0, "Fake": 0, "Unknown": 0,
+                     "Corrupt": 0, "Optimized": 0}
+    issue_counts = {}
+    flagged = []
+    warned = 0
+    pbar = _make_pbar(len(todo), "Auditing", unit="file")
+
+    for start in range(0, len(todo), BATCH_SIZE):
+        batch = todo[start:start + BATCH_SIZE]
+        try:
+            items = _audit_batch(cli, batch, thorough)
+        except Exception as e:
+            stats["error_count"] += len(batch)
+            stats["errors"].append((f"batch {start // BATCH_SIZE + 1} "
+                                    f"({len(batch)} files)", str(e)))
+            log(c(f"Audit batch failed: {e}", Color.RED))
+            _pbar_update(pbar, counts, kind="fail")
+            continue
+
+        missing = {os.path.normcase(p) for p in batch}
+        for item in items:
+            path = item.get("filePath") or ""
+            missing.discard(os.path.normcase(path))
+            severity, reason = _classify(item)
+            cli_status = str(item.get("status", "")).strip()
+
+            stats["total_scanned"] += 1
+            rel = os.path.relpath(path, folder) if path else item.get(
+                "fileName", "?")
+
+            # CLI verdict drives the status counts; warnings (clipping
+            # flags etc. on an otherwise Valid file) are tracked apart.
+            skey = {"Valid": "Real", "Fake": "Fake", "Corrupt": "Corrupt",
+                    "Optimized": "Optimized"}.get(cli_status, "Unknown")
+            status_counts[skey] += 1
+
+            # Persist the verdict into the file's AUDIT tag.
+            tag_value = _audit_tag_value(severity, cli_status)
+            changed, b_rem, b_add, tag_err = _write_audit_tag(
+                path, tag_value)
+            if tag_err:
+                log(c(f"    [tag warn] {os.path.basename(rel)}: {tag_err}",
+                      Color.YELLOW))
+            elif changed:
+                stats["modified_count"] += 1
+                stats["total_bytes_removed"] += b_rem
+                stats["total_bytes_added"] += b_add
+
+            if severity == "ok":
+                if verbose:
+                    log(f"{c('✓', Color.GREEN)} {rel}")
+            elif severity == "warn":
+                warned += 1
+                stats["skipped_count"] += 1
+                issue_counts[reason] = issue_counts.get(reason, 0) + 1
+                log(f"{c('!', Color.YELLOW)} {rel}  "
+                    f"{c(reason, Color.YELLOW)}")
+                if verbose:
+                    log(f"    {_audit_file_line(item)}")
+            else:
+                stats["grade_dist"]["FAIL"] += 1
+                stats["errors"].append((rel, reason))
+                base_reason = reason.split(" (")[0]
+                issue_counts[base_reason] = issue_counts.get(base_reason, 0) + 1
+                flagged.append((rel, reason))
+                log(f"{c('✕', Color.RED)} {rel}  {c(reason, Color.RED)}")
+                log(f"    {_audit_file_line(item)}")
+
+        # Files the CLI silently dropped (unsupported/renamed).
+        for gone in missing:
+            stats["total_scanned"] += 1
+            stats["skipped_count"] += 1
+            status_counts["Unknown"] += 1
+            log(f"{c('–', Color.GREY)} {os.path.relpath(gone, folder)} "
+                f"{c('(no audit result)', Color.GREY)}")
+
+        if pbar is not None:
+            try:
+                pbar.update(len(batch))
+            except Exception:
+                pass
+
+    if pbar:
+        pbar.close()
+
+    # Rip-log grading for MEDIA=CD albums: rename logs/cues to CD-N and
+    # write each disc's 0-100 cambia score to its tracks' LOG_GRADE.
+    album_dirs = sorted({os.path.dirname(p) for p in files})
+    log_scores = {}
+    log_notes = []
+    from .discs import grade_album_logs
+    for album_dir in album_dirs:
+        if not os.path.isdir(album_dir):
+            continue
+        scores, notes = grade_album_logs(
+            cli, album_dir, force=force,
+            log_fn=(lambda m: log(f"  {m}")) if verbose else None)
+        if scores:
+            log_scores[album_dir] = scores
+        log_notes.extend(f"{os.path.basename(album_dir)}: {n}" for n in notes)
+
+    if log_scores:
+        log("")
+        log("Rip-log grades (LOG_GRADE):")
+        for album_dir, scores in log_scores.items():
+            parts = " · ".join(f"CD-{d} = {s}/100"
+                               for d, s in sorted(scores.items()))
+            log(f"  {os.path.basename(album_dir)}: {parts}")
+    if log_notes:
+        for n in log_notes[:20]:
+            log(c(f"  [log] {n}", Color.YELLOW))
+        if len(log_notes) > 20:
+            log(f"  … and {len(log_notes) - 20} more.")
+
+    stats["grade_dist"]["PASS"] = status_counts["Real"]
+    stats["summary_pass"] = status_counts["Real"] - warned
+    stats["summary_total"] = stats["total_scanned"]
+    stats["issue_counts"] = issue_counts
+    stats["audit_status_counts"] = status_counts
+    stats["audit_warned"] = warned
+    stats["audit_flagged"] = len(flagged)
+    stats["audit_log_scores"] = {
+        os.path.basename(d): s for d, s in log_scores.items()}
+
+    log("")
+    log("Audit summary: "
+        + " · ".join(f"{k} {v}" for k, v in status_counts.items()))
+    if skipped:
+        log(f"  {skipped} file(s) already audited were skipped.")
+    if warned:
+        log(f"  {warned} clean file(s) carry warning flags "
+            f"(clipping / MQA / silence / AI markers) - still REAL.")
+
+    return stats

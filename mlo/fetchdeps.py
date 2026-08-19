@@ -1,0 +1,345 @@
+"""Automatic dependency fetcher.
+
+Downloads the latest official Windows builds of the external encoder
+toolchain from GitHub releases and installs them into .dependencies/
+using exactly the layout the auto-detection in tools.py expects:
+
+    .dependencies/
+        flac v1.5.0/           flac.exe, metaflac.exe
+        libjxl v0.12.0/        cjxl.exe, djxl.exe
+        libjpeg-turbo v3.2.0/  jpegtran.exe
+        oxipng v10.2.0/        oxipng.exe
+
+Asset sources:
+    flac            xiph/flac          flac-<v>-win.zip
+    libjxl          libjxl/libjxl      jxl-x64-windows-static.zip
+    libjpeg-turbo   libjpeg-turbo/...  libjpeg-turbo-<v>-vc-x64.exe (NSIS)
+    oxipng          oxipng/oxipng      oxipng-<v>-x86_64-pc-windows-msvc.zip
+    AudioAuditor    Angel2mp3/...      AudioAuditorCLI-win-x64.exe (bare exe)
+
+The libjpeg-turbo release only ships NSIS installers for Windows; those are
+unpacked with 7-Zip when available, otherwise installed silently into a
+temporary folder (which needs a space-free path, hence GetShortPathName) and
+the required binaries are copied out. Standard-library only - no requests.
+"""
+
+import ctypes
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import zipfile
+import urllib.request
+
+from .paths import DEPS_DIR
+from .subproc import run_tool
+from .tools import detect_all_tools
+
+DISPLAY_NAMES = {
+    "flac": "FLAC",
+    "libjxl": "libjxl",
+    "libjpeg_turbo": "libjpeg-turbo",
+    "oxipng": "oxipng",
+    "audioauditor": "AudioAuditor",
+}
+
+REPOS = {
+    "flac": "xiph/flac",
+    "libjxl": "libjxl/libjxl",
+    "libjpeg_turbo": "libjpeg-turbo/libjpeg-turbo",
+    "oxipng": "oxipng/oxipng",
+    "audioauditor": "Angel2mp3/AudioAuditor",
+}
+
+# Ordered asset-name preferences (regex, matched case-insensitively).
+ASSET_PATTERNS = {
+    "flac": [r"^flac-[\d.]+-win\.zip$"],
+    "libjxl": [r"^jxl-x64-windows-static\.zip$", r"^jxl-x64-windows\.zip$"],
+    "libjpeg_turbo": [
+        r"^libjpeg-turbo-[\d.]+-vc-x64\.exe$",
+        r"^libjpeg-turbo-[\d.]+-gcc-x64\.exe$",
+    ],
+    "oxipng": [r"^oxipng-[\d.]+-x86_64-pc-windows-msvc\.zip$"],
+    "audioauditor": [r"^AudioAuditorCLI-win-x64\.exe$"],
+}
+
+INSTALL_PREFIX = {
+    "flac": "flac",
+    "libjxl": "libjxl",
+    "libjpeg_turbo": "libjpeg-turbo",
+    "oxipng": "oxipng",
+    "audioauditor": "AudioAuditor",
+}
+
+# Exe files that must be present after installation.
+MARKER_EXES = {
+    "flac": ("flac.exe", "metaflac.exe"),
+    "libjxl": ("cjxl.exe", "djxl.exe"),
+    "libjpeg_turbo": ("jpegtran.exe",),
+    "oxipng": ("oxipng.exe",),
+    "audioauditor": ("AudioAuditorCLI.exe",),
+}
+
+# Tools whose release asset is a single bare exe - no archive to extract.
+SINGLE_EXE_TOOLS = {"audioauditor"}
+
+_HEADERS = {
+    "User-Agent": "MusicLibraryOptimizer/2.1",
+    "Accept": "application/vnd.github+json",
+}
+
+_release_cache = {}
+
+
+# ----------------------------------------------------------------------
+# GitHub API
+# ----------------------------------------------------------------------
+def _api_json(url):
+    req = urllib.request.Request(url, headers=_HEADERS)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def get_latest_release(key):
+    """Return the latest release dict for a tool key (cached per session)."""
+    if key not in _release_cache:
+        data = _api_json(
+            f"https://api.github.com/repos/{REPOS[key]}/releases/latest"
+        )
+        tag = str(data.get("tag_name", "")).strip().lstrip("vV")
+        _release_cache[key] = {
+            "version": tag,
+            "assets": [a.get("name", "") for a in data.get("assets", [])],
+            "urls": {a.get("name", ""): a.get("browser_download_url", "")
+                     for a in data.get("assets", [])},
+        }
+    return _release_cache[key]
+
+
+def latest_versions():
+    """{tool key: latest version string} for all four tools."""
+    return {key: get_latest_release(key)["version"] for key in REPOS}
+
+
+def installed_versions():
+    """{tool key: installed version} for currently detected tools only."""
+    tools = detect_all_tools()
+    return {key: info["version"] for key, info in tools.items()}
+
+
+def pick_asset(key):
+    rel = get_latest_release(key)
+    for pattern in ASSET_PATTERNS[key]:
+        rx = re.compile(pattern, re.IGNORECASE)
+        for name in rel["assets"]:
+            if rx.match(name):
+                return name
+    return None
+
+
+# ----------------------------------------------------------------------
+# Download / extraction helpers
+# ----------------------------------------------------------------------
+def _download(url, dest_path, progress=None):
+    req = urllib.request.Request(url, headers={"User-Agent": _HEADERS["User-Agent"]})
+    with urllib.request.urlopen(req, timeout=120) as resp, open(dest_path, "wb") as f:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done = 0
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            if progress and total:
+                progress(done, total)
+
+
+def _find_7z():
+    path = shutil.which("7z") or shutil.which("7za")
+    if path:
+        return path
+    for candidate in (
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe",
+    ):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _windows_short_path(path):
+    """8.3 short path (space-free) for NSIS /D=, or None on failure."""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetShortPathNameW(
+            os.path.abspath(path), buf, len(buf)
+        )
+        if 0 < n < len(buf):
+            return buf.value
+    except Exception:
+        pass
+    return None
+
+
+def _extract_with_7z(sevenz, archive_path, dest_dir):
+    run_tool(
+        [sevenz, "x", "-y", f"-o{dest_dir}", archive_path],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=180, check=False,
+    )
+
+
+def _extract_archive(archive_path, dest_dir, log):
+    """Extract zip / 7z / NSIS installer into dest_dir."""
+    lower = archive_path.lower()
+
+    if lower.endswith(".zip"):
+        try:
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(dest_dir)
+            return
+        except Exception:
+            # Some release zips (libjxl) use methods zipfile cannot read;
+            # fall through to 7-Zip if it is available.
+            sevenz = _find_7z()
+            if not sevenz:
+                raise RuntimeError(
+                    "This zip uses a compression method Python cannot read "
+                    "and 7-Zip is not installed. Install 7-Zip and retry."
+                )
+            _extract_with_7z(sevenz, archive_path, dest_dir)
+            return
+
+    if lower.endswith(".7z"):
+        sevenz = _find_7z()
+        if not sevenz:
+            raise RuntimeError("Extracting .7z archives requires 7-Zip.")
+        _extract_with_7z(sevenz, archive_path, dest_dir)
+        return
+
+    # NSIS installer.
+    sevenz = _find_7z()
+    if sevenz:
+        _extract_with_7z(sevenz, archive_path, dest_dir)
+        return
+
+    log("  7-Zip not found - falling back to silent install of the installer.")
+    target = _windows_short_path(dest_dir) or dest_dir
+    if " " in target:
+        raise RuntimeError(
+            "Cannot silently install: temporary path contains spaces and "
+            "7-Zip is unavailable. Install 7-Zip and retry."
+        )
+    # /D must be the last argument and unquoted.
+    result = run_tool(
+        f'"{archive_path}" /S /D={target}',
+        shell=True, timeout=300, capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"silent install failed (rc={result.returncode})")
+
+
+def _locate_binaries(root, key):
+    """Find the directory containing the tool's marker exes."""
+    markers = MARKER_EXES[key]
+    candidates = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        names = {f.lower() for f in filenames}
+        if all(m.lower() in names for m in markers):
+            candidates.append(dirpath)
+
+    if not candidates:
+        return None
+    # Prefer 64-bit layouts (flac zip ships Win64 + Win32 side by side).
+    for cand in candidates:
+        low = cand.lower()
+        if "win64" in low or "x64" in low:
+            return cand
+    return candidates[0]
+
+
+# ----------------------------------------------------------------------
+# Installation
+# ----------------------------------------------------------------------
+def _remove_older_versions(prefix, keep_dir):
+    if not os.path.isdir(DEPS_DIR):
+        return
+    rx = re.compile(rf"^{re.escape(prefix)}\s+v?\d", re.IGNORECASE)
+    for entry in os.listdir(DEPS_DIR):
+        full = os.path.join(DEPS_DIR, entry)
+        if os.path.isdir(full) and rx.match(entry) and entry != keep_dir:
+            shutil.rmtree(full, ignore_errors=True)
+
+
+def install_dependency(key, log=print, progress=None):
+    """Download and install the latest release of a tool.
+
+    Returns the installed version string. Raises on any failure.
+    """
+    rel = get_latest_release(key)
+    version = rel["version"]
+    asset = pick_asset(key)
+
+    if not asset:
+        raise RuntimeError(f"No suitable Windows asset in latest {key} release")
+
+    display = DISPLAY_NAMES[key]
+    log(f"Downloading {display} v{version} ({asset}) …")
+
+    prefix = INSTALL_PREFIX[key]
+    dest_dir = os.path.join(DEPS_DIR, f"{prefix} v{version}")
+
+    tmp_archived = tempfile.mktemp(suffix=os.path.splitext(asset)[1])
+    workdir = tempfile.mkdtemp(prefix="mlo_dep_")
+
+    try:
+        _download(rel["urls"][asset], tmp_archived, progress)
+
+        if key in SINGLE_EXE_TOOLS:
+            # The release asset is the tool itself - no extraction step.
+            os.makedirs(dest_dir, exist_ok=True)
+            shutil.copy2(tmp_archived,
+                         os.path.join(dest_dir, MARKER_EXES[key][0]))
+        else:
+            log(f"Extracting {asset} …")
+            _extract_archive(tmp_archived, workdir, log)
+
+            src = _locate_binaries(workdir, key)
+            if src is None:
+                raise RuntimeError(
+                    f"Could not find {' + '.join(MARKER_EXES[key])} inside the archive"
+                )
+
+            os.makedirs(dest_dir, exist_ok=True)
+            for fname in os.listdir(src):
+                s = os.path.join(src, fname)
+                if os.path.isfile(s):
+                    shutil.copy2(s, os.path.join(dest_dir, fname))
+
+        names = {f.lower() for f in os.listdir(dest_dir)}
+        missing = [m for m in MARKER_EXES[key] if m.lower() not in names]
+        if missing:
+            raise RuntimeError(f"Installed folder is missing: {', '.join(missing)}")
+
+        _remove_older_versions(prefix, os.path.basename(dest_dir))
+        log(f"Installed {display} v{version} -> {dest_dir}")
+        return version
+
+    finally:
+        for path in (tmp_archived,):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def refresh_tool_cache():
+    """Force re-detection of .dependencies on the next detect_all_tools()."""
+    import mlo.tools as tools_mod
+    tools_mod._TOOLS_CACHE = None
+    return detect_all_tools()
