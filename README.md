@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.3
+# Music Library Optimizer v1.0.4
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.3_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.4_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.0.3_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.0.4_portable_x64.exe` and run it
 directly from any folder — it reads/writes `config.json` and `.dependencies/`
 next to itself, so it works as a fully portable app.
 
@@ -34,6 +34,21 @@ next to itself, so it works as a fully portable app.
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.0.4
+
+- **Zero trailing newlines** — `.lrc`, `.cue` and the embedded `LYRICS` tag
+  now end with **no trailing newline byte at all** (previously they kept the
+  standard single POSIX newline). No wasted bytes, no blank last line, no
+  trailing spaces on any line.
+- **Lyrics sync on format switch** — when you change the lyrics format in
+  Settings, lyrics are copied between LRC and embedded:
+  - **EMBEDDED**: any `.lrc` is copied into the `LYRICS` tag (and the
+    `.lrc` removed).
+  - **LRC**: embedded `LYRICS` are written to an `.lrc` file (and the
+    embedded tag removed).
+  - **BOTH**: if embedded lyrics exist, an `.lrc` is written; if only an
+    `.lrc` exists, it's copied to embedded — both stay in sync.
 
 ## New in v1.0.3
 
@@ -80,8 +95,8 @@ next to itself, so it works as a fully portable app.
   multithreaded across albums (in addition to the already-threaded lyrics,
   cue, FLAC, image and grading passes).
 - **Guaranteed clean text output** — `.lrc`, embedded lyrics and `.cue`
-  files are guaranteed to have no trailing spaces on any line and no blank
-  line at the end (verified byte-exact).
+  files are guaranteed to have no trailing spaces on any line, no blank line
+  at the end, and **no trailing newline byte at all** (verified byte-exact).
 - **Quality of life** — right-click a track/album in the Library tree for a
   **Run Script…** submenu (run any of the 8 scripts on just that item) and
   an **Open in Explorer** option.
@@ -388,7 +403,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.0.3_x64.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.0.4_x64.exe`
 
 ## Rebuilding the exe (without installer)
 

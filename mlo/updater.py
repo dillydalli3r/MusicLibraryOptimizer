@@ -16,7 +16,7 @@ UPDATE_CHECK_INTERVAL_DAYS = 7
 
 _HEADERS = {
     "Accept": "application/vnd.github.v3+json",
-    "User-Agent": "MusicLibraryOptimizer/1.0.3",
+    "User-Agent": "MusicLibraryOptimizer/1.0.4",
 }
 
 

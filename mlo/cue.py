@@ -103,11 +103,9 @@ def _process_cue_file(args):
         while "\n\n\n" in new_content:
             new_content = new_content.replace("\n\n\n", "\n\n")
 
-        # Guarantee no trailing blank / whitespace-only lines: strip all
-        # trailing whitespace and newlines, then end with exactly one POSIX
-        # newline (empty cue -> empty file).
-        body = new_content.rstrip()
-        new_content = (body + "\n") if body else ""
+        # Guarantee no trailing blank / whitespace-only lines AND no trailing
+        # newline byte at all (empty cue -> empty file).
+        new_content = new_content.rstrip()
 
         if new_content == original_content:
             return (filename, False, None, 0, 0)

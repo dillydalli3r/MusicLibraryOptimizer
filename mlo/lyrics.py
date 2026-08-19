@@ -103,16 +103,14 @@ def _lrc_for(audio_path):
     return os.path.splitext(audio_path)[0] + ".lrc"
 
 
-def _canonical_lyrics(text, file_mode=False):
-    """Guarantee lyrics end with NO blank / whitespace-only lines.
+def _canonical_lyrics(text):
+    """Canonicalize lyrics for storage.
 
-    - Leading blank lines are removed.
+    - CRLF -> LF.
+    - Leading and trailing blank / whitespace-only lines are removed.
     - Every line is right-trimmed (no trailing spaces).
-    - Trailing blank / whitespace-only lines are removed.
-    - file_mode=True  (.lrc files): the text ends with exactly one POSIX
-      newline and nothing after it.
-    - file_mode=False (embedded LYRICS tag): the value ends with the last
-      lyric line and has no trailing newline at all.
+    - The result has NO trailing newline at all - no byte is wasted on a
+      trailing newline, and there is never a blank last line.
 
     Returns "" when the input is empty or only blank lines.
     """
@@ -126,10 +124,7 @@ def _canonical_lyrics(text, file_mode=False):
         lines.pop(0)
     while lines and not lines[-1].strip():
         lines.pop()
-    if not lines:
-        return ""
-    body = "\n".join(lines)
-    return (body + "\n") if file_mode else body
+    return "\n".join(lines)
 
 
 def _process_lyrics_for_audio(audio_path, cfg):
@@ -145,7 +140,7 @@ def _process_lyrics_for_audio(audio_path, cfg):
     lrc_exists = os.path.exists(lrc_path)
     lyrics_format = cfg.get("lyrics_format", "EMBEDDED").upper()
 
-    # Clean embedded lyrics.
+    # Clean embedded lyrics (no trailing newline / blank lines).
     if cfg.get("optimize_embedded_lyrics", True):
         cur = af.get_lyrics()
         if cur:
@@ -154,15 +149,13 @@ def _process_lyrics_for_audio(audio_path, cfg):
                 if af.set_lyrics(cleaned):
                     modified = True
 
-    # Clean existing LRC file.
+    # Clean existing LRC file (no trailing newline / blank lines).
     if cfg.get("optimize_lrc", True) and lrc_exists:
         try:
             with open(lrc_path, "r", encoding="utf-8", errors="replace") as f:
                 lrc_content = f.read()
 
-            # Exactly one trailing POSIX newline; no trailing blank lines.
-            final = _canonical_lyrics(format_lyrics_text(lrc_content),
-                                      file_mode=True)
+            final = _canonical_lyrics(format_lyrics_text(lrc_content))
 
             if final != lrc_content:
                 with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
@@ -172,16 +165,15 @@ def _process_lyrics_for_audio(audio_path, cfg):
         except Exception as e:
             return ("fail", 0, 0, f"lrc clean: {e}")
 
-    # Conversion between LRC and embedded lyrics.
+    # LRC <-> embedded conversion, per the configured format.
     if lyrics_format == "EMBEDDED" and lrc_exists:
+        # Copy LRC -> embedded, then drop the .lrc sidecar.
         try:
             with open(lrc_path, "r", encoding="utf-8", errors="replace") as f:
                 lrc_content = f.read()
         except Exception as e:
             return ("fail", 0, 0, f"lrc read: {e}")
 
-        # Canonicalized even when optimize_lrc is off, so embedded lyrics
-        # never carry trailing blank lines.
         cleaned = _canonical_lyrics(
             format_lyrics_text(lrc_content)
             if cfg.get("optimize_lrc", True)
@@ -199,13 +191,11 @@ def _process_lyrics_for_audio(audio_path, cfg):
     elif lyrics_format == "LRC":
         cur = af.get_lyrics()
         if cur:
-            # Exactly one trailing POSIX newline; no blank tail - even when
-            # optimize_lrc is off.
+            # Copy embedded -> LRC, then drop the embedded tag.
             final = _canonical_lyrics(
                 format_lyrics_text(cur)
                 if cfg.get("optimize_lrc", True)
-                else cur,
-                file_mode=True)
+                else cur)
 
             try:
                 with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
@@ -216,6 +206,37 @@ def _process_lyrics_for_audio(audio_path, cfg):
 
             except Exception as e:
                 return ("fail", 0, 0, f"lrc write: {e}")
+
+    elif lyrics_format == "BOTH":
+        # Keep BOTH copies: if embedded lyrics exist, make sure an .lrc is
+        # written; if only an .lrc exists, copy it to embedded.
+        cur = af.get_lyrics()
+        if cur:
+            if not lrc_exists:
+                final = _canonical_lyrics(
+                    format_lyrics_text(cur)
+                    if cfg.get("optimize_lrc", True)
+                    else cur)
+                try:
+                    with open(lrc_path, "w", encoding="utf-8",
+                              newline="\n") as f:
+                        f.write(final)
+                    modified = True
+                except Exception as e:
+                    return ("fail", 0, 0, f"lrc write: {e}")
+        elif lrc_exists:
+            try:
+                with open(lrc_path, "r", encoding="utf-8",
+                          errors="replace") as f:
+                    lrc_content = f.read()
+            except Exception as e:
+                return ("fail", 0, 0, f"lrc read: {e}")
+            cleaned = _canonical_lyrics(
+                format_lyrics_text(lrc_content)
+                if cfg.get("optimize_lrc", True)
+                else lrc_content)
+            if af.set_lyrics(cleaned):
+                modified = True
 
     notes = []
 
