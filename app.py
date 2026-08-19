@@ -1472,13 +1472,6 @@ class App(tk.Tk):
 
         # Set up styles before anything renders (wizard or main window).
         self._setup_style()
-
-        # First-run wizard
-        if not self.config.get("first_run_done", False):
-            self.withdraw()  # Hide main window until wizard completes
-            FirstRunWizard(self, self.config, self._after_first_run)
-            return
-
         self._monospace = self._pick_monospace()
         self._build_ui()
 
@@ -1488,6 +1481,36 @@ class App(tk.Tk):
                 self.iconbitmap(default=icon_file)
         except tk.TclError:
             pass
+
+        # Start the console plumbing (stdout redirect + log drain).
+        self._start_console()
+
+        # First-run wizard: show once the event loop is running so the
+        # modal window maps reliably (creating it synchronously inside
+        # __init__ with a withdrawn root can hang).
+        if not self.config.get("first_run_done", False):
+            self.withdraw()
+            self.after(150, self._show_first_run_wizard)
+
+    def _show_first_run_wizard(self):
+        """Create the first-run wizard inside the running event loop."""
+        FirstRunWizard(self, self.config, self._after_first_run)
+
+    def _start_console(self):
+        """Redirect stdout/stderr to the GUI console and start draining."""
+        self.stdout_stream = QueueStream(self.log_q)
+        self._real_stdout, self._real_stderr = sys.stdout, sys.stderr
+        sys.stdout = self.stdout_stream
+        sys.stderr = self.stdout_stream
+        self.after(80, self._drain_log)
+        self.after(150, lambda: apply_window_chrome(self))
+        self.log("Music Library Optimizer ready.")
+        if not HAS_PIL:
+            self.log("WARNING: Pillow not found - PNG alpha removal will be skipped.",
+                     tag="yellow")
+        self.log(f"Library folder: {self.config.get('music_folder', '')}", tag="muted")
+        # Auto-check for updates
+        self.after(5000, lambda: updater.maybe_auto_check())
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -1505,31 +1528,6 @@ class App(tk.Tk):
     def _after_first_run(self):
         """Called when first-run wizard completes."""
         self.deiconify()  # Show main window
-        self._monospace = self._pick_monospace()
-        self._build_ui()
-
-        try:
-            icon_file = os.path.join(SCRIPT_DIR, "app_icon.ico")
-            if os.path.isfile(icon_file):
-                self.iconbitmap(default=icon_file)
-        except tk.TclError:
-            pass
-
-        self.stdout_stream = QueueStream(self.log_q)
-        self._real_stdout, self._real_stderr = sys.stdout, sys.stderr
-        sys.stdout = self.stdout_stream
-        sys.stderr = self.stdout_stream
-
-        self.after(80, self._drain_log)
-        self.after(150, lambda: apply_window_chrome(self))
-        self.log("Music Library Optimizer ready.")
-        if not HAS_PIL:
-            self.log("WARNING: Pillow not found - PNG alpha removal will be skipped.",
-                     tag="yellow")
-        self.log(f"Library folder: {self.config.get('music_folder', '')}", tag="muted")
-        
-        # Auto-check for updates
-        self.after(5000, lambda: updater.maybe_auto_check())
 
     # ------------------------------------------------------------------
     def _setup_style(self):
@@ -1706,13 +1704,6 @@ class App(tk.Tk):
         # Branded header
         brand = ttk.Frame(sidebar, style="Side.TFrame")
         brand.pack(fill=tk.X, pady=(0, 16))
-        try:
-            logo = tk.PhotoImage(file=os.path.join(SCRIPT_DIR, "app_icon.ico"))
-            logo_lbl = ttk.Label(brand, image=logo, style="Side.TLabel")
-            logo_lbl.image = logo
-            logo_lbl.pack(side=tk.LEFT, padx=(0, 10))
-        except Exception:
-            pass
         brand_text = ttk.Frame(brand, style="Side.TFrame")
         brand_text.pack(side=tk.LEFT)
         ttk.Label(brand_text, text="Music Library",
