@@ -118,11 +118,20 @@ jobs:
           }
 
       - name: Build Inno Setup installer
+        shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup not found, installing via Chocolatey..."
+            choco install innosetup -y --no-progress
+          }
           if (Test-Path $iscc) {
             Write-Host "Compiling installer with Inno Setup..."
             & $iscc "Music Library Optimizer.iss"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "ISCC failed with exit code $LASTEXITCODE"
+              exit 1
+            }
             $installer = Get-ChildItem dist\*.exe | Where-Object { $_.Name -like "MusicLibraryOptimizer_Setup_*" } | Select-Object -First 1
             if ($installer) {
               $size = $installer.Length / 1MB
@@ -132,7 +141,7 @@ jobs:
               exit 1
             }
           } else {
-            Write-Error "Inno Setup not found at $iscc"
+            Write-Error "Inno Setup not found at $iscc even after install attempt"
             exit 1
           }
 

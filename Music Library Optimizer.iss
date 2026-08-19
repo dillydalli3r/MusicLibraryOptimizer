@@ -27,9 +27,6 @@ UninstallDisplayIcon={app}\{#AppExeName}
 CreateAppDir=yes
 DisableDirPage=no
 DisableProgramGroupPage=no
-LicenseFile=
-InfoBeforeFile=
-InfoAfterFile=
 ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64
 
