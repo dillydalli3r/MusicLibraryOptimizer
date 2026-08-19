@@ -2,7 +2,7 @@
 ; Compile with: iscc "Music Library Optimizer.iss"
 
 #define AppName "Music Library Optimizer"
-#define AppVersion "1.0.2"
+#define AppVersion "1.0.3"
 #define AppPublisher "dillydalli3r"
 #define AppURL "https://github.com/dillydalli3r/MusicLibraryOptimizer"
 #define AppExeName "Music Library Optimizer.exe"
@@ -17,7 +17,7 @@ AppUpdatesURL={#AppURL}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 OutputDir=dist
-OutputBaseFilename=MusicLibraryOptimizer_Setup_v{#AppVersion}
+OutputBaseFilename=MusicLibraryOptimizer_Setup_v{#AppVersion}_x64
 Compression=lzma/ultra64
 SolidCompression=yes
 PrivilegesRequired=lowest

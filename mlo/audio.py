@@ -116,7 +116,12 @@ class AudioFile:
         self.kind = self._kind()
         self.audio = None
         self.error = None
+        self._tag_cache = None
         self._load()
+
+    def _invalidate_cache(self):
+        """Drop the vorbis tag-read cache after any tag write."""
+        self._tag_cache = None
 
     def _kind(self):
         if self.ext == ".flac":
@@ -174,11 +179,12 @@ class AudioFile:
             if kind in ("flac", "ogg", "opus"):
                 if self.audio.tags is None:
                     return None
-                key = spec["flac"]
-                for k, v in self.audio.tags.items():
-                    if str(k).lower() == key.lower():
-                        return v[0] if isinstance(v, list) and v else v
-                return None
+                if self._tag_cache is None:
+                    self._tag_cache = {
+                        str(k).lower(): (v[0] if isinstance(v, list) and v else v)
+                        for k, v in self.audio.tags.items()
+                    }
+                return self._tag_cache.get(spec["flac"].lower())
 
             elif kind == "mp3":
                 frame_type, desc = spec["mp3"]
@@ -271,6 +277,7 @@ class AudioFile:
 
     def set_any_tag(self, key, value):
         """Write an arbitrary tag key (raw container key)."""
+        self._invalidate_cache()
         if self.audio is None:
             return False
         value = str(value)
@@ -336,6 +343,7 @@ class AudioFile:
 
     def delete_any_tag(self, key):
         """Remove an arbitrary tag key (raw container key)."""
+        self._invalidate_cache()
         if self.audio is None:
             return False
 
@@ -384,6 +392,7 @@ class AudioFile:
     # Tag write / delete, used for SOURCE normalization
     # ------------------------------------------------------------------
     def set_tag(self, name, value):
+        self._invalidate_cache()
         if self.audio is None:
             return False
 
@@ -459,6 +468,7 @@ class AudioFile:
         return False
 
     def delete_tag(self, name):
+        self._invalidate_cache()
         if self.audio is None:
             return False
 
@@ -566,8 +576,14 @@ class AudioFile:
         return None
 
     def set_lyrics(self, text):
+        self._invalidate_cache()
         try:
             if self.kind in ("flac", "ogg", "opus"):
+                if self.audio.tags is None:
+                    if hasattr(self.audio, "add_tags"):
+                        self.audio.add_tags()
+                    else:
+                        return False
                 for k in list(self.audio.tags.keys()):
                     if str(k).lower() in ("lyrics", "unsyncedlyrics"):
                         del self.audio.tags[k]
@@ -596,8 +612,11 @@ class AudioFile:
         return False
 
     def delete_lyrics(self):
+        self._invalidate_cache()
         try:
             if self.kind in ("flac", "ogg", "opus"):
+                if self.audio.tags is None:
+                    return True  # nothing to delete
                 for k in list(self.audio.tags.keys()):
                     if str(k).lower() in ("lyrics", "unsyncedlyrics"):
                         del self.audio.tags[k]

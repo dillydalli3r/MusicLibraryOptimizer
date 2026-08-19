@@ -143,6 +143,15 @@ jobs:
             exit 1
           }
 
+      - name: Prepare portable build
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          $portable = "dist\MusicLibraryOptimizer_v${ver}_portable_x64.exe"
+          Copy-Item -LiteralPath "dist\Music Library Optimizer.exe" -Destination $portable -Force
+          $p = Get-Item -LiteralPath $portable
+          Write-Host "Portable: $($p.FullName) ($([math]::Round($p.Length / 1MB, 1)) MB)"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -151,6 +160,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            dist/MusicLibraryOptimizer_Setup_*.exe
+            dist/MusicLibraryOptimizer_v*_portable_x64.exe
+            dist/MusicLibraryOptimizer_Setup_*_x64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

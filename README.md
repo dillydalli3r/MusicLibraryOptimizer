@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.2
+# Music Library Optimizer v1.0.3
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,14 +18,40 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.2.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.3_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
+
+**Portable:** Download `MusicLibraryOptimizer_v1.0.3_portable_x64.exe` and run it
+directly from any folder — it reads/writes `config.json` and `.dependencies/`
+next to itself, so it works as a fully portable app.
 
 **From source:** `Music Library Optimizer.bat` or `python app.py`
 (requires `pip install mutagen`, optionally `Pillow` and `tqdm`).
 
 **Console menu:** `python -m mlo`
+
+> **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
+> oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
+> build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.0.3
+
+- **Portable + installer downloads** — every release now ships both a
+  portable `MusicLibraryOptimizer_vX.Y.Z_portable_x64.exe` (run anywhere, no
+  install) and the Inno Setup installer.
+- **Bug fixes**
+  - Writing lyrics/removing lyrics no longer fails on files with no tag
+    block (FLAC/OGG/Opus without a Vorbis comment) — `set_lyrics`/
+    `delete_lyrics` now create the tag block first.
+  - Audit Library's skip pass opens each already-audited file once instead
+    of twice (read + normalize merged).
+- **Performance** — `AudioFile` now caches the Vorbis-comment tag reads,
+  so the grader / auto-tagger stop re-scanning every tag on every lookup
+  (cache is invalidated on any write). This speeds up per-track grading and
+  auto-tagging on large libraries.
+- **x64 explicit** — release assets are labelled x64; the app is 64-bit
+  only (the entire toolchain is x64).
 
 ## New in v1.0.2
 
@@ -362,7 +388,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.0.2.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.0.3_x64.exe`
 
 ## Rebuilding the exe (without installer)
 

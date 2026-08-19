@@ -167,27 +167,19 @@ def _audit_tag_value(severity, cli_status):
     return "REAL" if cli_status == "Valid" else "FAKE"
 
 
-def _read_audit_tag(path):
-    """Current AUDIT verdict of a file: REAL / FAKE / None."""
-    try:
-        af = AudioFile(path)
-        v = str(af.get_tag("AUDIT") or "").strip().upper()
-        return v if v in ("REAL", "FAKE") else None
-    except Exception:
-        return None
-
-
-def _normalize_audit_case(path):
-    """Fix legacy mixed-case verdicts (Real -> REAL) in place. Returns
-    True when the tag was rewritten."""
+def _read_and_normalize_audit(path):
+    """Read the AUDIT verdict and fix legacy mixed-case values (Real -> REAL)
+    in a single file open. Returns (verdict, changed)."""
     try:
         af = AudioFile(path)
         raw = str(af.get_tag("AUDIT") or "").strip()
-        if raw and raw.upper() in ("REAL", "FAKE") and raw != raw.upper():
-            return bool(af.set_tag("AUDIT", raw.upper()))
+        v = raw.upper()
+        changed = False
+        if raw and v in ("REAL", "FAKE") and raw != v:
+            changed = bool(af.set_tag("AUDIT", v))
+        return (v if v in ("REAL", "FAKE") else None), changed
     except Exception:
-        pass
-    return False
+        return None, False
 
 
 def _write_audit_tag(path, value):
@@ -261,12 +253,12 @@ def run_audit_library(config):
     skipped = 0
     if not force:
         with ThreadPoolExecutor(max_workers=8) as pool:
-            verdicts = list(pool.map(_read_audit_tag, files))
+            results = list(pool.map(_read_and_normalize_audit, files))
         todo = []
-        for path, verdict in zip(files, verdicts):
+        for path, (verdict, changed) in zip(files, results):
             if verdict is not None:
                 skipped += 1
-                if _normalize_audit_case(path):
+                if changed:
                     stats["modified_count"] += 1
             else:
                 todo.append(path)
