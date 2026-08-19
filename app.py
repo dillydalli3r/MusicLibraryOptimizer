@@ -57,6 +57,18 @@ SCRIPT_NAMES = {
     8: "Auto Tagging",
 }
 
+# Sidebar button icons (script id -> glyph).
+SIDEBAR_ICONS = {
+    1: "\u270e",   # lyrics
+    2: "\u266b",   # cue
+    3: "\u2699",   # flac
+    4: "\u2605",   # grade
+    5: "\u25a6",   # images
+    6: "\u2713",   # audit
+    7: "\u2249",   # DR
+    8: "\u2726",   # auto tag
+}
+
 RUNNERS = {
     1: ("Format Lyrics", run_format_lyrics),
     2: ("Format CUEs", run_format_cues),
@@ -509,6 +521,42 @@ class ToggleSwitch(tk.Canvas):
 
         kx = x1 + self._pos * (x2 - 2 * r - x1)
         self.create_oval(kx, y1, kx + 2 * r, y2, fill=self.KNOB, outline="")
+
+
+class WrapFrame(ttk.Frame):
+    """A frame that lays its children left-to-right and wraps them onto new
+    rows when they no longer fit the available width. This keeps toolbar
+    buttons from overlapping when the window gets too narrow."""
+
+    def __init__(self, master, gap=8, **kw):
+        super().__init__(master, **kw)
+        self._gap = gap
+        self._items = []
+        self.bind("<Configure>", self._relayout)
+
+    def add(self, widget):
+        self._items.append(widget)
+        self._relayout()
+
+    def _relayout(self, event=None):
+        if not self._items:
+            return
+        for w in self._items:
+            w.grid_forget()
+        width = self.winfo_width() or 1
+        row = 0
+        col = 0
+        x = 0
+        for w in self._items:
+            rw = w.winfo_reqwidth() + self._gap
+            if col > 0 and x + rw > width:
+                row += 1
+                col = 0
+                x = 0
+            w.grid(row=row, column=col, sticky="w",
+                   padx=(0, self._gap), pady=(0, 4))
+            col += 1
+            x += rw
 
 
 FIELD_DESCRIPTIONS = {
@@ -1679,8 +1727,9 @@ class App(tk.Tk):
                   background=[("pressed", "#cfcfcf"), ("active", BRIGHT),
                               ("disabled", "#2a2a2a")],
                   foreground=[("disabled", "#6a6a6a")])
-        style.configure("Side.TButton", anchor="w", padding=(16, 11))
-        style.configure("Side.Accent.TButton", anchor="w", padding=(16, 11),
+        # Compact sidebar buttons: shorter padding, centered icon+label.
+        style.configure("Side.TButton", anchor="center", padding=(8, 6))
+        style.configure("Side.Accent.TButton", anchor="center", padding=(8, 6),
                         background="#2e2e2e", foreground=BRIGHT)
         style.map("Side.Accent.TButton",
                   background=[("pressed", "#3d3d3d"), ("active", "#3a3a3a"),
@@ -1739,21 +1788,21 @@ class App(tk.Tk):
         style.map("TScrollbar", background=[("active", "#3a3a3a")])
 
         style.configure("TNotebook", background=BG, borderwidth=0,
-                        tabmargins=(0, 4, 0, 0))
+                        tabmargins=(2, 4, 0, 0))
         # Compact tab buttons. Every tab shares an identical 1px border so
         # all buttons are always exactly the same size; only the SELECTED
-        # tab's border is drawn white so it clearly pops. Unselected borders
-        # blend into the tab background. The clam theme's raised bevel and
-        # selected-padding differences are fully neutralised.
+        # tab's border is drawn white so it clearly pops. The label is
+        # inset past the border (padding), and a 2px left margin keeps the
+        # first tab's white border from being clipped at the strip edge.
         style.configure("TNotebook.Tab", background="#141414",
                         foreground=MUTED, borderwidth=1, relief="flat",
-                        padding=(10, 6), font=_sfont(9),
+                        padding=(12, 7), font=_sfont(9),
                         lightcolor="#141414", darkcolor="#141414",
                         bordercolor="#141414")
         style.map("TNotebook.Tab",
                   background=[("selected", CARD), ("active", "#1d1d1d")],
                   foreground=[("selected", BRIGHT), ("active", TEXT)],
-                  padding=[("selected", (10, 6)), ("!selected", (10, 6))],
+                  padding=[("selected", (12, 7)), ("!selected", (12, 7))],
                   borderwidth=[("selected", 1), ("!selected", 1)],
                   bordercolor=[("selected", "#ffffff"), ("!selected", "#141414")],
                   lightcolor=[("selected", CARD), ("!selected", "#141414")],
@@ -1865,33 +1914,35 @@ class App(tk.Tk):
             anchor="w", pady=(0, 8)
         )
         for sid, name in SCRIPT_NAMES.items():
+            icon = SIDEBAR_ICONS.get(sid, "")
             b = ttk.Button(
-                inner, text=name, style="Side.TButton",
+                inner, text=f"{icon}  {name}" if icon else name,
+                style="Side.TButton",
                 command=lambda s=sid: self._run_scripts([s], f"RUN — {SCRIPT_NAMES[s]}"),
             )
-            b.pack(fill=tk.X, pady=2)
+            b.pack(fill=tk.X, pady=1)
             self.run_buttons.append(b)
 
         ttk.Label(inner, text="BATCH", style="Section.Side.TLabel").pack(
             anchor="w", pady=(18, 8)
         )
-        b = ttk.Button(inner, text="Run All", style="Side.Accent.TButton",
+        b = ttk.Button(inner, text="\u25b6  Run All", style="Side.Accent.TButton",
                        command=self._run_all)
-        b.pack(fill=tk.X, pady=2)
+        b.pack(fill=tk.X, pady=1)
         ToolTip(b, "Run every script in order.\n"
                 "Enable ⚡ Force in the Library tab to force re-encoding.")
         self.run_buttons.append(b)
-        b = ttk.Button(inner, text="Run Custom…", style="Side.TButton",
+        b = ttk.Button(inner, text="\u29c9  Run Custom", style="Side.TButton",
                        command=self._run_custom)
-        b.pack(fill=tk.X, pady=2)
+        b.pack(fill=tk.X, pady=1)
         self.run_buttons.append(b)
 
         ttk.Label(inner, text="MANAGE", style="Section.Side.TLabel").pack(
             anchor="w", pady=(18, 8)
         )
-        b = ttk.Button(inner, text="Dependencies…", style="Side.TButton",
+        b = ttk.Button(inner, text="\u2b07  Dependencies", style="Side.TButton",
                        command=self._open_deps)
-        b.pack(fill=tk.X, pady=2)
+        b.pack(fill=tk.X, pady=1)
         self.run_buttons.append(b)
 
         # Size the canvas to the widest button (after fonts are laid out,
@@ -1899,7 +1950,7 @@ class App(tk.Tk):
         # and pin the tool-status label below the scrollable area.
         self.update_idletasks()
         self._side_canvas.configure(
-            width=max(inner.winfo_reqwidth() + 8, 232))
+            width=max(inner.winfo_reqwidth() + 8, 204))
         self.dep_label = ttk.Label(sidebar, text="", style="Muted.Side.TLabel",
                                    font=_font(8))
         self.dep_label.grid(row=1, column=0, columnspan=2, sticky="w",
@@ -1924,16 +1975,26 @@ class App(tk.Tk):
         toolbar = ttk.Frame(library_frame)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
+        # Right-side cluster is packed first (fixed width), then the left
+        # action cluster wraps into the remaining space.
+        toolbar_right = ttk.Frame(toolbar)
+        toolbar_right.pack(side=tk.RIGHT)
+
+        # Left action cluster wraps onto new rows when the window is narrow,
+        # so it never overlaps the right-side controls.
+        self.toolbar_left = WrapFrame(toolbar, gap=4)
+        self.toolbar_left.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         self.opt_selected_btn = ttk.Button(
-            toolbar, text="Optimize Selected", style="Accent.TButton",
+            self.toolbar_left, text="Optimize Selected", style="Accent.TButton",
             command=self._optimize_selected)
-        self.opt_selected_btn.pack(side=tk.LEFT)
+        self.toolbar_left.add(self.opt_selected_btn)
         ToolTip(self.opt_selected_btn, "Run the full pipeline on the checked items.\n"
                 "Enable ⚡ Force options to re-process everything regardless "
                 "of state.")
         # Force: master pill + per-feature menu.
-        force_box = ttk.Frame(toolbar)
-        force_box.pack(side=tk.LEFT, padx=(14, 0))
+        force_box = ttk.Frame(self.toolbar_left)
+        self.toolbar_left.add(force_box)
         self.force_flac_var = tk.BooleanVar(
             value=self.config.get("force_flac_ui", False))
         self.force_images_var = tk.BooleanVar(
@@ -1962,32 +2023,38 @@ class App(tk.Tk):
                                     width=2, command=self._show_force_menu)
         force_menu_btn.pack(side=tk.LEFT)
         ToolTip(force_menu_btn, "Configure individual force options.")
-        ttk.Button(toolbar, text="Refresh", style="Small.TButton",
-                   command=lambda: self._refresh_library(regrade=True)).pack(
-            side=tk.LEFT, padx=(12, 0))
-        ttk.Button(toolbar, text="Clear Selection", style="Small.TButton",
-                   command=self._clear_selection).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(toolbar, text="Select All", style="Small.TButton",
-                   command=self._select_all).pack(side=tk.LEFT, padx=(8, 0))
+        self.refresh_btn = ttk.Button(
+            self.toolbar_left, text="Refresh", style="Small.TButton",
+            command=lambda: self._refresh_library(regrade=True))
+        self.toolbar_left.add(self.refresh_btn)
+        self.clear_sel_btn = ttk.Button(
+            self.toolbar_left, text="Clear Sel", style="Small.TButton",
+            command=self._clear_selection)
+        self.toolbar_left.add(self.clear_sel_btn)
+        self.select_all_btn = ttk.Button(
+            self.toolbar_left, text="Select All", style="Small.TButton",
+            command=self._select_all)
+        self.toolbar_left.add(self.select_all_btn)
 
         self.sel_label_var = tk.StringVar(value="0 selected")
-        ttk.Label(toolbar, textvariable=self.sel_label_var,
-                  style="Muted.TLabel").pack(side=tk.LEFT, padx=(14, 0))
+        sel_label = ttk.Label(self.toolbar_left, textvariable=self.sel_label_var,
+                              style="Muted.TLabel")
+        self.toolbar_left.add(sel_label)
 
         # External tools: enqueue the checked folders in foobar2000, or
         # open them in Mp3tag / Picard.
         self.foobar_btn = ttk.Button(
-            toolbar, text="Enqueue in foobar2000", style="Small.TButton",
+            toolbar_right, text="Enqueue", style="Small.TButton",
             command=lambda: self._open_in_external("foobar2000"))
         self.foobar_btn.pack(side=tk.RIGHT)
         ToolTip(self.foobar_btn, "Enqueue the selected folder(s) in "
                                  "foobar2000 (/add).")
-        self.mp3tag_btn = ttk.Button(toolbar, text="Mp3tag",
+        self.mp3tag_btn = ttk.Button(toolbar_right, text="Mp3tag",
                                      style="Small.TButton",
                                      command=lambda: self._open_in_external("mp3tag"))
         self.mp3tag_btn.pack(side=tk.RIGHT, padx=(0, 8))
         ToolTip(self.mp3tag_btn, "Open the selected folder(s) in Mp3tag.")
-        self.picard_btn = ttk.Button(toolbar, text="Picard",
+        self.picard_btn = ttk.Button(toolbar_right, text="Picard",
                                      style="Small.TButton",
                                      command=lambda: self._open_in_external("picard"))
         self.picard_btn.pack(side=tk.RIGHT, padx=(0, 8))
@@ -1996,7 +2063,7 @@ class App(tk.Tk):
 
         self.compact_var = tk.BooleanVar(value=self.config.get("compact_ui", False))
         compact_toggle = tk.Checkbutton(
-            toolbar, text="Compact grades", variable=self.compact_var,
+            toolbar_right, text="Compact grades", variable=self.compact_var,
             command=self._on_compact_toggle,
             background=BG, foreground=TEXT, selectcolor=BG,
             activebackground=BG, activeforeground=TEXT,
@@ -2139,11 +2206,8 @@ class App(tk.Tk):
         console_tab.rowconfigure(0, weight=1)
         notebook.add(console_tab, text="Console")
 
-        # Force both tab buttons to identical (compact) padding so their size
-        # never changes when switching between them, and re-pin the window size
-        # on tab changes so nothing can resize while toggling Library/Console.
-        for _tid in notebook.tabs():
-            notebook.tab(_tid, padding=(10, 6))
+        # Keep the window size stable when switching tabs (the tab buttons
+        # already share identical padding via the style, so they never resize).
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # Determine compact mode
