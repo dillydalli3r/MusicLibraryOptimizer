@@ -118,6 +118,35 @@ def detect_all_tools():
                 "cli_exe": os.path.join(d, "AudioAuditorCLI.exe"),
             }
 
+    rv, rf = _detect_tool("rsgain", DEPS_DIR)
+    if rf:
+        d = os.path.join(DEPS_DIR, rf)
+        if os.path.isfile(os.path.join(d, "rsgain.exe")):
+            tools["rsgain"] = {
+                "version": rv,
+                "rsgain_exe": os.path.join(d, "rsgain.exe"),
+            }
+
+    fv2, ff2 = _detect_tool("ffmpeg", DEPS_DIR)
+    if ff2:
+        d = os.path.join(DEPS_DIR, ff2)
+        if (os.path.isfile(os.path.join(d, "ffmpeg.exe"))
+                and os.path.isfile(os.path.join(d, "ffprobe.exe"))):
+            tools["ffmpeg"] = {
+                "version": fv2,
+                "ffmpeg_exe": os.path.join(d, "ffmpeg.exe"),
+                "ffprobe_exe": os.path.join(d, "ffprobe.exe"),
+            }
+
     _TOOLS_CACHE = tools
     return tools
+
+
+SIMPLE_DR_METER_DIRNAME = "simple-dr-meter"
+
+
+def simple_dr_meter_path():
+    """Path to simple-dr-meter's main.py, or None when not downloaded."""
+    candidate = os.path.join(DEPS_DIR, SIMPLE_DR_METER_DIRNAME, "main.py")
+    return candidate if os.path.isfile(candidate) else None
 

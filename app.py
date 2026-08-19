@@ -33,6 +33,7 @@ from mlo import (
     load_config, save_config,
     run_format_lyrics, run_format_cues, run_optimize_flacs,
     run_grade_library, run_process_images, run_audit_library,
+    run_calc_dr_replaygain,
 )
 from mlo import stats as stats_mod
 from mlo import tools as tools_mod
@@ -51,6 +52,7 @@ SCRIPT_NAMES = {
     4: "Grade Library",
     5: "Process Images",
     6: "Audit Library",
+    7: "DR & ReplayGain",
 }
 
 RUNNERS = {
@@ -60,6 +62,7 @@ RUNNERS = {
     4: ("Grade Library", run_grade_library),
     5: ("Process Images", run_process_images),
     6: ("Audit Library", run_audit_library),
+    7: ("DR & ReplayGain", run_calc_dr_replaygain),
 }
 
 # Tag keys offered by the "Add tag" menu of the full tag editor.
@@ -135,6 +138,9 @@ CONFIG_FIELDS = [
     ("audit_true_peak", "Audit True Peak", "bool", None),
     ("audit_lufs", "Audit LUFS", "bool", None),
     ("audit_bpm", "Audit BPM", "bool", None),
+    ("dr_replaygain_enabled", "DR/ReplayGain Enabled", "bool", None),
+    ("replaygain_skip_existing", "ReplayGain Skip Existing", "bool", None),
+    ("force_dr_replaygain", "Force DR/ReplayGain", "bool", None),
     ("auto_advance", "Auto-Advance Between Scripts", "bool", None),
     ("run_all_order", "Run All Order", "choice", None),
     ("compact_ui", "Compact UI Mode", "bool", None),
@@ -591,6 +597,18 @@ FIELD_DESCRIPTIONS = {
     "audit_bpm":
         "Audit: detect BPM (--no-bpm when off). Only used in Thorough "
         "mode.",
+    "dr_replaygain_enabled":
+        "DR & ReplayGain (script 7): calculate Dynamic Range (via "
+        "simple-dr-meter) and ReplayGain (via rsgain) tags. Requires the "
+        "dependencies to be downloaded.",
+    "replaygain_skip_existing":
+        "ReplayGain: skip files that already carry REPLAYGAIN_TRACK_GAIN "
+        "(rsgain -S). If album tags are on, a single missing file re-scans "
+        "the whole album.",
+    "force_dr_replaygain":
+        "DR & ReplayGain: re-calculate everything even when tags are "
+        "already present. The Force ▾ menu in the Library tab sets this "
+        "per-run.",
     "auto_advance":
         "Sequence runs (Run All / custom): when off, the app pauses for "
         "confirmation between scripts — the GUI shows a Continue button.",
@@ -605,7 +623,8 @@ FIELD_DESCRIPTIONS = {
 class DependenciesDialog(tk.Toplevel):
     """Download / update the external toolchain from GitHub."""
 
-    KEYS = ("flac", "libjxl", "libjpeg_turbo", "oxipng", "audioauditor")
+    KEYS = ("flac", "libjxl", "libjpeg_turbo", "oxipng", "audioauditor",
+            "rsgain", "ffmpeg", "simpledrmeter")
 
     def __init__(self, app):
         super().__init__(app)
@@ -886,6 +905,10 @@ class ConfigDialog(tk.Toplevel):
                 "audit_fake_stereo", "audit_silence", "audit_dynamic_range",
                 "audit_true_peak", "audit_lufs", "audit_bpm",
             ]),
+            ("DR / ReplayGain", [
+                "dr_replaygain_enabled", "replaygain_skip_existing",
+                "force_dr_replaygain",
+            ]),
             ("Interface", ["grade_verbose", "auto_advance", "compact_ui"]),
         ]
         field_lookup = {f[0]: f for f in CONFIG_FIELDS}
@@ -1012,12 +1035,16 @@ class ConfigDialog(tk.Toplevel):
         )
         row += 1
         tools = tools_mod.detect_all_tools()
+        from mlo.tools import simple_dr_meter_path
         found = {
             "flac": tools.get("flac", {}).get("version"),
             "libjxl": tools.get("libjxl", {}).get("version"),
             "libjpeg-turbo": tools.get("libjpeg_turbo", {}).get("version"),
             "oxipng": tools.get("oxipng", {}).get("version"),
             "auditor": tools.get("audioauditor", {}).get("version"),
+            "rsgain": tools.get("rsgain", {}).get("version"),
+            "ffmpeg": tools.get("ffmpeg", {}).get("version"),
+            "dr-meter": "main" if simple_dr_meter_path() else None,
         }
         ver_lines = "   ".join(
             f"{name} {'v' + ver if ver else '—'}" for name, ver in found.items()
@@ -1461,6 +1488,10 @@ class App(tk.Tk):
         self.configure(background=BG)
         self.geometry("1180x760")
         self.minsize(880, 580)
+        # Keep the window at its current size when switching Library/Console
+        # tabs (the tabs already highlight the active one) instead of the
+        # notebook resizing the whole window to fit its content.
+        self.pack_propagate(False)
 
         if not HAS_MUTAGEN:
             self.withdraw()
@@ -1800,9 +1831,11 @@ class App(tk.Tk):
             value=self.config.get("force_images_ui", False))
         self.force_audit_var = tk.BooleanVar(
             value=self.config.get("force_audit_ui", False))
+        self.force_dr_var = tk.BooleanVar(
+            value=self.config.get("force_dr_ui", False))
         self.force_var = tk.BooleanVar(
             value=(self.force_flac_var.get() and self.force_images_var.get()
-                   and self.force_audit_var.get()))
+                   and self.force_audit_var.get() and self.force_dr_var.get()))
         force_toggle = ToggleSwitch(
             force_box, self.force_var, bg=BG, command=self._on_force_master)
         force_toggle.pack(side=tk.LEFT)
@@ -2714,6 +2747,7 @@ class App(tk.Tk):
         self.force_flac_var.set(on)
         self.force_images_var.set(on)
         self.force_audit_var.set(on)
+        self.force_dr_var.set(on)
         self._save_force_config()
 
     def _on_force_option(self):
@@ -2721,7 +2755,8 @@ class App(tk.Tk):
         whether all of them are on."""
         self.force_var.set(self.force_flac_var.get()
                            and self.force_images_var.get()
-                           and self.force_audit_var.get())
+                           and self.force_audit_var.get()
+                           and self.force_dr_var.get())
         self._save_force_config()
 
     def _save_force_config(self):
@@ -2729,6 +2764,7 @@ class App(tk.Tk):
         self.config["force_flac_ui"] = self.force_flac_var.get()
         self.config["force_images_ui"] = self.force_images_var.get()
         self.config["force_audit_ui"] = self.force_audit_var.get()
+        self.config["force_dr_ui"] = self.force_dr_var.get()
         save_config(self.config)
 
     def _show_force_menu(self):
@@ -2740,6 +2776,7 @@ class App(tk.Tk):
             (self.force_flac_var, "Re-encode FLACs"),
             (self.force_images_var, "Re-encode images"),
             (self.force_audit_var, "Audit"),
+            (self.force_dr_var, "DR & ReplayGain"),
         ):
             menu.add_checkbutton(label=label, variable=var, onvalue=True,
                                  offvalue=False,
@@ -3568,7 +3605,8 @@ class App(tk.Tk):
             args=(list(script_ids), title, targets,
                   self.force_flac_var.get(),
                   self.force_images_var.get(),
-                  self.force_audit_var.get()),
+                  self.force_audit_var.get(),
+                  self.force_dr_var.get()),
             daemon=True
         )
         t.start()
@@ -3577,7 +3615,7 @@ class App(tk.Tk):
     # Worker thread
     # ------------------------------------------------------------------
     def _worker(self, script_ids, title, targets=None, force_flac=False,
-                force_images=False, force_audit=False):
+                force_images=False, force_audit=False, force_dr=False):
         started = time.monotonic()
         prev_tqdm, prev_hook = stats_mod.tqdm, stats_mod.progress_hook
         stats_mod.tqdm = None
@@ -3589,7 +3627,8 @@ class App(tk.Tk):
         # Runners never mutate the config; a copy lets us scope a run to
         # user-selected directories/tracks without affecting the app.
         run_cfg = self.config
-        if targets or force_flac or force_images or force_audit:
+        if (targets or force_flac or force_images or force_audit
+                or force_dr):
             run_cfg = self.config.copy()
             if targets:
                 run_cfg["targets"] = list(targets)
@@ -3599,6 +3638,8 @@ class App(tk.Tk):
                 run_cfg["force_reencode_images"] = True
             if force_audit:
                 run_cfg["force_audit"] = True
+            if force_dr:
+                run_cfg["force_dr_replaygain"] = True
 
         per_script = []
         total_bytes_added = total_bytes_removed = total_errors = 0

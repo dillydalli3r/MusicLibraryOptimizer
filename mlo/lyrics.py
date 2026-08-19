@@ -132,10 +132,12 @@ def _process_lyrics_for_audio(audio_path, cfg):
                 lrc_content = f.read()
 
             cleaned = format_lyrics_text(lrc_content)
+            # Exactly one trailing POSIX newline; no trailing blank lines.
+            final = (cleaned + "\n") if cleaned else ""
 
-            if cleaned != lrc_content:
+            if final != lrc_content:
                 with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(cleaned)
+                    f.write(final)
                 modified = True
 
         except Exception as e:
@@ -175,7 +177,8 @@ def _process_lyrics_for_audio(audio_path, cfg):
 
             try:
                 with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(cleaned)
+                    # Exactly one trailing POSIX newline; no blank tail.
+                    f.write((cleaned + "\n") if cleaned else "")
 
                 af.delete_lyrics()
                 modified = True

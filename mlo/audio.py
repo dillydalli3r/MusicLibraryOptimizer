@@ -84,6 +84,26 @@ TAG_MAP = {
         "mp3": ("TXXX", "LOG_GRADE"),
         "mp4": ("freeform", "com.apple.iTunes", "LOG_GRADE"),
     },
+    # Integrity verification tags (see mlo/integrity.py):
+    #   AUDIO_MD5  MD5 hex of the audio data (PCM for FLAC via decode,
+    #              tag-stable audio region for MP3/MP4/OGG).
+    #   INTEGRITY  OK / FAIL verdict of the audio integrity test.
+    #   LOG_CRC    CD rips: OK / MISMATCH vs the rip log's per-track CRC.
+    "AUDIO_MD5": {
+        "flac": "AUDIO_MD5",
+        "mp3": ("TXXX", "AUDIO_MD5"),
+        "mp4": ("freeform", "com.apple.iTunes", "AUDIO_MD5"),
+    },
+    "INTEGRITY": {
+        "flac": "INTEGRITY",
+        "mp3": ("TXXX", "INTEGRITY"),
+        "mp4": ("freeform", "com.apple.iTunes", "INTEGRITY"),
+    },
+    "LOG_CRC": {
+        "flac": "LOG_CRC",
+        "mp3": ("TXXX", "LOG_CRC"),
+        "mp4": ("freeform", "com.apple.iTunes", "LOG_CRC"),
+    },
 }
 
 

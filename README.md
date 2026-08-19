@@ -63,14 +63,18 @@ official Windows builds straight from GitHub releases and installs them into
 | libjpeg-turbo  | libjpeg-turbo/libjpeg-turbo   | jpegtran.exe                |
 | oxipng         | oxipng/oxipng                 | oxipng.exe                  |
 | AudioAuditor   | Angel2mp3/AudioAuditor        | AudioAuditorCLI.exe         |
+| rsgain         | complexlogic/rsgain           | rsgain.exe                  |
+| ffmpeg         | BtbN/FFmpeg-Builds            | ffmpeg.exe, ffprobe.exe     |
+| simple-dr-meter| magicgoose/simple-dr-meter    | main.py (source + numpy)    |
 
 Each tool shows its installed and latest version with a Download / Update /
 Reinstall button, plus Install/Update All. The console menu offers the same
-via option 10. libjpeg-turbo only ships NSIS installers for Windows, so that
+via option 11. libjpeg-turbo only ships NSIS installers for Windows, so that
 one is unpacked with 7-Zip when available (also used for libjxl's
 non-standard zip compression); without 7-Zip it falls back to a silent
 install into a temporary folder. AudioAuditor ships a single self-contained
-exe that is copied as-is — no extraction needed.
+exe that is copied as-is — no extraction needed. simple-dr-meter is a Python
+script (no Windows binary) that needs numpy and ffmpeg to run.
 
 ## Scripts
 
@@ -82,6 +86,7 @@ exe that is copied as-is — no extraction needed.
 | 4 | Grade Library     | Per-album compliance report; albums grade 100% (all checks pass) or 0% |
 | 5 | Process Images    | JPEG XL conversion / lossless JPEG/PNG optimize / reverse  |
 | 6 | Audit Library     | Audio integrity audit via the AudioAuditor CLI            |
+| 7 | DR & ReplayGain   | Writes ReplayGain (rsgain) and Dynamic Range (simple-dr-meter) tags |
 
 Only FLAC is losslessly re-encoded; other audio formats receive safe tag
 operations only. Every processed artifact carries ENCODER marker tags so
@@ -172,8 +177,27 @@ each force option individually (the master pill sets all of them):
 - **Re-encode images** — reprocess images regardless of ENCODER markers.
 - **Audit** — re-audit files that already carry an `AUDIT` verdict and
   re-score rip logs even when `LOG_GRADE` is present.
+- **DR & ReplayGain** — re-calculate DR/ReplayGain even when already tagged.
 
 Applies to **Optimize Selected**, **Run All** and **Run Custom**.
+
+### DR & ReplayGain (script 7)
+
+For every album folder this writes the loudness tags the grader requires:
+
+- **ReplayGain** via [rsgain](https://github.com/complexlogic/rsgain) —
+  `rsgain easy` computes and writes `REPLAYGAIN_TRACK_GAIN` /
+  `REPLAYGAIN_TRACK_PEAK` / `REPLAYGAIN_ALBUM_GAIN` / `REPLAYGAIN_ALBUM_PEAK`
+  (album gain is per folder, matching your album layout). Defaults: -18 LUFS
+  target, sample peak, clipping protection on positive gains. Files that
+  already carry ReplayGain tags are skipped (`-S`) unless forced.
+- **Dynamic Range** via [simple-dr-meter](https://github.com/magicgoose/simple-dr-meter)
+  — writes `DYNAMIC RANGE` (per track) and `ALBUM DYNAMIC RANGE` (the
+  album's official DR value) parsed from the `dr.txt` log it generates.
+  Requires ffmpeg/ffprobe and numpy in the Python that runs the script.
+
+A full-library run invokes rsgain once on the whole tree (its album gain is
+still per folder); "selected" runs invoke it per album.
 
 ## Library view
 
@@ -248,6 +272,7 @@ mlo/                            Core package — all processing logic
     flac.py / images.py /
     grader.py / discs.py        discs.py: CD-N naming + per-disc LOG_GRADE
     audit.py                    AudioAuditor CLI integration (script 6)
+    loudness.py                 DR (simple-dr-meter) + ReplayGain (rsgain)
     cli.py                      Interactive console menu
     updater.py                  Auto-update checker (GitHub Releases)
 config.json                     Persisted settings (created on first save)

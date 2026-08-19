@@ -43,6 +43,9 @@ DISPLAY_NAMES = {
     "libjpeg_turbo": "libjpeg-turbo",
     "oxipng": "oxipng",
     "audioauditor": "AudioAuditor",
+    "rsgain": "rsgain",
+    "ffmpeg": "ffmpeg",
+    "simpledrmeter": "simple-dr-meter",
 }
 
 REPOS = {
@@ -51,6 +54,8 @@ REPOS = {
     "libjpeg_turbo": "libjpeg-turbo/libjpeg-turbo",
     "oxipng": "oxipng/oxipng",
     "audioauditor": "Angel2mp3/AudioAuditor",
+    "rsgain": "complexlogic/rsgain",
+    "ffmpeg": "BtbN/FFmpeg-Builds",
 }
 
 # Ordered asset-name preferences (regex, matched case-insensitively).
@@ -63,6 +68,8 @@ ASSET_PATTERNS = {
     ],
     "oxipng": [r"^oxipng-[\d.]+-x86_64-pc-windows-msvc\.zip$"],
     "audioauditor": [r"^AudioAuditorCLI-win-x64\.exe$"],
+    "rsgain": [r"^rsgain-[\d.]+-win64\.zip$"],
+    "ffmpeg": [r"^ffmpeg-master-latest-win64-gpl\.zip$"],
 }
 
 INSTALL_PREFIX = {
@@ -71,6 +78,8 @@ INSTALL_PREFIX = {
     "libjpeg_turbo": "libjpeg-turbo",
     "oxipng": "oxipng",
     "audioauditor": "AudioAuditor",
+    "rsgain": "rsgain",
+    "ffmpeg": "ffmpeg",
 }
 
 # Exe files that must be present after installation.
@@ -80,10 +89,18 @@ MARKER_EXES = {
     "libjpeg_turbo": ("jpegtran.exe",),
     "oxipng": ("oxipng.exe",),
     "audioauditor": ("AudioAuditorCLI.exe",),
+    "rsgain": ("rsgain.exe",),
+    "ffmpeg": ("ffmpeg.exe", "ffprobe.exe"),
 }
 
 # Tools whose release asset is a single bare exe - no archive to extract.
 SINGLE_EXE_TOOLS = {"audioauditor"}
+
+# simple-dr-meter is a Python script (no Windows binary / no releases); it is
+# fetched from the repo's main branch archive instead of a GitHub release.
+SIMPLE_DR_METER_ZIP_URL = (
+    "https://github.com/magicgoose/simple-dr-meter/archive/refs/heads/main.zip"
+)
 
 _HEADERS = {
     "User-Agent": "MusicLibraryOptimizer/2.1",
@@ -119,14 +136,24 @@ def get_latest_release(key):
 
 
 def latest_versions():
-    """{tool key: latest version string} for all four tools."""
-    return {key: get_latest_release(key)["version"] for key in REPOS}
+    """{tool key: latest version string} for all tools."""
+    out = {key: get_latest_release(key)["version"] for key in REPOS}
+    out["simpledrmeter"] = "main"
+    return out
 
 
 def installed_versions():
     """{tool key: installed version} for currently detected tools only."""
     tools = detect_all_tools()
-    return {key: info["version"] for key, info in tools.items()}
+    out = {key: info["version"] for key, info in tools.items()}
+    if tools_mod_simple_dr_meter():
+        out["simpledrmeter"] = "main"
+    return out
+
+
+def tools_mod_simple_dr_meter():
+    from .tools import simple_dr_meter_path
+    return simple_dr_meter_path() is not None
 
 
 def pick_asset(key):
@@ -274,11 +301,49 @@ def _remove_older_versions(prefix, keep_dir):
             shutil.rmtree(full, ignore_errors=True)
 
 
+def _install_simple_dr_meter(log=print, progress=None):
+    """Download the simple-dr-meter source archive (no binaries exist)."""
+    dest_dir = os.path.join(DEPS_DIR, "simple-dr-meter")
+    tmp_zip = tempfile.mktemp(suffix=".zip")
+    workdir = tempfile.mkdtemp(prefix="mlo_drmeter_")
+    try:
+        log("Downloading simple-dr-meter (source archive) …")
+        _download(SIMPLE_DR_METER_ZIP_URL, tmp_zip, progress)
+        log("Extracting simple-dr-meter …")
+        with zipfile.ZipFile(tmp_zip) as zf:
+            zf.extractall(workdir)
+        # The archive extracts to <workdir>/simple-dr-meter-main/
+        src_candidates = [
+            os.path.join(workdir, d)
+            for d in os.listdir(workdir)
+            if os.path.isdir(os.path.join(workdir, d))
+            and "simple-dr-meter" in d.lower()
+        ]
+        if not src_candidates or not os.path.isfile(
+                os.path.join(src_candidates[0], "main.py")):
+            raise RuntimeError("Could not find simple-dr-meter main.py in archive")
+        src = src_candidates[0]
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        shutil.copytree(src, dest_dir)
+        log(f"Installed simple-dr-meter -> {dest_dir}")
+        return "main"
+    finally:
+        try:
+            if os.path.exists(tmp_zip):
+                os.remove(tmp_zip)
+        except OSError:
+            pass
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def install_dependency(key, log=print, progress=None):
     """Download and install the latest release of a tool.
 
     Returns the installed version string. Raises on any failure.
     """
+    if key == "simpledrmeter":
+        return _install_simple_dr_meter(log=log, progress=progress)
+
     rel = get_latest_release(key)
     version = rel["version"]
     asset = pick_asset(key)

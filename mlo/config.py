@@ -63,6 +63,12 @@ DEFAULT_CONFIG = {
         "jxl": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
     },
 
+    # DR / ReplayGain (script 7): rsgain + simple-dr-meter.
+    "dr_replaygain_enabled": True,
+    "replaygain_skip_existing": True,
+    "force_dr_replaygain": False,
+    "force_dr_ui": False,
+
     # Misc
     "auto_advance": True,
     "run_all_order": [1, 2, 3, 5, 4],
@@ -120,7 +126,7 @@ def load_config() -> dict:
     try:
         for x in order:
             xi = int(x)
-            if 1 <= xi <= 6 and xi not in clean_order:
+            if 1 <= xi <= 7 and xi not in clean_order:
                 clean_order.append(xi)
     except Exception:
         clean_order = [1, 2, 3, 5, 4]

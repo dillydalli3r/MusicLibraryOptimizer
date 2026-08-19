@@ -8,6 +8,7 @@ from .paths import DEFAULT_DIGITAL_SOURCE
 from .flac import run_optimize_flacs
 from .grader import run_grade_library
 from .images import run_process_images
+from .loudness import run_calc_dr_replaygain
 from .lyrics import run_format_lyrics
 from .report import print_results, print_grade_results, print_combined_results
 from .tools import detect_all_tools
@@ -37,6 +38,7 @@ def edit_run_all_order(config):
         print("    4. Grade Library")
         print("    5. Process Images")
         print("    6. Audit Library")
+        print("    7. DR & ReplayGain")
         print("-" * 72)
 
         current = config.get("run_all_order", [1, 2, 3, 5, 4])
@@ -53,7 +55,7 @@ def edit_run_all_order(config):
         valid = True
 
         for p in parts:
-            if p in ("1", "2", "3", "4", "5", "6"):
+            if p in ("1", "2", "3", "4", "5", "6", "7"):
                 order.append(int(p))
             else:
                 print(c(f"  Invalid entry: '{p}'", Color.RED))
@@ -121,6 +123,8 @@ def show_config_menu(config):
         print(f" 31. Audit True Peak          : {config.get('audit_true_peak', True)}")
         print(f" 32. Audit LUFS               : {config.get('audit_lufs', True)}")
         print(f" 33. Audit BPM                : {config.get('audit_bpm', True)}")
+        print(f" 34. DR/ReplayGain Enabled    : {config.get('dr_replaygain_enabled', True)}")
+        print(f" 35. ReplayGain Skip Existing : {config.get('replaygain_skip_existing', True)}")
 
         print_separator()
         print("  Auto-detected encoder versions (.dependencies):")
@@ -357,6 +361,18 @@ def show_config_menu(config):
             print(f"\nSaved. Audit {label} = {config[key]}")
             pause_for_input()
 
+        elif choice == "34":
+            config["dr_replaygain_enabled"] = tf("Enable DR & ReplayGain calculation? (y/n): ")
+            save_config(config)
+            print(f"\nSaved. DR/ReplayGain = {config['dr_replaygain_enabled']}")
+            pause_for_input()
+
+        elif choice == "35":
+            config["replaygain_skip_existing"] = tf("Skip files that already have ReplayGain tags? (y/n): ")
+            save_config(config)
+            print(f"\nSaved. ReplayGain Skip Existing = {config['replaygain_skip_existing']}")
+            pause_for_input()
+
         elif choice == "0":
             break
 
@@ -376,6 +392,7 @@ def show_custom_menu():
     print("    4. Grade Library")
     print("    5. Process Images")
     print("    6. Audit Library")
+    print("    7. DR & ReplayGain")
     print_separator()
 
     print("Enter the order of scripts to run (comma-separated, e.g. '3,1,2,5'):")
@@ -385,7 +402,7 @@ def show_custom_menu():
     order = []
 
     for p in parts:
-        if p in ("1", "2", "3", "4", "5", "6"):
+        if p in ("1", "2", "3", "4", "5", "6", "7"):
             order.append(int(p))
         else:
             print(c(f"  Ignoring invalid entry: '{p}'", Color.YELLOW))
@@ -405,6 +422,7 @@ def run_scripts_sequence(config, script_ids, title):
         4: ("Grade Library", run_grade_library),
         5: ("Process Images", run_process_images),
         6: ("Audit Library", run_audit_library),
+        7: ("DR & ReplayGain", run_calc_dr_replaygain),
     }
 
     auto_advance = config.get("auto_advance", True)
@@ -479,10 +497,11 @@ def show_main_menu(config):
     print("  4. Grade Library    (detailed human-readable report)")
     print("  5. Process Images   (JXL / lossless / JXL-back)")
     print("  6. Audit Library    (AudioAuditor: fake lossless / AI / MQA)")
-    print(f"  7. Run All          {config.get('run_all_order', [1, 2, 3, 5, 4])}")
-    print("  8. Run Custom       (select order)")
-    print("  9. Configuration")
-    print(" 10. Dependencies     (download latest tools)")
+    print("  7. DR & ReplayGain  (rsgain + simple-dr-meter tags)")
+    print(f"  8. Run All          {config.get('run_all_order', [1, 2, 3, 5, 4])}")
+    print("  9. Run Custom       (select order)")
+    print(" 10. Configuration")
+    print(" 11. Dependencies     (download latest tools)")
     print(c("  0. Exit", Color.YELLOW))
 
     print()
@@ -555,6 +574,7 @@ def main():
         4: ("Grade Library", run_grade_library),
         5: ("Process Images", run_process_images),
         6: ("Audit Library", run_audit_library),
+        7: ("DR & ReplayGain", run_calc_dr_replaygain),
     }
 
     while True:
@@ -564,7 +584,7 @@ def main():
         if choice == "0":
             break
 
-        elif choice in ("1", "2", "3", "4", "5", "6"):
+        elif choice in ("1", "2", "3", "4", "5", "6", "7"):
             script_id = int(choice)
             name, runner = runners[script_id]
 
@@ -581,11 +601,11 @@ def main():
 
             pause_for_input()
 
-        elif choice == "7":
+        elif choice == "8":
             order = config.get("run_all_order", [1, 2, 3, 5, 4])
             run_scripts_sequence(config, order, title="RUN ALL SCRIPTS")
 
-        elif choice == "8":
+        elif choice == "9":
             order = show_custom_menu()
 
             if not order:
@@ -595,10 +615,10 @@ def main():
 
             run_scripts_sequence(config, order, title="CUSTOM RUN ORDER")
 
-        elif choice == "9":
+        elif choice == "10":
             show_config_menu(config)
 
-        elif choice == "10":
+        elif choice == "11":
             manage_dependencies()
 
         else:
