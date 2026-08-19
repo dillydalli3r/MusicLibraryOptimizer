@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.5
+# Music Library Optimizer v1.0.4
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.5_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.4_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.0.5_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.0.4_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -35,18 +35,6 @@ external folders. Keep the whole folder together to move it anywhere.
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
-
-## New in v1.0.5
-
-- **Truly self-contained portable version** — the portable exe creates
-  `config.json` and `.dependencies/` in its own folder on first run and
-  uses no external folders. If the folder isn't writable, the app warns on
-  startup.
-- **Check for updates on start toggle** — Settings → Interface →
-  **Check for Updates on Start** (default on) makes the app check GitHub for
-  a new release at launch (once per interval), for both the portable and the
-  installed version. Turn it off to disable the automatic check; manual
-  checking via ⓘ About → Check for Updates always works.
 
 ## New in v1.0.4
 
@@ -62,6 +50,15 @@ external folders. Keep the whole folder together to move it anywhere.
     embedded tag removed).
   - **BOTH**: if embedded lyrics exist, an `.lrc` is written; if only an
     `.lrc` exists, it's copied to embedded — both stay in sync.
+- **Truly self-contained portable version** — the portable exe creates
+  `config.json` and `.dependencies/` in its own folder on first run and
+  uses no external folders. If the folder isn't writable, the app warns on
+  startup.
+- **Check for updates on start toggle** — Settings → Interface →
+  **Check for Updates on Start** (default on) makes the app check GitHub for
+  a new release at launch (once per interval), for both the portable and the
+  installed version. Turn it off to disable the automatic check; manual
+  checking via ⓘ About → Check for Updates always works.
 
 ## New in v1.0.3
 
