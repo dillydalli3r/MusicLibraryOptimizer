@@ -204,7 +204,10 @@ def _collect_targets(targets, extensions):
     """Expand user-selected targets (files or dirs) into matching files.
 
     Used by the GUI library view so scripts run only on the directories
-    and tracks the user selected, instead of the whole library.
+    and tracks the user selected, instead of the whole library. Files are
+    kept ONLY when their extension is in `extensions` - a wrong file type
+    in targets (e.g. a .flac reaching the cue formatter) must never be
+    processed and risk overwriting the file.
     """
     if not targets:
         return []
@@ -213,7 +216,8 @@ def _collect_targets(targets, extensions):
         if not t:
             continue
         if os.path.isfile(t):
-            files.add(t)
+            if os.path.splitext(t)[1].lower() in extensions:
+                files.add(t)
         elif os.path.isdir(t):
             files.update(_walk_files(t, extensions))
     return sorted(files)

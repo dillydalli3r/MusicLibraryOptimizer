@@ -17,6 +17,14 @@ def _process_cue_file(args):
     try:
         original_size = os.path.getsize(filename)
 
+        # Safety: a real .cue is plain text. If the file contains NUL bytes
+        # it is binary (e.g. an audio file that reached here by mistake) and
+        # must never be rewritten/overwritten.
+        with open(filename, "rb") as raw:
+            head = raw.read(4096)
+        if b"\x00" in head:
+            return (filename, False, "binary file skipped (not a cue)", 0, 0)
+
         try:
             with open(filename, "r", encoding="utf-8") as f:
                 original_content = f.read()
