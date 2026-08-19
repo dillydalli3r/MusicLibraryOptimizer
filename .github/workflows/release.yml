@@ -21,7 +21,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install build dependencies
         run: |
@@ -32,7 +31,12 @@ jobs:
           $url = "https://github.com/Angel2mp3/AudioAuditor/releases/latest/download/AudioAuditorCLI.exe"
           $out = ".dependencies\AudioAuditor v2.0.0\AudioAuditorCLI.exe"
           New-Item -ItemType Directory -Force -Path (Split-Path $out)
-          Invoke-WebRequest -Uri $url -OutFile $out
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $out -ErrorAction Stop
+            Write-Host "Downloaded AudioAuditorCLI.exe"
+          } catch {
+            Write-Warning "Failed to download AudioAuditorCLI: $_"
+          }
 
       - name: Download flac
         run: |
@@ -40,11 +44,15 @@ jobs:
           $zip = "$env:TEMP\flac.zip"
           $outDir = ".dependencies\flac v1.5.0"
           New-Item -ItemType Directory -Force -Path $outDir
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\flac" -Force
-          Copy-Item "$env:TEMP\flac\flac-1.5.0-win64\flac.exe" $outDir
-          Copy-Item "$env:TEMP\flac\flac-1.5.0-win64\metaflac.exe" $outDir
-          Remove-Item $zip
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -ErrorAction Stop
+            Expand-Archive -Path $zip -DestinationPath "$env:TEMP\flac" -Force
+            Copy-Item "$env:TEMP\flac\flac-1.5.0-win64\flac.exe" $outDir -ErrorAction SilentlyContinue
+            Copy-Item "$env:TEMP\flac\flac-1.5.0-win64\metaflac.exe" $outDir -ErrorAction SilentlyContinue
+            Write-Host "Downloaded flac/metaflac"
+          } catch {
+            Write-Warning "Failed to download flac: $_"
+          }
 
       - name: Download libjxl
         run: |
@@ -52,11 +60,15 @@ jobs:
           $zip = "$env:TEMP\libjxl.zip"
           $outDir = ".dependencies\libjxl v0.12.0"
           New-Item -ItemType Directory -Force -Path $outDir
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\libjxl" -Force
-          Copy-Item "$env:TEMP\libjxl\cjxl.exe" $outDir
-          Copy-Item "$env:TEMP\libjxl\djxl.exe" $outDir
-          Remove-Item $zip
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -ErrorAction Stop
+            Expand-Archive -Path $zip -DestinationPath "$env:TEMP\libjxl" -Force
+            Copy-Item "$env:TEMP\libjxl\cjxl.exe" $outDir -ErrorAction SilentlyContinue
+            Copy-Item "$env:TEMP\libjxl\djxl.exe" $outDir -ErrorAction SilentlyContinue
+            Write-Host "Downloaded libjxl"
+          } catch {
+            Write-Warning "Failed to download libjxl: $_"
+          }
 
       - name: Download libjpeg-turbo (jpegtran)
         run: |
@@ -64,10 +76,14 @@ jobs:
           $zip = "$env:TEMP\libjpeg.zip"
           $outDir = ".dependencies\libjpeg-turbo v3.2.0"
           New-Item -ItemType Directory -Force -Path $outDir
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\libjpeg" -Force
-          Copy-Item "$env:TEMP\libjpeg\libjpeg-turbo-3.2.0-vc64\jpegtran.exe" $outDir
-          Remove-Item $zip
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -ErrorAction Stop
+            Expand-Archive -Path $zip -DestinationPath "$env:TEMP\libjpeg" -Force
+            Copy-Item "$env:TEMP\libjpeg\libjpeg-turbo-3.2.0-vc64\jpegtran.exe" $outDir -ErrorAction SilentlyContinue
+            Write-Host "Downloaded libjpeg-turbo"
+          } catch {
+            Write-Warning "Failed to download libjpeg-turbo: $_"
+          }
 
       - name: Download oxipng
         run: |
@@ -75,10 +91,14 @@ jobs:
           $zip = "$env:TEMP\oxipng.zip"
           $outDir = ".dependencies\oxipng v10.2.0"
           New-Item -ItemType Directory -Force -Path $outDir
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\oxipng" -Force
-          Copy-Item "$env:TEMP\oxipng\oxipng.exe" $outDir
-          Remove-Item $zip
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -ErrorAction Stop
+            Expand-Archive -Path $zip -DestinationPath "$env:TEMP\oxipng" -Force
+            Copy-Item "$env:TEMP\oxipng\oxipng.exe" $outDir -ErrorAction SilentlyContinue
+            Write-Host "Downloaded oxipng"
+          } catch {
+            Write-Warning "Failed to download oxipng: $_"
+          }
 
       - name: Build executable
         run: |
