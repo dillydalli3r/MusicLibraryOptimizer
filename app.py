@@ -3657,12 +3657,22 @@ class App(tk.Tk):
 
         def check_updates():
             btn.configure(state=tk.DISABLED, text="Checking...")
-            def cb(version, url, notes):
-                if version:
-                    win.after(0, lambda: self._show_update_dialog(version, url, notes))
-                else:
-                    win.after(0, lambda: self._show_no_update())
-                win.after(0, lambda: btn.configure(state=tk.NORMAL, text="Check for Updates"))
+            def cb(has_update, version, url, notes, error):
+                def apply():
+                    btn.configure(state=tk.NORMAL, text="Check for Updates")
+                    if error:
+                        messagebox.showerror(
+                            "Update Check Failed",
+                            f"Could not reach GitHub releases:\n{error}",
+                            parent=win)
+                    elif has_update:
+                        self._show_update_dialog(version, url, notes)
+                    else:
+                        messagebox.showinfo(
+                            "No Updates",
+                            "You are already on the latest version.",
+                            parent=win)
+                win.after(0, apply)
             updater.check_for_updates(silent=False, callback=cb)
 
         def open_github():

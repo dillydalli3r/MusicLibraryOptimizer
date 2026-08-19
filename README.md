@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.1
+# Music Library Optimizer v1.0.2
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,7 +18,7 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.1.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.2.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
@@ -26,6 +26,22 @@ run it, and follow the first-launch wizard to pick your music folder.
 (requires `pip install mutagen`, optionally `Pillow` and `tqdm`).
 
 **Console menu:** `python -m mlo`
+
+## New in v1.0.2
+
+- **Update checker fixed** — the "Check for Updates" button (and the About
+  dialog) now actually works. Previously every update check failed silently
+  because the updater used a logging API that doesn't exist (`log(tag=...)`)
+  and the installer asset matcher didn't recognise `MusicLibraryOptimizer_Setup_vX.Y.Z.exe`.
+  Now it:
+  - lists GitHub releases (not just `/latest`) and picks the newest stable
+    version,
+  - correctly finds the installer asset URL,
+  - gives clear feedback for every outcome (update available / already
+    latest / network error), and
+  - logs update availability to the console on the periodic auto-check.
+  Verified: a v1.0.0 install detects v1.0.1/v1.0.2 and the installer URL
+  downloads (HTTP 200).
 
 ## New in v1.0.1
 
@@ -346,7 +362,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.0.1.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.0.2.exe`
 
 ## Rebuilding the exe (without installer)
 
