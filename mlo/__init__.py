@@ -30,7 +30,7 @@ from .images import run_process_images
 from .lyrics import run_format_lyrics
 from .audit import run_audit_library
 
-__version__ = "2.0.0"
+__version__ = "1.0.0"
 __all__ = [
     "load_config", "save_config", "DEFAULT_CONFIG",
     "run_format_lyrics", "run_format_cues", "run_optimize_flacs",

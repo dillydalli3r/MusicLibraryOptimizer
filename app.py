@@ -37,6 +37,7 @@ from mlo import (
 from mlo import stats as stats_mod
 from mlo import tools as tools_mod
 from mlo import fetchdeps
+from mlo import updater
 from mlo.config import DEFAULT_CONFIG
 from mlo.paths import DEFAULT_DIGITAL_SOURCE, DEPS_DIR, SCRIPT_DIR
 from mlo.deps import HAS_MUTAGEN, HAS_PIL
@@ -1205,6 +1206,238 @@ class CustomRunDialog(tk.Toplevel):
 
 
 # ======================================================================
+# First-run setup wizard
+# ======================================================================
+class FirstRunWizard(tk.Toplevel):
+    """Wizard shown on first launch to configure library folder and settings."""
+
+    def __init__(self, parent, config, on_complete):
+        super().__init__(parent)
+        self.config = config
+        self.on_complete = on_complete
+        self.vars = {}
+
+        self.title("Welcome to Music Library Optimizer")
+        self.configure(background=PANEL)
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+        self.geometry("720x580")
+
+        outer = ttk.Frame(self, padding=24)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        # Header
+        header = ttk.Frame(outer)
+        header.pack(fill=tk.X, pady=(0, 16))
+        ttk.Label(header, text="Music Library Optimizer", style="H1.TLabel").pack(anchor="w")
+        ttk.Label(header,
+                  text="Let's get you set up. Choose your music library folder and review the default settings.",
+                  style="Muted.TLabel", wraplength=640).pack(anchor="w", pady=(4, 0))
+
+        # Step indicator
+        self.step = 0
+        self.steps = ["Library Folder", "Settings Preset", "Dependencies", "Ready"]
+        self.step_frame = ttk.Frame(outer)
+        self.step_frame.pack(fill=tk.X, pady=(0, 16))
+        self.step_labels = []
+        for i, name in enumerate(self.steps):
+            lbl = ttk.Label(self.step_frame, text=f"  {i+1}. {name}  ",
+                            style="Muted.TLabel", borderwidth=1, relief="solid")
+            lbl.pack(side=tk.LEFT, padx=2)
+            self.step_labels.append(lbl)
+        self._update_step_indicator()
+
+        # Content area (swapped per step)
+        self.content = ttk.Frame(outer)
+        self.content.pack(fill=tk.BOTH, expand=True)
+
+        # Navigation buttons
+        nav = ttk.Frame(outer)
+        nav.pack(fill=tk.X, pady=(16, 0))
+        self.back_btn = ttk.Button(nav, text="← Back", command=self._go_back, state=tk.DISABLED)
+        self.back_btn.pack(side=tk.LEFT)
+        self.next_btn = ttk.Button(nav, text="Next →", style="Accent.TButton", command=self._go_next)
+        self.next_btn.pack(side=tk.RIGHT)
+        self.finish_btn = ttk.Button(nav, text="Finish", style="Accent.TButton", command=self._finish, state=tk.HIDDEN)
+        self.finish_btn.pack(side=tk.RIGHT, padx=(0, 8))
+
+        self._show_step(0)
+        self.after(150, lambda: apply_window_chrome(self))
+
+    def _update_step_indicator(self):
+        for i, lbl in enumerate(self.step_labels):
+            if i == self.step:
+                lbl.configure(style="Section.TLabel", foreground=ACCENT)
+            elif i < self.step:
+                lbl.configure(style="Muted.TLabel", foreground=GREEN)
+            else:
+                lbl.configure(style="Muted.TLabel", foreground=MUTED)
+
+    def _show_step(self, n):
+        self.step = n
+        for w in self.content.winfo_children():
+            w.destroy()
+        self._update_step_indicator()
+        self.back_btn.configure(state=tk.NORMAL if n > 0 else tk.DISABLED)
+        self.next_btn.configure(state=tk.NORMAL if n < len(self.steps) - 1 else tk.HIDDEN)
+        self.finish_btn.configure(state=tk.HIDDEN)
+        if n == 0:
+            self._build_step_library()
+        elif n == 1:
+            self._build_step_preset()
+        elif n == 2:
+            self._build_step_deps()
+        elif n == 3:
+            self._build_step_ready()
+
+    def _go_back(self):
+        if self.step > 0:
+            self._show_step(self.step - 1)
+
+    def _go_next(self):
+        if self.step == 0:
+            if not self.vars.get("music_folder", "").get().strip():
+                messagebox.showwarning("Required", "Please select a music library folder.", parent=self)
+                return
+        elif self.step == 1:
+            pass  # preset step has no validation
+        elif self.step == 2:
+            pass
+        if self.step < len(self.steps) - 1:
+            self._show_step(self.step + 1)
+        else:
+            self._show_step(self.step + 1)
+
+    def _finish(self):
+        # Apply preset if selected
+        if self.vars.get("use_preset", tk.BooleanVar(value=True)).get():
+            self._apply_preset()
+        # Mark first run complete
+        self.config["first_run_done"] = True
+        save_config(self.config)
+        self.on_complete()
+        self.destroy()
+
+    def _build_step_library(self):
+        box = ttk.Frame(self.content, style="Card.TFrame", padding=16)
+        box.pack(fill=tk.BOTH, expand=True)
+        box.columnconfigure(1, weight=1)
+
+        ttk.Label(box, text="Where is your music library?", style="Card.TLabel",
+                  font=_sfont(11)).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
+
+        ttk.Label(box, text="Music Folder:", style="Card.TLabel").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=8)
+        folder_var = tk.StringVar(value=self.config.get("music_folder", ""))
+        self.vars["music_folder"] = folder_var
+        ttk.Entry(box, textvariable=folder_var, width=50).grid(
+            row=1, column=1, sticky="ew", pady=8)
+        ttk.Button(box, text="Browse…", command=lambda: self._browse(folder_var)).grid(
+            row=1, column=2, padx=(8, 0), pady=8)
+
+        ttk.Label(box,
+                  text="This should be the root folder containing your artist folders "
+                       "(e.g., F:\\Music\\Artists). The app scans recursively.",
+                  style="Muted.Card.TLabel", wraplength=500).grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    def _browse(self, var):
+        path = filedialog.askdirectory(parent=self, initialdir=var.get() or "/")
+        if path:
+            var.set(path)
+
+    def _build_step_preset(self):
+        box = ttk.Frame(self.content, style="Card.TFrame", padding=16)
+        box.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(box, text="Settings Preset", style="Card.TLabel",
+                  font=_sfont(11)).pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(box,
+                  text="The app comes with a recommended preset (enabled below). "
+                       "You can customize any setting later in ⚙ Settings.",
+                  style="Muted.Card.TLabel", wraplength=560).pack(anchor="w", pady=(0, 12))
+
+        preset_var = tk.BooleanVar(value=True)
+        self.vars["use_preset"] = preset_var
+        ttk.Checkbutton(box, text="Use recommended preset",
+                        variable=preset_var, style="TCheckbutton").pack(anchor="w")
+
+        # Show preset summary
+        preset_frame = ttk.Frame(box, style="Card.TFrame", padding=12)
+        preset_frame.pack(fill=tk.X, pady=(12, 0))
+        ttk.Label(preset_frame, text="Preset includes:", style="Card.TLabel",
+                  font=_sfont(9)).pack(anchor="w")
+        for line in [
+            "• FLAC: Level 8, no seektables, ENCODER tags on",
+            "• Images: JPEG XL effort 10, convert to JXL, rename to cover",
+            "• Lyrics: Embedded format, clean LRC & embedded",
+            "• CUE: Normalize, drop empty/non-standard lines",
+            "• MEDIA/SOURCE: Normalize (Digital Media → SOURCE=Digital)",
+            "• Audio Audit: Fast scan, all detectors on, cutoff 19600 Hz",
+            "• Auto-advance: On, Compact UI: Off",
+        ]:
+            ttk.Label(preset_frame, text=line, style="Muted.Card.TLabel",
+                      font=_font(8)).pack(anchor="w")
+
+    def _build_step_deps(self):
+        box = ttk.Frame(self.content, style="Card.TFrame", padding=16)
+        box.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(box, text="External Tools", style="Card.TLabel",
+                  font=_sfont(11)).pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(box,
+                  text="The app downloads required tools automatically on first use. "
+                       "You can also manage them anytime from the sidebar → MANAGE → Dependencies.",
+                  style="Muted.Card.TLabel", wraplength=560).pack(anchor="w", pady=(0, 12))
+
+        tools = [
+            ("FLAC", "flac.exe / metaflac.exe — FLAC encoding & tag editing"),
+            ("libjxl", "cjxl.exe / djxl.exe — JPEG XL conversion"),
+            ("libjpeg-turbo", "jpegtran.exe — JPEG lossless optimization"),
+            ("oxipng", "oxipng.exe — PNG lossless optimization"),
+            ("AudioAuditor", "AudioAuditorCLI.exe — Audio integrity audit"),
+        ]
+        for name, desc in tools:
+            row = ttk.Frame(box, style="Card.TFrame")
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=name, style="Card.TLabel", font=_sfont(9), width=18).pack(side=tk.LEFT)
+            ttk.Label(row, text=desc, style="Muted.Card.TLabel", font=_font(8)).pack(side=tk.LEFT)
+
+    def _build_step_ready(self):
+        box = ttk.Frame(self.content, style="Card.TFrame", padding=16)
+        box.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(box, text="You're all set!", style="Card.TLabel",
+                  font=_sfont(14), foreground=GREEN).pack(anchor="w", pady=(0, 16))
+
+        ttk.Label(box,
+                  text="Click Finish to save your settings and open the main window. "
+                       "You can change anything later via ⚙ Settings or the sidebar.",
+                  style="Muted.Card.TLabel", wraplength=560).pack(anchor="w")
+
+        self.next_btn.configure(state=tk.HIDDEN)
+        self.finish_btn.configure(state=tk.NORMAL)
+
+    def _apply_preset(self):
+        """Apply the recommended preset (excluding user-specific paths)."""
+        # User-specific keys to NOT overwrite
+        user_keys = {
+            "music_folder", "mp3tag_path", "picard_path", "foobar2000_path",
+            "last_update_check", "first_run_done",
+        }
+        for key, value in DEFAULT_CONFIG.items():
+            if key not in user_keys:
+                self.config[key] = value
+        # Ensure encoder_tags preset is applied
+        self.config["encoder_tags"] = DEFAULT_CONFIG["encoder_tags"].copy()
+        # Run all order preset
+        self.config["run_all_order"] = DEFAULT_CONFIG["run_all_order"].copy()
+
+
+# ======================================================================
 # Main application window
 # ======================================================================
 class App(tk.Tk):
@@ -1225,6 +1458,13 @@ class App(tk.Tk):
             return
 
         self.config = load_config()
+        
+        # First-run wizard
+        if not self.config.get("first_run_done", False):
+            self.withdraw()  # Hide main window until wizard completes
+            FirstRunWizard(self, self.config, self._after_first_run)
+            return
+
         self.log_q = queue.Queue()
         self.running = False
         self.run_buttons = []
@@ -1235,6 +1475,30 @@ class App(tk.Tk):
         global UI_FAMILY
         UI_FAMILY = _pick_ui_family()
 
+        self._setup_style()
+        self._build_ui()
+
+        try:
+            icon_file = os.path.join(SCRIPT_DIR, "app_icon.ico")
+            if os.path.isfile(icon_file):
+                self.iconbitmap(default=icon_file)
+        except tk.TclError:
+            pass
+
+    # ------------------------------------------------------------------
+        try:
+            families = set(tkfont.families())
+            for name in ("Cascadia Code", "Cascadia Mono", "Consolas",
+                         "Courier New"):
+                if name in families:
+                    return name
+        except Exception:
+            pass
+        return "TkFixedFont"
+
+    def _after_first_run(self):
+        """Called when first-run wizard completes."""
+        self.deiconify()  # Show main window
         self._setup_style()
         self._build_ui()
 
@@ -1257,19 +1521,9 @@ class App(tk.Tk):
             self.log("WARNING: Pillow not found - PNG alpha removal will be skipped.",
                      tag="yellow")
         self.log(f"Library folder: {self.config.get('music_folder', '')}", tag="muted")
-
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _pick_monospace():
-        try:
-            families = set(tkfont.families())
-            for name in ("Cascadia Code", "Cascadia Mono", "Consolas",
-                         "Courier New"):
-                if name in families:
-                    return name
-        except Exception:
-            pass
-        return "TkFixedFont"
+        
+        # Auto-check for updates
+        self.after(5000, lambda: updater.maybe_auto_check())
 
     # ------------------------------------------------------------------
     def _setup_style(self):
@@ -1784,6 +2038,8 @@ class App(tk.Tk):
         self.status_var = tk.StringVar(value="Ready")
         ttk.Button(status, text="\u2699  Settings", style="Small.TButton",
                    command=self._open_config).grid(row=0, column=0, sticky="w")
+        ttk.Button(status, text="\u24d8  About", style="Small.TButton",
+                   command=self._show_about).grid(row=0, column=0, sticky="w", padx=(100, 0))
         ttk.Label(status, textvariable=self.status_var,
                   style="Panel.TLabel").grid(row=0, column=1, sticky="w",
                                              padx=(12, 0))
@@ -3042,6 +3298,102 @@ class App(tk.Tk):
         folder_changed = cfg.get("music_folder", "") != old_folder
         fmt_changed = str(cfg.get("lyrics_format", "EMBEDDED")).upper() != old_fmt
         self._refresh_library(regrade=folder_changed or fmt_changed)
+
+    def _show_about(self):
+        """Show About dialog with version info and update check."""
+        from mlo import __version__
+        win = tk.Toplevel(self)
+        win.title("About Music Library Optimizer")
+        win.configure(background=PANEL)
+        win.transient(self)
+        win.grab_set()
+        win.geometry("480x360")
+        win.resizable(False, False)
+
+        box = ttk.Frame(win, padding=24)
+        box.pack(fill=tk.BOTH, expand=True)
+
+        try:
+            icon_file = os.path.join(SCRIPT_DIR, "app_icon.ico")
+            if os.path.isfile(icon_file):
+                win.iconbitmap(default=icon_file)
+        except tk.TclError:
+            pass
+
+        ttk.Label(box, text="Music Library Optimizer", style="H1.TLabel").pack(anchor="w")
+        ttk.Label(box, text=f"Version {__version__}", style="Muted.TLabel").pack(anchor="w", pady=(0, 16))
+
+        ttk.Separator(box).pack(fill=tk.X, pady=(0, 12))
+
+        ttk.Label(box,
+                  text="Lossless audio & image processing suite for maintaining "
+                       "a tagged, graded, audited music library.",
+                  style="Muted.TLabel", wraplength=400).pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(box,
+                  text="GitHub: https://github.com/dillydalli3r/MusicLibraryOptimizer",
+                  style="Muted.TLabel", wraplength=400).pack(anchor="w", pady=(0, 16))
+
+        ttk.Separator(box).pack(fill=tk.X, pady=(0, 12))
+
+        def check_updates():
+            btn.configure(state=tk.DISABLED, text="Checking...")
+            def cb(version, url, notes):
+                if version:
+                    win.after(0, lambda: self._show_update_dialog(version, url, notes))
+                else:
+                    win.after(0, lambda: self._show_no_update())
+                win.after(0, lambda: btn.configure(state=tk.NORMAL, text="Check for Updates"))
+            updater.check_for_updates(silent=False, callback=cb)
+
+        def open_github():
+            import webbrowser
+            webbrowser.open("https://github.com/dillydalli3r/MusicLibraryOptimizer")
+
+        btn_frame = ttk.Frame(box)
+        btn_frame.pack(fill=tk.X, pady=(8, 0))
+        btn = ttk.Button(btn_frame, text="Check for Updates", style="Accent.TButton",
+                         command=check_updates)
+        btn.pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="View on GitHub", style="Small.TButton",
+                   command=open_github).pack(side=tk.LEFT, padx=(8, 0))
+
+        ttk.Button(box, text="Close", style="Small.TButton",
+                   command=win.destroy).pack(side=tk.RIGHT, pady=(16, 0))
+
+    def _show_update_dialog(self, version, url, notes):
+        win = tk.Toplevel(self)
+        win.title("Update Available")
+        win.configure(background=PANEL)
+        win.transient(self)
+        win.grab_set()
+        win.geometry("520x380")
+        win.resizable(False, False)
+
+        box = ttk.Frame(win, padding=24)
+        box.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(box, text=f"Update Available: v{version}", style="H1.TLabel", foreground=GREEN).pack(anchor="w")
+        ttk.Label(box, text="A new version is ready to download.", style="Muted.TLabel").pack(anchor="w", pady=(0, 16))
+
+        if notes:
+            txt = tk.Text(box, wrap="word", height=8, background=FIELD, foreground=TEXT,
+                          borderwidth=0, font=_font(9))
+            txt.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+            txt.insert("1.0", notes)
+            txt.configure(state=tk.DISABLED)
+
+        def download_and_install():
+            btn.configure(state=tk.DISABLED, text="Downloading...")
+            updater.download_and_run_installer(url, lambda ok: win.after(0, win.destroy))
+        btn = ttk.Button(box, text="Download & Install", style="Accent.TButton",
+                         command=download_and_install)
+        btn.pack(side=tk.LEFT, pady=(12, 0))
+        ttk.Button(box, text="Later", style="Small.TButton",
+                   command=win.destroy).pack(side=tk.RIGHT, pady=(12, 0))
+
+    def _show_no_update(self):
+        messagebox.showinfo("No Updates", "You are already on the latest version.", parent=self)
 
     def _run_all(self):
         order = self.config.get("run_all_order", [1, 2, 3, 5, 4])

@@ -82,6 +82,9 @@ DEFAULT_CONFIG = {
     # Library tree column visibility (id -> bool); keys merge with the
     # app's column table so partial maps are fine.
     "library_columns": {},
+    # First run / updates
+    "first_run_done": False,
+    "last_update_check": 0,
 }
 
 

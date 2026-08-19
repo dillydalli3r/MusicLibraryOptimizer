@@ -1,4 +1,4 @@
-# Music Library Optimizer
+# Music Library Optimizer v1.0.0
 
 A Windows program for optimizing music libraries. It targets FLAC files,
 image files (mainly by converting to JPEG XL), cue sheets, and lyrics —
@@ -8,15 +8,39 @@ detection via AudioAuditor). Mostly written in Python.
 
 Desktop GUI (dark theme) + optional console menu.
 
-## Usage
+## Quick Start
 
-**Desktop app:** double-click `Music Library Optimizer.exe`
-(the compiled release — no Python required).
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.0.exe`
+from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
+run it, and follow the first-launch wizard to pick your music folder.
 
 **From source:** `Music Library Optimizer.bat` or `python app.py`
 (requires `pip install mutagen`, optionally `Pillow` and `tqdm`).
 
 **Console menu:** `python -m mlo`
+
+## New in v1.0.0
+
+- **Windows Installer** (Inno Setup) — proper installation with Start Menu,
+  desktop shortcut, uninstaller, and auto-update support.
+- **First-Launch Setup Wizard** — on first run, a guided wizard helps you
+  choose your music library folder, review the recommended settings preset,
+  and understand the external toolchain.
+- **Settings Preset** — recommended defaults for FLAC (level 8, no seektables),
+  Images (JPEG XL effort 10, convert to JXL), Lyrics (embedded, clean LRC),
+  CUE (normalized), MEDIA/SOURCE normalization, Audio Audit (all detectors on),
+  and more. User-specific paths (music folder, external tool paths) are never
+  overwritten by the preset.
+- **Auto-Update Checker** — checks GitHub Releases every 7 days; shows a
+  notification in the About dialog when a new version is available with one-click
+  download & install.
+- **About / Updates Dialog** — version info, release notes, one-click "Check for
+  Updates", and direct installer download.
+- **Audio Auditor Configuration** — Settings → Audio Auditor now exposes all
+  detector toggles (clipping, MQA, AI, fake stereo, silence, dynamic range,
+  true peak, LUFS, BPM) and cutoff allowance.
+- **CD Rip-Log Grading** — per-disc `LOG_GRADE` (0-100) for `MEDIA=CD`
+  releases, deterministic `CD-N.log` / `CD-N.cue` naming.
 
 ## Dependencies (automatic)
 
@@ -131,9 +155,6 @@ stays `REAL` for genuine lossless either way).
 | **LUFS** | Toggle `--no-lufs` (only used in Thorough mode). |
 | **BPM** | Toggle `--no-bpm` (only used in Thorough mode). |
 
-The console config menu (option 9) exposes the same controls as options
-22-33.
-
 ### Force options
 
 The Library toolbar has a **Force** pill next to a **▾** menu that toggles
@@ -191,6 +212,15 @@ three apps are auto-detected via the registry (App Paths), common
 install locations, or PATH; the first manual locate is remembered in
 `config.json` (`foobar2000_path` / `mp3tag_path` / `picard_path`).
 
+## Auto-Updates
+
+The app checks for updates on GitHub Releases every 7 days (silent check).
+When an update is found, the **About** dialog (status bar → ⓘ About) shows
+a notification with release notes and a **Download & Install** button that
+fetches the new installer and launches it automatically.
+
+You can also manually check anytime via **About** → **Check for Updates**.
+
 ## Project layout
 
 ```
@@ -211,6 +241,7 @@ mlo/                            Core package — all processing logic
     grader.py / discs.py        discs.py: CD-N naming + per-disc LOG_GRADE
     audit.py                    AudioAuditor CLI integration (script 6)
     cli.py                      Interactive console menu
+    updater.py                  Auto-update checker (GitHub Releases)
 config.json                     Persisted settings (created on first save)
 app_icon.ico                    Application icon
 .dependencies/                  External toolchain (auto-downloaded):
@@ -221,9 +252,26 @@ app_icon.ico                    Application icon
     AudioAuditor v2.0.0/        AudioAuditorCLI.exe
 ```
 
-## Rebuilding the exe
+## Building the installer
 
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed.
+
+```bash
+# Build the exe first
+pip install pyinstaller mutagen pillow
+python -m PyInstaller --noconfirm --clean --onefile --windowed ^
+    --name "Music Library Optimizer" --icon app_icon.ico ^
+    --hidden-import mutagen.aac app.py
+
+# Then compile the installer
+iscc "Music Library Optimizer.iss"
 ```
+
+Output: `dist/MusicLibraryOptimizer_Setup_v1.0.0.exe`
+
+## Rebuilding the exe (without installer)
+
+```bash
 pip install pyinstaller mutagen pillow
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name "Music Library Optimizer" --icon app_icon.ico ^
@@ -231,3 +279,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 ```
 
 The exe reads `config.json` and `.dependencies/` from its own folder.
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
