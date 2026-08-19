@@ -111,6 +111,16 @@ def show_config_menu(config):
         print(f" 21. Edit Run All Order       : {config.get('run_all_order', [1, 2, 3, 5, 4])}")
         print(f" 22. Thorough Audit           : {config.get('audit_thorough', False)}")
         print(f" 23. Force Audit              : {config.get('force_audit', False)}")
+        print(f" 24. Audit Cutoff Allowance   : {config.get('audit_cutoff_allow', 0)} Hz (0=default)")
+        print(f" 25. Audit Clipping           : {config.get('audit_clipping', True)}")
+        print(f" 26. Audit MQA                : {config.get('audit_mqa', True)}")
+        print(f" 27. Audit AI Detection       : {config.get('audit_ai', True)}")
+        print(f" 28. Audit Fake Stereo        : {config.get('audit_fake_stereo', True)}")
+        print(f" 29. Audit Silence            : {config.get('audit_silence', True)}")
+        print(f" 30. Audit Dynamic Range      : {config.get('audit_dynamic_range', True)}")
+        print(f" 31. Audit True Peak          : {config.get('audit_true_peak', True)}")
+        print(f" 32. Audit LUFS               : {config.get('audit_lufs', True)}")
+        print(f" 33. Audit BPM                : {config.get('audit_bpm', True)}")
 
         print_separator()
         print("  Auto-detected encoder versions (.dependencies):")
@@ -304,6 +314,47 @@ def show_config_menu(config):
             config["force_audit"] = tf("Force re-audit of files that already carry an AUDIT tag? (y/n): ")
             save_config(config)
             print(f"\nSaved. Force Audit = {config['force_audit']}")
+            pause_for_input()
+
+        elif choice == "24":
+            try:
+                new_val = int(input("Cutoff allowance in Hz (0 = CLI default 19600, 20000+ for HD masters): ").strip())
+                if 0 <= new_val <= 24000:
+                    config["audit_cutoff_allow"] = new_val
+                    save_config(config)
+                    print(c("\nSaved.", Color.GREEN))
+                else:
+                    print(c("\nValue must be between 0 and 24000.", Color.RED))
+            except ValueError:
+                print(c("\nInvalid value.", Color.RED))
+            pause_for_input()
+
+        elif choice in ("25", "26", "27", "28", "29", "30", "31", "32", "33"):
+            key = {
+                "25": "audit_clipping",
+                "26": "audit_mqa",
+                "27": "audit_ai",
+                "28": "audit_fake_stereo",
+                "29": "audit_silence",
+                "30": "audit_dynamic_range",
+                "31": "audit_true_peak",
+                "32": "audit_lufs",
+                "33": "audit_bpm",
+            }[choice]
+            label = {
+                "25": "clipping detection",
+                "26": "MQA detection",
+                "27": "AI detection",
+                "28": "fake stereo detection",
+                "29": "silence detection",
+                "30": "dynamic range",
+                "31": "true peak",
+                "32": "LUFS",
+                "33": "BPM",
+            }[choice]
+            config[key] = tf(f"Enable audit {label}? (y/n): ")
+            save_config(config)
+            print(f"\nSaved. Audit {label} = {config[key]}")
             pause_for_input()
 
         elif choice == "0":

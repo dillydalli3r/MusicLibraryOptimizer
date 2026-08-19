@@ -124,6 +124,16 @@ CONFIG_FIELDS = [
     ("grade_verbose", "Grade Verbose Output", "bool", None),
     ("audit_thorough", "Thorough Audit (slower)", "bool", None),
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
+    ("audit_cutoff_allow", "Audit Cutoff Allowance (Hz, 0=default)", "int", (0, 24000)),
+    ("audit_clipping", "Audit Clipping Detection", "bool", None),
+    ("audit_mqa", "Audit MQA Detection", "bool", None),
+    ("audit_ai", "Audit AI Detection", "bool", None),
+    ("audit_fake_stereo", "Audit Fake Stereo Detection", "bool", None),
+    ("audit_silence", "Audit Silence Detection", "bool", None),
+    ("audit_dynamic_range", "Audit Dynamic Range", "bool", None),
+    ("audit_true_peak", "Audit True Peak", "bool", None),
+    ("audit_lufs", "Audit LUFS", "bool", None),
+    ("audit_bpm", "Audit BPM", "bool", None),
     ("auto_advance", "Auto-Advance Between Scripts", "bool", None),
     ("run_all_order", "Run All Order", "choice", None),
     ("compact_ui", "Compact UI Mode", "bool", None),
@@ -547,6 +557,39 @@ FIELD_DESCRIPTIONS = {
         "Audit Library: re-audit files that already carry an AUDIT tag "
         "and re-score rip logs even when LOG_GRADE is present. The "
         "Force ▾ menu in the Library tab sets this per-run.",
+    "audit_cutoff_allow":
+        "AudioAuditor's --cutoff-allow threshold in Hz. Files whose "
+        "spectral cutoff is at or above this value are NOT flagged as "
+        "fake. 0 = use the CLI default (19600 Hz). Raise it (e.g. 20000) "
+        "if genuine HD masters are being misread as transcoded lossy.",
+    "audit_clipping":
+        "Audit: detect clipped samples (--no-clipping when off). "
+        "Loud modern masters often clip at the true-peak ceiling and are "
+        "still genuine lossless; turn this off to stop 'clipping' warnings.",
+    "audit_mqa":
+        "Audit: detect MQA encoding markers (--no-mqa when off).",
+    "audit_ai":
+        "Audit: detect AI-generated audio via the standard watermark "
+        "detector (--no-ai when off). Can false-positive on well-mastered "
+        "digital sources.",
+    "audit_fake_stereo":
+        "Audit: detect fake stereo (mono upmixed to stereo) "
+        "(--no-fake-stereo when off).",
+    "audit_silence":
+        "Audit: detect excessive silence (--no-silence when off). Quiet "
+        "passages in classical/ambient music can trigger false warnings.",
+    "audit_dynamic_range":
+        "Audit: measure dynamic range (--no-dynamic-range when off). "
+        "Only used in Thorough mode.",
+    "audit_true_peak":
+        "Audit: measure true-peak levels (--no-true-peak when off). "
+        "Only used in Thorough mode.",
+    "audit_lufs":
+        "Audit: measure integrated loudness LUFS (--no-lufs when off). "
+        "Only used in Thorough mode.",
+    "audit_bpm":
+        "Audit: detect BPM (--no-bpm when off). Only used in Thorough "
+        "mode.",
     "auto_advance":
         "Sequence runs (Run All / custom): when off, the app pauses for "
         "confirmation between scripts — the GUI shows a Continue button.",
@@ -836,7 +879,12 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("CUE Sheets", ["keep_empty_cue_lines", "keep_other_cue_lines"]),
             ("Tags", ["normalize_media_source", "digital_media_source_value"]),
-            ("Audio Audit", ["audit_thorough", "force_audit"]),
+            ("Audio Auditor", [
+                "audit_thorough", "force_audit", "audit_cutoff_allow",
+                "audit_clipping", "audit_mqa", "audit_ai",
+                "audit_fake_stereo", "audit_silence", "audit_dynamic_range",
+                "audit_true_peak", "audit_lufs", "audit_bpm",
+            ]),
             ("Interface", ["grade_verbose", "auto_advance", "compact_ui"]),
         ]
         field_lookup = {f[0]: f for f in CONFIG_FIELDS}

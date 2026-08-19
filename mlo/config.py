@@ -38,9 +38,21 @@ DEFAULT_CONFIG = {
 
     # Audio audit (AudioAuditor CLI): full-track detectors (silence, DR,
     # true peak, LUFS, BPM) instead of the fast scan; force re-audits
-    # files that already carry an AUDIT verdict.
+    # files that already carry an AUDIT verdict. Detector toggles map to
+    # the CLI's --no-* flags (default on) and --cutoff-allow sets the
+    # frequency-cutoff threshold for fake detection (0 = CLI default).
     "audit_thorough": False,
     "force_audit": False,
+    "audit_cutoff_allow": 0,
+    "audit_clipping": True,
+    "audit_mqa": True,
+    "audit_ai": True,
+    "audit_fake_stereo": True,
+    "audit_silence": True,
+    "audit_dynamic_range": True,
+    "audit_true_peak": True,
+    "audit_lufs": True,
+    "audit_bpm": True,
 
     # Encoder marker tags written per file type (ENCODER_PROGRAM /
     # ENCODER_QUALITY / ENCODER_VERSION)

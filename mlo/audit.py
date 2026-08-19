@@ -55,16 +55,43 @@ FLAG_KEYS = (
 )
 
 
-def _audit_batch(cli, paths, thorough):
+# Detector toggles: config key -> CLI --no-* flag. Default on; a False
+# setting appends the flag, disabling that detector. Silenced detectors
+# produce no warning flags, so a "warn" verdict from them disappears.
+DETECTOR_NO_FLAGS = {
+    "audit_clipping": "--no-clipping",
+    "audit_mqa": "--no-mqa",
+    "audit_ai": "--no-ai",
+    "audit_fake_stereo": "--no-fake-stereo",
+    "audit_silence": "--no-silence",
+    "audit_dynamic_range": "--no-dynamic-range",
+    "audit_true_peak": "--no-true-peak",
+    "audit_lufs": "--no-lufs",
+    "audit_bpm": "--no-bpm",
+}
+
+
+def _audit_batch(cli, paths, config):
     """Run one AudioAuditorCLI analyze batch; returns parsed items."""
     cmd = [
         cli, "analyze", "--json",
         "--no-fun", "--no-tips", "--no-update-check", "--no-config",
     ]
-    if thorough:
+    if config.get("audit_thorough", False):
         cmd.append("--thorough")
     else:
         cmd.append("--fast")
+
+    cutoff = config.get("audit_cutoff_allow", 0)
+    if cutoff:
+        try:
+            cmd += ["--cutoff-allow", str(int(cutoff))]
+        except (ValueError, TypeError):
+            pass
+
+    for key, flag in DETECTOR_NO_FLAGS.items():
+        if not config.get(key, True):
+            cmd.append(flag)
 
     proc = run_tool(
         cmd,
@@ -261,7 +288,7 @@ def run_audit_library(config):
     for start in range(0, len(todo), BATCH_SIZE):
         batch = todo[start:start + BATCH_SIZE]
         try:
-            items = _audit_batch(cli, batch, thorough)
+            items = _audit_batch(cli, batch, config)
         except Exception as e:
             stats["error_count"] += len(batch)
             stats["errors"].append((f"batch {start // BATCH_SIZE + 1} "
