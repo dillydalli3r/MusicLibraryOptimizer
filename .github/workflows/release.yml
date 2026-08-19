@@ -26,79 +26,77 @@ jobs:
         run: |
           pip install pyinstaller mutagen pillow
 
-      - name: Download AudioAuditorCLI
+      - name: Download pinned dependencies
+        shell: pwsh
         run: |
-          $url = "https://github.com/Angel2mp3/AudioAuditor/releases/latest/download/AudioAuditorCLI.exe"
-          $out = ".dependencies\AudioAuditor v2.0.0\AudioAuditorCLI.exe"
-          New-Item -ItemType Directory -Force -Path (Split-Path $out)
-          try {
-            Invoke-WebRequest -Uri $url -OutFile $out -ErrorAction Stop
-            Write-Host "Downloaded AudioAuditorCLI.exe"
-          } catch {
-            Write-Warning "Failed to download AudioAuditorCLI: $_"
+          choco install 7zip -y --no-progress | Out-Null
+
+          function Find-Dir($root, [string[]]$markers) {
+            $dirs = Get-ChildItem -Path $root -Recurse -Directory -ErrorAction SilentlyContinue | Where-Object {
+              foreach ($m in $markers) { if (-not (Test-Path (Join-Path $_.FullName $m))) { return $false } }
+              return $true
+            }
+            $p = $dirs | Where-Object { $_.FullName -match 'x64|win64' } | Select-Object -First 1
+            if ($p) { return $p.FullName }
+            if ($dirs) { return $dirs[0].FullName }
+            return $null
+          }
+          function Get-Zip($url, $zip, $dest) {
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            Expand-Archive -Path $zip -DestinationPath $dest -Force
+          }
+          function Install-From($srcDir, [string[]]$markers, $outDir) {
+            if (-not $srcDir) { Write-Warning "  source dir not found for $outDir"; return }
+            New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+            foreach ($m in $markers) { Copy-Item (Join-Path $srcDir $m) $outDir -Force }
+            Write-Host "  installed $outDir"
           }
 
-      - name: Download flac
-        run: |
-          $url = "https://github.com/xiph/flac/releases/download/1.5.0/flac-1.5.0-win64.zip"
-          $zip = "$env:TEMP\flac.zip"
-          $outDir = ".dependencies\flac v1.5.0"
-          New-Item -ItemType Directory -Force -Path $outDir
+          # AudioAuditor 2.0.0 (single self-contained exe)
           try {
-            Invoke-WebRequest -Uri $url -OutFile $zip -ErrorAction Stop
-            Expand-Archive -Path $zip -DestinationPath "$env:TEMP\flac" -Force
-            Copy-Item "$env:TEMP\flac\flac-1.5.0-win64\flac.exe" $outDir -ErrorAction SilentlyContinue
-            Copy-Item "$env:TEMP\flac\flac-1.5.0-win64\metaflac.exe" $outDir -ErrorAction SilentlyContinue
-            Write-Host "Downloaded flac/metaflac"
-          } catch {
-            Write-Warning "Failed to download flac: $_"
-          }
+            $out = ".dependencies\AudioAuditor v2.0.0\AudioAuditorCLI.exe"
+            New-Item -ItemType Directory -Force -Path (Split-Path $out) | Out-Null
+            Invoke-WebRequest -Uri "https://github.com/Angel2mp3/AudioAuditor/releases/download/V2.0.0/AudioAuditorCLI-win-x64.exe" -OutFile $out
+            Write-Host "  installed AudioAuditor v2.0.0"
+          } catch { Write-Warning "AudioAuditor: $_" }
 
-      - name: Download libjxl
-        run: |
-          $url = "https://github.com/libjxl/libjxl/releases/download/v0.12.0/libjxl-0.12.0-win64.zip"
-          $zip = "$env:TEMP\libjxl.zip"
-          $outDir = ".dependencies\libjxl v0.12.0"
-          New-Item -ItemType Directory -Force -Path $outDir
+          # FLAC 1.5.0
           try {
-            Invoke-WebRequest -Uri $url -OutFile $zip -ErrorAction Stop
-            Expand-Archive -Path $zip -DestinationPath "$env:TEMP\libjxl" -Force
-            Copy-Item "$env:TEMP\libjxl\cjxl.exe" $outDir -ErrorAction SilentlyContinue
-            Copy-Item "$env:TEMP\libjxl\djxl.exe" $outDir -ErrorAction SilentlyContinue
-            Write-Host "Downloaded libjxl"
-          } catch {
-            Write-Warning "Failed to download libjxl: $_"
-          }
+            Get-Zip "https://github.com/xiph/flac/releases/download/1.5.0/flac-1.5.0-win.zip" "$env:TEMP\flac.zip" "$env:TEMP\flac"
+            Install-From (Find-Dir "$env:TEMP\flac" @("flac.exe","metaflac.exe")) @("flac.exe","metaflac.exe") ".dependencies\flac v1.5.0"
+          } catch { Write-Warning "FLAC: $_" }
 
-      - name: Download libjpeg-turbo (jpegtran)
-        run: |
-          $url = "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.0/libjpeg-turbo-3.2.0-vc64.zip"
-          $zip = "$env:TEMP\libjpeg.zip"
-          $outDir = ".dependencies\libjpeg-turbo v3.2.0"
-          New-Item -ItemType Directory -Force -Path $outDir
+          # libjxl 0.12.0
           try {
-            Invoke-WebRequest -Uri $url -OutFile $zip -ErrorAction Stop
-            Expand-Archive -Path $zip -DestinationPath "$env:TEMP\libjpeg" -Force
-            Copy-Item "$env:TEMP\libjpeg\libjpeg-turbo-3.2.0-vc64\jpegtran.exe" $outDir -ErrorAction SilentlyContinue
-            Write-Host "Downloaded libjpeg-turbo"
-          } catch {
-            Write-Warning "Failed to download libjpeg-turbo: $_"
-          }
+            Get-Zip "https://github.com/libjxl/libjxl/releases/download/v0.12.0/jxl-x64-windows-static.zip" "$env:TEMP\jxl.zip" "$env:TEMP\jxl"
+            Install-From (Find-Dir "$env:TEMP\jxl" @("cjxl.exe","djxl.exe")) @("cjxl.exe","djxl.exe") ".dependencies\libjxl v0.12.0"
+          } catch { Write-Warning "libjxl: $_" }
 
-      - name: Download oxipng
-        run: |
-          $url = "https://github.com/oxipng/oxipng/releases/download/v10.2.0/oxipng-10.2.0-windows.zip"
-          $zip = "$env:TEMP\oxipng.zip"
-          $outDir = ".dependencies\oxipng v10.2.0"
-          New-Item -ItemType Directory -Force -Path $outDir
+          # libjpeg-turbo 3.2.0 (NSIS installer -> extract with 7-Zip)
           try {
-            Invoke-WebRequest -Uri $url -OutFile $zip -ErrorAction Stop
-            Expand-Archive -Path $zip -DestinationPath "$env:TEMP\oxipng" -Force
-            Copy-Item "$env:TEMP\oxipng\oxipng.exe" $outDir -ErrorAction SilentlyContinue
-            Write-Host "Downloaded oxipng"
-          } catch {
-            Write-Warning "Failed to download oxipng: $_"
-          }
+            Invoke-WebRequest -Uri "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.0/libjpeg-turbo-3.2.0-vc-x64.exe" -OutFile "$env:TEMP\libjpeg.exe"
+            New-Item -ItemType Directory -Force -Path "$env:TEMP\libjpeg" | Out-Null
+            7z x -y "-o$env:TEMP\libjpeg" "$env:TEMP\libjpeg.exe" | Out-Null
+            Install-From (Find-Dir "$env:TEMP\libjpeg" @("jpegtran.exe")) @("jpegtran.exe") ".dependencies\libjpeg-turbo v3.2.0"
+          } catch { Write-Warning "libjpeg-turbo: $_" }
+
+          # oxipng 10.2.0
+          try {
+            Get-Zip "https://github.com/oxipng/oxipng/releases/download/v10.2.0/oxipng-10.2.0-x86_64-pc-windows-msvc.zip" "$env:TEMP\oxipng.zip" "$env:TEMP\oxipng"
+            Install-From (Find-Dir "$env:TEMP\oxipng" @("oxipng.exe")) @("oxipng.exe") ".dependencies\oxipng v10.2.0"
+          } catch { Write-Warning "oxipng: $_" }
+
+          # rsgain 3.7
+          try {
+            Get-Zip "https://github.com/complexlogic/rsgain/releases/download/v3.7/rsgain-3.7-win64.zip" "$env:TEMP\rsgain.zip" "$env:TEMP\rsgain"
+            Install-From (Find-Dir "$env:TEMP\rsgain" @("rsgain.exe")) @("rsgain.exe") ".dependencies\rsgain v3.7"
+          } catch { Write-Warning "rsgain: $_" }
+
+          # ffmpeg 2026.8.19 (autobuild N-126217)
+          try {
+            Get-Zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-19-19-21/ffmpeg-N-126217-ge1e325235e-win64-gpl.zip" "$env:TEMP\ffmpeg.zip" "$env:TEMP\ffmpeg"
+            Install-From (Find-Dir "$env:TEMP\ffmpeg" @("ffmpeg.exe","ffprobe.exe")) @("ffmpeg.exe","ffprobe.exe") ".dependencies\ffmpeg v2026.8.19"
+          } catch { Write-Warning "ffmpeg: $_" }
 
       - name: Build executable
         run: |

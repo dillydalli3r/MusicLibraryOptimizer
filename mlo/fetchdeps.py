@@ -96,6 +96,53 @@ MARKER_EXES = {
 # Tools whose release asset is a single bare exe - no archive to extract.
 SINGLE_EXE_TOOLS = {"audioauditor"}
 
+# Exact, pinned dependency versions. Every tool is downloaded from a specific
+# GitHub release tag (never "latest") so installs and CI builds are fully
+# reproducible. `tag` is the GitHub release tag, `asset` the exact file to
+# fetch, `version` the version label used in the .dependencies folder.
+PINNED = {
+    "flac": {
+        "tag": "1.5.0",
+        "asset": "flac-1.5.0-win.zip",
+        "version": "1.5.0",
+    },
+    "libjxl": {
+        "tag": "v0.12.0",
+        "asset": "jxl-x64-windows-static.zip",
+        "version": "0.12.0",
+    },
+    "libjpeg_turbo": {
+        "tag": "3.2.0",
+        "asset": "libjpeg-turbo-3.2.0-vc-x64.exe",
+        "version": "3.2.0",
+    },
+    "oxipng": {
+        "tag": "v10.2.0",
+        "asset": "oxipng-10.2.0-x86_64-pc-windows-msvc.zip",
+        "version": "10.2.0",
+    },
+    "audioauditor": {
+        "tag": "V2.0.0",
+        "asset": "AudioAuditorCLI-win-x64.exe",
+        "version": "2.0.0",
+    },
+    "rsgain": {
+        "tag": "v3.7",
+        "asset": "rsgain-3.7-win64.zip",
+        "version": "3.7",
+    },
+    "ffmpeg": {
+        "tag": "autobuild-2026-08-19-19-21",
+        "asset": "ffmpeg-N-126217-ge1e325235e-win64-gpl.zip",
+        "version": "2026.8.19",
+    },
+    "simpledrmeter": {
+        "tag": "main",
+        "asset": "",
+        "version": "main",
+    },
+}
+
 # simple-dr-meter is a Python script (no Windows binary / no releases); it is
 # fetched from the repo's main branch archive instead of a GitHub release.
 SIMPLE_DR_METER_ZIP_URL = (
@@ -120,25 +167,30 @@ def _api_json(url):
 
 
 def get_latest_release(key):
-    """Return the latest release dict for a tool key (cached per session)."""
+    """Return the PINNED release dict for a tool (cached per session).
+
+    Tools are pinned to exact versions (see PINNED) rather than "latest", so
+    installs are reproducible. Fetches the specific release tag from GitHub.
+    """
     if key not in _release_cache:
+        pin = PINNED[key]
         data = _api_json(
-            f"https://api.github.com/repos/{REPOS[key]}/releases/latest"
+            f"https://api.github.com/repos/{REPOS[key]}/releases/tags/{pin['tag']}"
         )
-        tag = str(data.get("tag_name", "")).strip().lstrip("vV")
+        urls = {a.get("name", ""): a.get("browser_download_url", "")
+                for a in data.get("assets", [])}
         _release_cache[key] = {
-            "version": tag,
-            "assets": [a.get("name", "") for a in data.get("assets", [])],
-            "urls": {a.get("name", ""): a.get("browser_download_url", "")
-                     for a in data.get("assets", [])},
+            "version": pin["version"],
+            "assets": list(urls),
+            "urls": urls,
         }
     return _release_cache[key]
 
 
 def latest_versions():
-    """{tool key: latest version string} for all tools."""
-    out = {key: get_latest_release(key)["version"] for key in REPOS}
-    out["simpledrmeter"] = "main"
+    """{tool key: pinned version string} for all tools (no network needed)."""
+    out = {key: PINNED[key]["version"] for key in REPOS}
+    out["simpledrmeter"] = PINNED["simpledrmeter"]["version"]
     return out
 
 
@@ -157,6 +209,11 @@ def tools_mod_simple_dr_meter():
 
 
 def pick_asset(key):
+    """Return the exact pinned asset name for a tool, if one is set."""
+    pin = PINNED.get(key) or {}
+    if pin.get("asset"):
+        return pin["asset"]
+    # Fallback: match patterns against the release assets.
     rel = get_latest_release(key)
     for pattern in ASSET_PATTERNS[key]:
         rx = re.compile(pattern, re.IGNORECASE)

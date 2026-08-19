@@ -52,22 +52,22 @@ run it, and follow the first-launch wizard to pick your music folder.
 
 ## Dependencies (automatic)
 
-The GUI's **Dependencies…** dialog (sidebar → MANAGE) downloads the latest
-official Windows builds straight from GitHub releases and installs them into
-`.dependencies/`:
+The GUI's **Dependencies…** dialog (sidebar → MANAGE) downloads **exact,
+pinned versions** of every tool (never "latest") from GitHub releases and
+installs them into `.dependencies/`, so installs are reproducible:
 
-| Tool           | Source                        | Installed files             |
-|----------------|-------------------------------|-----------------------------|
-| FLAC           | xiph/flac                     | flac.exe, metaflac.exe      |
-| libjxl         | libjxl/libjxl                 | cjxl.exe, djxl.exe          |
-| libjpeg-turbo  | libjpeg-turbo/libjpeg-turbo   | jpegtran.exe                |
-| oxipng         | oxipng/oxipng                 | oxipng.exe                  |
-| AudioAuditor   | Angel2mp3/AudioAuditor        | AudioAuditorCLI.exe         |
-| rsgain         | complexlogic/rsgain           | rsgain.exe                  |
-| ffmpeg         | BtbN/FFmpeg-Builds            | ffmpeg.exe, ffprobe.exe     |
-| simple-dr-meter| magicgoose/simple-dr-meter    | main.py (source + numpy)    |
+| Tool           | Pinned    | Source                        | Installed files             |
+|----------------|-----------|-------------------------------|-----------------------------|
+| FLAC           | 1.5.0     | xiph/flac                     | flac.exe, metaflac.exe      |
+| libjxl         | 0.12.0    | libjxl/libjxl                 | cjxl.exe, djxl.exe          |
+| libjpeg-turbo  | 3.2.0     | libjpeg-turbo/libjpeg-turbo   | jpegtran.exe                |
+| oxipng         | 10.2.0    | oxipng/oxipng                 | oxipng.exe                  |
+| AudioAuditor   | 2.0.0     | Angel2mp3/AudioAuditor        | AudioAuditorCLI.exe         |
+| rsgain         | 3.7       | complexlogic/rsgain           | rsgain.exe                  |
+| ffmpeg         | 2026.8.19 | BtbN/FFmpeg-Builds            | ffmpeg.exe, ffprobe.exe     |
+| simple-dr-meter| main      | magicgoose/simple-dr-meter    | main.py (source + numpy)    |
 
-Each tool shows its installed and latest version with a Download / Update /
+Each tool shows its installed and pinned version with a Download / Update /
 Reinstall button, plus Install/Update All. The console menu offers the same
 via option 11. libjpeg-turbo only ships NSIS installers for Windows, so that
 one is unpacked with 7-Zip when available (also used for libjxl's
@@ -277,12 +277,15 @@ mlo/                            Core package — all processing logic
     updater.py                  Auto-update checker (GitHub Releases)
 config.json                     Persisted settings (created on first save)
 app_icon.ico                    Application icon
-.dependencies/                  External toolchain (auto-downloaded):
+.dependencies/                  External toolchain (pinned versions):
     flac v1.5.0/                flac.exe, metaflac.exe
     libjxl v0.12.0/             cjxl.exe, djxl.exe
     libjpeg-turbo v3.2.0/       jpegtran.exe
     oxipng v10.2.0/             oxipng.exe
     AudioAuditor v2.0.0/        AudioAuditorCLI.exe
+    rsgain v3.7/                rsgain.exe
+    ffmpeg v2026.8.19/          ffmpeg.exe, ffprobe.exe
+    simple-dr-meter/            main.py (source + numpy)
 ```
 
 ## Building the installer
