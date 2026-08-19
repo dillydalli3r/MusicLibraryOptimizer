@@ -1220,9 +1220,13 @@ class FirstRunWizard(tk.Toplevel):
         self.title("Welcome to Music Library Optimizer")
         self.configure(background=PANEL)
         self.transient(parent)
-        self.grab_set()
+        # Non-modal: the wizard never blocks the main window, so the app
+        # always opens and stays responsive even if the wizard misbehaves.
         self.resizable(False, False)
         self.geometry("720x580")
+        self.lift()
+        self.focus_force()
+        self.protocol("WM_DELETE_WINDOW", self._skip)
 
         outer = ttk.Frame(self, padding=24)
         outer.pack(fill=tk.BOTH, expand=True)
@@ -1316,6 +1320,13 @@ class FirstRunWizard(tk.Toplevel):
         if self.vars.get("use_preset", tk.BooleanVar(value=True)).get():
             self._apply_preset()
         # Mark first run complete
+        self.config["first_run_done"] = True
+        save_config(self.config)
+        self.on_complete()
+        self.destroy()
+
+    def _skip(self):
+        """Close the wizard without completing setup; the app keeps working."""
         self.config["first_run_done"] = True
         save_config(self.config)
         self.on_complete()
@@ -1485,16 +1496,26 @@ class App(tk.Tk):
         # Start the console plumbing (stdout redirect + log drain).
         self._start_console()
 
-        # First-run wizard: show once the event loop is running so the
-        # modal window maps reliably (creating it synchronously inside
-        # __init__ with a withdrawn root can hang).
+        # First-run wizard: the main window is always shown; the wizard is
+        # a modal on top of it. Creating the modal against a *visible* root
+        # maps reliably (a transient/grab on a withdrawn root may never
+        # display, leaving the app with no visible window).
         if not self.config.get("first_run_done", False):
-            self.withdraw()
             self.after(150, self._show_first_run_wizard)
 
     def _show_first_run_wizard(self):
-        """Create the first-run wizard inside the running event loop."""
-        FirstRunWizard(self, self.config, self._after_first_run)
+        """Create the first-run wizard inside the running event loop.
+
+        Creation is guarded: if the wizard fails for any reason the main
+        window stays fully usable rather than the app appearing to hang.
+        """
+        try:
+            FirstRunWizard(self, self.config, self._after_first_run)
+        except Exception:
+            import traceback as _tb
+            traceback.print_exc()
+            self.log("First-run wizard could not be shown; you can configure "
+                     "everything from ⚙ Settings.", tag="red")
 
     def _start_console(self):
         """Redirect stdout/stderr to the GUI console and start draining."""
@@ -1526,8 +1547,9 @@ class App(tk.Tk):
         return "TkFixedFont"
 
     def _after_first_run(self):
-        """Called when first-run wizard completes."""
-        self.deiconify()  # Show main window
+        """Called when first-run wizard completes. Main window is already
+        visible; just refresh the library with the chosen folder."""
+        self._refresh_library(regrade=True)
 
     # ------------------------------------------------------------------
     def _setup_style(self):
@@ -1800,6 +1822,8 @@ class App(tk.Tk):
             side=tk.LEFT, padx=(12, 0))
         ttk.Button(toolbar, text="Clear Selection", style="Small.TButton",
                    command=self._clear_selection).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(toolbar, text="Select All", style="Small.TButton",
+                   command=self._select_all).pack(side=tk.LEFT, padx=(8, 0))
 
         self.sel_label_var = tk.StringVar(value="0 selected")
         ttk.Label(toolbar, textvariable=self.sel_label_var,
@@ -1935,6 +1959,12 @@ class App(tk.Tk):
         self.library_tree.bind("<Button-1>", self._on_tree_click)
         self.library_tree.bind("<Double-1>", self._on_tree_double)
         self.library_tree.bind("<Button-3>", self._on_tree_menu)
+        self.library_tree.bind("<Control-a>", self._select_all)
+        self.library_tree.bind("<Control-A>", self._select_all)
+        self.bind("<Control-a>", self._select_all_global)
+        self.bind("<Control-A>", self._select_all_global)
+        self._last_anchor = None
+        ToolTip(self.library_tree, "Ctrl+A select all · Ctrl+click toggle · Shift+click range")
 
         # Library model state
         self._lib_folder = self.folder_var.get().strip()
@@ -2568,7 +2598,13 @@ class App(tk.Tk):
                 item, open=not bool(self.library_tree.item(item, "open"))
             )
             return
-        self._toggle_item(item)
+        if event.state & 0x0001:  # Shift held -> range select
+            self._select_range(item)
+        else:
+            # Plain click or Ctrl+click toggles the single item and
+            # becomes the anchor for a later Shift+click range.
+            self._toggle_item(item)
+            self._last_anchor = item
 
     def _on_tree_double(self, event):
         item = self.library_tree.identify_row(event.y)
@@ -2576,6 +2612,36 @@ class App(tk.Tk):
             self.library_tree.item(
                 item, open=not bool(self.library_tree.item(item, "open"))
             )
+
+    def _tree_items_in_order(self):
+        """Flattened list of tree items in display order."""
+        items = []
+
+        def walk(parent):
+            for child in self.library_tree.get_children(parent):
+                items.append(child)
+                walk(child)
+
+        walk("")
+        return items
+
+    def _select_range(self, target):
+        """Shift+click: check every item between the anchor and target."""
+        items = self._tree_items_in_order()
+        anchor = getattr(self, "_last_anchor", None) or target
+        try:
+            lo, hi = sorted((items.index(anchor), items.index(target)))
+        except ValueError:
+            lo = hi = len(items) - 1
+        for iid in items[lo:hi + 1]:
+            path = self._item_paths.get(iid)
+            base = self._item_base.get(iid)
+            if path and base is not None:
+                self._checked[path] = True
+        if self._root_item is not None:
+            self._apply_check_state(self._root_item)
+        self._update_selection_label()
+        self._last_anchor = target
 
     def _toggle_item(self, item):
         path = self._item_paths.get(item)
@@ -2585,6 +2651,24 @@ class App(tk.Tk):
         self._checked[path] = not self._checked.get(path, False)
         self.library_tree.item(item, text=self._checked_text(path, base))
         self._update_selection_label()
+
+    def _select_all(self, event=None):
+        """Ctrl+A: check every item in the tree (except the root)."""
+        self._checked.clear()
+        for item_id, path in self._item_paths.items():
+            if path and item_id != self._root_item:
+                self._checked[path] = True
+        if self._root_item is not None:
+            self._apply_check_state(self._root_item)
+        self._update_selection_label()
+        return "break"
+
+    def _select_all_global(self, event=None):
+        """Ctrl+A bound on the app window; ignore when typing in an Entry."""
+        w = self.focus_get()
+        if w is not None and isinstance(w, (ttk.Entry, tk.Entry)):
+            return None
+        return self._select_all(event)
 
     def _update_selection_label(self):
         n = sum(1 for c in self._checked.values() if c)
