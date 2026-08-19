@@ -1696,14 +1696,24 @@ class App(tk.Tk):
 
         style.configure("TNotebook", background=BG, borderwidth=0,
                         tabmargins=(0, 6, 0, 0))
-        # Solid tab backgrounds only: "transparent" makes unselected tabs
-        # render invisibly on some clam builds until hovered.
+        # The clam theme draws the SELECTED tab with different padding and
+        # the unselected tabs with a raised 3D bevel (lightcolor/darkcolor),
+        # which makes the selected tab render SMALLER than the others. Force
+        # identical padding, no border and no bevel for every state so all
+        # tab buttons are always exactly the same size; the selected one is
+        # only distinguished by its background + brighter text.
         style.configure("TNotebook.Tab", background="#141414",
-                        foreground=MUTED, borderwidth=0,
-                        padding=(22, 11), font=_sfont(9))
+                        foreground=MUTED, borderwidth=0, relief="flat",
+                        padding=(24, 10), font=_sfont(9),
+                        lightcolor="#141414", darkcolor="#141414",
+                        bordercolor="#141414")
         style.map("TNotebook.Tab",
                   background=[("selected", CARD), ("active", "#1d1d1d")],
-                  foreground=[("selected", BRIGHT), ("active", TEXT)])
+                  foreground=[("selected", BRIGHT), ("active", TEXT)],
+                  padding=[("selected", (24, 10)), ("!selected", (24, 10))],
+                  lightcolor=[("selected", CARD), ("!selected", "#141414")],
+                  darkcolor=[("selected", CARD), ("!selected", "#141414")],
+                  bordercolor=[("selected", CARD), ("!selected", "#141414")])
 
         style.configure("Treeview", background="#121212", fieldbackground="#121212",
                         foreground=TEXT, borderwidth=0, rowheight=28,
