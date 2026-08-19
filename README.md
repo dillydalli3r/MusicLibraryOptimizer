@@ -65,7 +65,7 @@ installs them into `.dependencies/`, so installs are reproducible:
 | AudioAuditor   | 2.0.0     | Angel2mp3/AudioAuditor        | AudioAuditorCLI.exe         |
 | rsgain         | 3.7       | complexlogic/rsgain           | rsgain.exe                  |
 | ffmpeg         | 2026.8.19 | BtbN/FFmpeg-Builds            | ffmpeg.exe, ffprobe.exe     |
-| simple-dr-meter| main      | magicgoose/simple-dr-meter    | main.py (source + numpy)    |
+| simple-dr-meter| 0.0.0     | magicgoose/simple-dr-meter    | main.py (source + numpy)    |
 
 Each tool shows its installed and pinned version with a Download / Update /
 Reinstall button, plus Install/Update All. The console menu offers the same
@@ -90,6 +90,11 @@ Python used to run the app.
 | 6 | Audit Library     | Audio integrity audit via the AudioAuditor CLI            |
 | 7 | DR & ReplayGain   | Writes ReplayGain (rsgain) and Dynamic Range (simple-dr-meter) tags |
 | 8 | Auto Tagging      | Derives ALBUMITUNESADVISORY (from track ITUNESADVISORY) and INSTRUMENTAL (from lyrics presence) |
+
+**Run All** runs **every** script (1–8) by default, in order. The exact order
+(and which scripts run at all) is configurable: Settings → **Run All Order**,
+or the console menu's configuration. **Optimize Selected** runs the same
+pipeline against the checked items.
 
 Only FLAC is losslessly re-encoded; other audio formats receive safe tag
 operations only. Every processed artifact carries ENCODER marker tags so
@@ -301,7 +306,7 @@ app_icon.ico                    Application icon
     AudioAuditor v2.0.0/        AudioAuditorCLI.exe
     rsgain v3.7/                rsgain.exe
     ffmpeg v2026.8.19/          ffmpeg.exe, ffprobe.exe
-    simple-dr-meter/            main.py (source + numpy)
+    simple-dr-meter/            main.py v0.0.0 (source + numpy)
 ```
 
 ## Building the installer

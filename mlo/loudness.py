@@ -143,32 +143,48 @@ def _run_dr_meter(script_path, ffmpeg_dir, album, workdir):
 
 
 def _parse_dr_file(dr_path):
-    """Parse dr.txt -> ({track_number: dr}, album_dr)."""
+    """Parse dr.txt -> ({track_number: dr}, {title_lower: dr}, album_dr)."""
     per_track = {}
+    per_title = {}
     album_dr = None
     try:
         with open(dr_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 m = TRACK_ROW_RE.match(line)
                 if m:
+                    dr = int(m.group(1))
                     try:
-                        per_track[int(m.group(2))] = int(m.group(1))
+                        per_track[int(m.group(2))] = dr
                     except ValueError:
                         pass
+                    title = m.group(3).strip().lower()
+                    if title:
+                        per_title[title] = dr
                     continue
                 m2 = OFFICIAL_DR_RE.search(line)
                 if m2:
                     album_dr = int(m2.group(1))
     except OSError:
         pass
-    return per_track, album_dr
+    return per_track, per_title, album_dr
 
 
-def _write_dr_tags(album, per_track, album_dr):
+def _raw_tag(af, name):
+    """Read a raw tag value (case-insensitive) that isn't in TAG_MAP."""
+    try:
+        for k, v in af.all_tags().items():
+            if str(k).lower() == name.lower():
+                return str(v).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _write_dr_tags(album, per_track, per_title, album_dr):
     """Write DYNAMIC RANGE + ALBUM DYNAMIC RANGE to the album's files.
 
-    Rows in dr.txt are keyed by TRACK NUMBER, so each file is matched via
-    its TRACKNUMBER tag.
+    Rows in dr.txt are keyed by TRACK NUMBER + TITLE; files are matched by
+    their TRACKNUMBER tag first, falling back to the TITLE tag.
     """
     modified = 0
     for f in sorted(os.listdir(album)):
@@ -177,14 +193,14 @@ def _write_dr_tags(album, per_track, album_dr):
         path = os.path.join(album, f)
         try:
             af = AudioFile(path)
-            # TRACKNUMBER isn't in TAG_MAP; read it from the raw tags.
-            raw_tags = {str(k).lower(): v
-                        for k, v in af.all_tags().items()}
-            raw = str(raw_tags.get("tracknumber", "") or "").strip()
-            num = int(raw) if raw.isdigit() else None
+            raw_tn = _raw_tag(af, "TRACKNUMBER")
+            num = int(raw_tn) if raw_tn.isdigit() else None
+            raw_title = _raw_tag(af, "TITLE").lower()
         except Exception:
             continue
         dr = per_track.get(num) if num is not None else None
+        if dr is None and raw_title:
+            dr = per_title.get(raw_title)
         if dr is None:
             continue
         try:
@@ -297,9 +313,9 @@ def run_calc_dr_replaygain(config):
                         dr_script, os.path.dirname(ffmpeg["ffmpeg_exe"]),
                         album, workdir)
                     if dr_path:
-                        per_track, album_dr = _parse_dr_file(dr_path)
+                        per_track, per_title, album_dr = _parse_dr_file(dr_path)
                         album_modified += _write_dr_tags(
-                            album, per_track, album_dr)
+                            album, per_track, per_title, album_dr)
                         # Don't leave dr.txt cluttering the album folder.
                         try:
                             os.remove(dr_path)

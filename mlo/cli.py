@@ -17,7 +17,7 @@ from .ui import (
     c, Color, clear_screen, print_header, print_separator,
     pause_for_input, log, fmt_size,
 )
-from .config import load_config, save_config
+from .config import load_config, save_config, DEFAULT_RUN_ALL_ORDER
 
 # Enable ANSI escape sequences on Windows 10+ consoles.
 if os.name == "nt":
@@ -43,7 +43,7 @@ def edit_run_all_order(config):
         print("    8. Auto Tagging")
         print("-" * 72)
 
-        current = config.get("run_all_order", [1, 2, 3, 5, 4])
+        current = config.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
         print(f"  Current order: {c(','.join(map(str, current)), Color.CYAN)}")
         print("Enter new order (comma-separated, e.g. 3,1,2,5,4) or '0' to cancel:")
 
@@ -112,7 +112,7 @@ def show_config_menu(config):
             f"{config.get('digital_media_source_value', DEFAULT_DIGITAL_SOURCE)}"
         )
         print(f" 20. Grade Verbose            : {config.get('grade_verbose', True)}")
-        print(f" 21. Edit Run All Order       : {config.get('run_all_order', [1, 2, 3, 5, 4])}")
+        print(f" 21. Edit Run All Order       : {config.get('run_all_order', DEFAULT_RUN_ALL_ORDER)}")
         print(f" 22. Thorough Audit           : {config.get('audit_thorough', False)}")
         print(f" 23. Force Audit              : {config.get('force_audit', False)}")
         print(f" 24. Audit Cutoff Allowance   : {config.get('audit_cutoff_allow', 0)} Hz (0=default)")
@@ -524,7 +524,7 @@ def show_main_menu(config):
     print("  6. Audit Library    (AudioAuditor: fake lossless / AI / MQA)")
     print("  7. DR & ReplayGain  (rsgain + simple-dr-meter tags)")
     print("  8. Auto Tagging     (advisory + instrumental)")
-    print(f"  9. Run All          {config.get('run_all_order', [1, 2, 3, 5, 4])}")
+    print(f"  9. Run All          {config.get('run_all_order', DEFAULT_RUN_ALL_ORDER)}")
     print(" 10. Run Custom       (select order)")
     print(" 11. Configuration")
     print(" 12. Dependencies     (download latest tools)")
@@ -629,7 +629,7 @@ def main():
             pause_for_input()
 
         elif choice == "9":
-            order = config.get("run_all_order", [1, 2, 3, 5, 4])
+            order = config.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
             run_scripts_sequence(config, order, title="RUN ALL SCRIPTS")
 
         elif choice == "10":

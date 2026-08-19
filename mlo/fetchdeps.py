@@ -137,16 +137,16 @@ PINNED = {
         "version": "2026.8.19",
     },
     "simpledrmeter": {
-        "tag": "main",
+        "tag": "v0.0.0",
         "asset": "",
-        "version": "main",
+        "version": "0.0.0",
     },
 }
 
 # simple-dr-meter is a Python script (no Windows binary / no releases); it is
-# fetched from the repo's main branch archive instead of a GitHub release.
+# fetched from the repo's v0.0.0 tag archive instead of a GitHub release.
 SIMPLE_DR_METER_ZIP_URL = (
-    "https://github.com/magicgoose/simple-dr-meter/archive/refs/heads/main.zip"
+    "https://github.com/magicgoose/simple-dr-meter/archive/refs/tags/v0.0.0.zip"
 )
 
 _HEADERS = {
@@ -199,7 +199,7 @@ def installed_versions():
     tools = detect_all_tools()
     out = {key: info["version"] for key, info in tools.items()}
     if tools_mod_simple_dr_meter():
-        out["simpledrmeter"] = "main"
+        out["simpledrmeter"] = PINNED["simpledrmeter"]["version"]
     return out
 
 

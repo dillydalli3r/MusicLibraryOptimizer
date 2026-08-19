@@ -5,6 +5,10 @@ import os
 from .paths import CONFIG_FILE, DEFAULT_DIGITAL_SOURCE
 from .ui import c, Color
 
+# Run All order. By default EVERY script runs (1-8); the user can change the
+# order / remove scripts via Settings -> Run All Order (or the console menu).
+DEFAULT_RUN_ALL_ORDER = [1, 2, 3, 4, 5, 6, 7, 8]
+
 DEFAULT_CONFIG = {
     "music_folder": r"F:\Media\Music\Artists",
 
@@ -79,7 +83,7 @@ DEFAULT_CONFIG = {
 
     # Misc
     "auto_advance": True,
-    "run_all_order": [1, 2, 3, 5, 4],
+    "run_all_order": list(DEFAULT_RUN_ALL_ORDER),
 
     # External taggers (Mp3tag / MusicBrainz Picard): explicit exe paths.
     # Empty means auto-detect (registry / install dirs / PATH).
@@ -130,7 +134,7 @@ def load_config() -> dict:
         merged[ftype].update(user_tags.get(ftype) or {})
     cfg["encoder_tags"] = merged
 
-    order = cfg.get("run_all_order", [1, 2, 3, 5, 4])
+    order = cfg.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
     clean_order = []
     try:
         for x in order:
@@ -138,9 +142,9 @@ def load_config() -> dict:
             if 1 <= xi <= 8 and xi not in clean_order:
                 clean_order.append(xi)
     except Exception:
-        clean_order = [1, 2, 3, 5, 4]
+        clean_order = list(DEFAULT_RUN_ALL_ORDER)
 
-    cfg["run_all_order"] = clean_order or [1, 2, 3, 5, 4]
+    cfg["run_all_order"] = clean_order or list(DEFAULT_RUN_ALL_ORDER)
     return cfg
 
 

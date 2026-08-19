@@ -40,7 +40,7 @@ from mlo import stats as stats_mod
 from mlo import tools as tools_mod
 from mlo import fetchdeps
 from mlo import updater
-from mlo.config import DEFAULT_CONFIG
+from mlo.config import DEFAULT_CONFIG, DEFAULT_RUN_ALL_ORDER
 from mlo.paths import DEFAULT_DIGITAL_SOURCE, DEPS_DIR, SCRIPT_DIR
 from mlo.deps import HAS_MUTAGEN, HAS_PIL
 from mlo.report import print_results, print_grade_results, print_combined_results
@@ -981,7 +981,7 @@ class ConfigDialog(tk.Toplevel):
         row += 1
         order_box = ttk.Frame(inner, style="Card.TFrame")
         order_box.grid(row=row, column=0, sticky="ew", padx=5, pady=(0, 4))
-        current = list(config.get("run_all_order", [1, 2, 3, 5, 4]))
+        current = list(config.get("run_all_order", DEFAULT_RUN_ALL_ORDER))
         for sid in SCRIPT_NAMES:
             if sid not in current:
                 current.append(sid)
@@ -1064,7 +1064,8 @@ class ConfigDialog(tk.Toplevel):
             "auditor": tools.get("audioauditor", {}).get("version"),
             "rsgain": tools.get("rsgain", {}).get("version"),
             "ffmpeg": tools.get("ffmpeg", {}).get("version"),
-            "dr-meter": "main" if simple_dr_meter_path() else None,
+            "dr-meter": fetchdeps.PINNED["simpledrmeter"]["version"]
+            if simple_dr_meter_path() else None,
         }
         ver_lines = "   ".join(
             f"{name} {'v' + ver if ver else '—'}" for name, ver in found.items()
@@ -1131,7 +1132,7 @@ class ConfigDialog(tk.Toplevel):
                     var.set(str(d))
             except (ValueError, tk.TclError):
                 pass
-        order = defaults.get("run_all_order", [1, 2, 3, 5, 4])
+        order = defaults.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
         for sv, sid in zip(self.order_vars, order):
             sv.set(SCRIPT_NAMES[sid])
         default_tags = defaults.get("encoder_tags") or {}
@@ -1182,7 +1183,7 @@ class ConfigDialog(tk.Toplevel):
             sid = name_to_id.get(sv.get())
             if sid and sid not in order:
                 order.append(sid)
-        self.config["run_all_order"] = order or [1, 2, 3, 5, 4]
+        self.config["run_all_order"] = order or DEFAULT_RUN_ALL_ORDER
 
         if not str(self.config.get("digital_media_source_value", "")).strip():
             self.config["digital_media_source_value"] = DEFAULT_DIGITAL_SOURCE
@@ -2820,7 +2821,7 @@ class App(tk.Tk):
         targets = [p for p, c in self._checked.items() if c]
         if not targets:
             return
-        order = list(self.config.get("run_all_order", [1, 2, 3, 5, 4]))
+        order = list(self.config.get("run_all_order", DEFAULT_RUN_ALL_ORDER))
         # Optimize Selected always finishes with an audio audit so the
         # AUDIT tags (and the viewer's audit column) stay current.
         if 6 not in order:
@@ -3681,7 +3682,7 @@ class App(tk.Tk):
         messagebox.showinfo("No Updates", "You are already on the latest version.", parent=self)
 
     def _run_all(self):
-        order = self.config.get("run_all_order", [1, 2, 3, 5, 4])
+        order = self.config.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
         self._run_scripts(order, "RUN ALL SCRIPTS")
 
     def _run_custom(self):
