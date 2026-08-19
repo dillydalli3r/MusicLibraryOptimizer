@@ -33,9 +33,9 @@ ArchitecturesAllowed=x64
 [Files]
 Source: "dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "config.json"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
-Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
-Source: "Music Library Optimizer.bat"; DestDir: "{app}"; Flags: ignoreversion onlyifdoesntexist
+Source: "config.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "Music Library Optimizer.bat"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; .dependencies folder will be created on first run by the app
 
 [Icons]
