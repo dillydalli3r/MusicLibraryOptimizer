@@ -117,6 +117,25 @@ jobs:
             exit 1
           }
 
+      - name: Build Inno Setup installer
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) {
+            Write-Host "Compiling installer with Inno Setup..."
+            & $iscc "Music Library Optimizer.iss"
+            $installer = Get-ChildItem dist\*.exe | Where-Object { $_.Name -like "MusicLibraryOptimizer_Setup_*" } | Select-Object -First 1
+            if ($installer) {
+              $size = $installer.Length / 1MB
+              Write-Host "Built $($installer.FullName) ($([math]::Round($size, 1)) MB)"
+            } else {
+              Write-Error "Installer not found in dist/"
+              exit 1
+            }
+          } else {
+            Write-Error "Inno Setup not found at $iscc"
+            exit 1
+          }
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -125,6 +144,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            dist/Music Library Optimizer.exe
+            dist/MusicLibraryOptimizer_Setup_*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
