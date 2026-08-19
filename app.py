@@ -1695,25 +1695,25 @@ class App(tk.Tk):
         style.map("TScrollbar", background=[("active", "#3a3a3a")])
 
         style.configure("TNotebook", background=BG, borderwidth=0,
-                        tabmargins=(0, 6, 0, 0))
-        # The clam theme draws the SELECTED tab with different padding and
-        # the unselected tabs with a raised 3D bevel (lightcolor/darkcolor),
-        # which makes the selected tab render SMALLER than the others. Force
-        # identical padding, no border and no bevel for every state so all
-        # tab buttons are always exactly the same size; the selected one is
-        # only distinguished by its background + brighter text.
+                        tabmargins=(0, 4, 0, 0))
+        # Compact tab buttons. Every tab shares an identical 1px border so
+        # all buttons are always exactly the same size; only the SELECTED
+        # tab's border is drawn white so it clearly pops. Unselected borders
+        # blend into the tab background. The clam theme's raised bevel and
+        # selected-padding differences are fully neutralised.
         style.configure("TNotebook.Tab", background="#141414",
-                        foreground=MUTED, borderwidth=0, relief="flat",
-                        padding=(24, 10), font=_sfont(9),
+                        foreground=MUTED, borderwidth=1, relief="flat",
+                        padding=(10, 6), font=_sfont(9),
                         lightcolor="#141414", darkcolor="#141414",
                         bordercolor="#141414")
         style.map("TNotebook.Tab",
                   background=[("selected", CARD), ("active", "#1d1d1d")],
                   foreground=[("selected", BRIGHT), ("active", TEXT)],
-                  padding=[("selected", (24, 10)), ("!selected", (24, 10))],
+                  padding=[("selected", (10, 6)), ("!selected", (10, 6))],
+                  borderwidth=[("selected", 1), ("!selected", 1)],
+                  bordercolor=[("selected", "#ffffff"), ("!selected", "#141414")],
                   lightcolor=[("selected", CARD), ("!selected", "#141414")],
-                  darkcolor=[("selected", CARD), ("!selected", "#141414")],
-                  bordercolor=[("selected", CARD), ("!selected", "#141414")])
+                  darkcolor=[("selected", CARD), ("!selected", "#141414")])
 
         style.configure("Treeview", background="#121212", fieldbackground="#121212",
                         foreground=TEXT, borderwidth=0, rowheight=28,
@@ -2038,11 +2038,11 @@ class App(tk.Tk):
         console_tab.rowconfigure(0, weight=1)
         notebook.add(console_tab, text="Console")
 
-        # Force both tab buttons to identical padding so their size never
-        # changes when switching between them, and re-pin the window size on
-        # tab changes so nothing can resize while toggling Library/Console.
+        # Force both tab buttons to identical (compact) padding so their size
+        # never changes when switching between them, and re-pin the window size
+        # on tab changes so nothing can resize while toggling Library/Console.
         for _tid in notebook.tabs():
-            notebook.tab(_tid, padding=(28, 11))
+            notebook.tab(_tid, padding=(10, 6))
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # Determine compact mode
