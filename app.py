@@ -1437,6 +1437,9 @@ class FirstRunWizard(tk.Toplevel):
             "• CUE: Normalize, drop empty/non-standard lines",
             "• MEDIA/SOURCE: Normalize (Digital Media → SOURCE=Digital)",
             "• Audio Audit: Fast scan, all detectors on, cutoff 19600 Hz",
+            "• DR & ReplayGain: rsgain + simple-dr-meter loudness tags",
+            "• Auto Tagging: ALBUMITUNESADVISORY + INSTRUMENTAL",
+            "• Run All: every script (1-8), order configurable later",
             "• Auto-advance: On, Compact UI: Off",
         ]:
             ttk.Label(preset_frame, text=line, style="Muted.Card.TLabel",
@@ -1450,8 +1453,9 @@ class FirstRunWizard(tk.Toplevel):
                   font=_sfont(11)).pack(anchor="w", pady=(0, 8))
 
         ttk.Label(box,
-                  text="The app downloads required tools automatically on first use. "
-                       "You can also manage them anytime from the sidebar → MANAGE → Dependencies.",
+                  text="The app downloads required tools automatically on first use "
+                       "(all pinned to exact versions). Manage them anytime from the "
+                       "sidebar → MANAGE → Dependencies.",
                   style="Muted.Card.TLabel", wraplength=560).pack(anchor="w", pady=(0, 12))
 
         tools = [
@@ -1460,6 +1464,9 @@ class FirstRunWizard(tk.Toplevel):
             ("libjpeg-turbo", "jpegtran.exe — JPEG lossless optimization"),
             ("oxipng", "oxipng.exe — PNG lossless optimization"),
             ("AudioAuditor", "AudioAuditorCLI.exe — Audio integrity audit"),
+            ("rsgain", "rsgain.exe — ReplayGain calculation"),
+            ("ffmpeg", "ffmpeg.exe / ffprobe.exe — audio decode for DR"),
+            ("simple-dr-meter", "Python DR meter (needs numpy + chardet)"),
         ]
         for name, desc in tools:
             row = ttk.Frame(box, style="Card.TFrame")
@@ -3111,12 +3118,38 @@ class App(tk.Tk):
             menu.add_command(
                 label="Open in Picard",
                 command=lambda: self._open_in_external("picard", [target_dir]))
+            menu.add_command(
+                label="Open in Explorer",
+                command=lambda: self._open_in_explorer(target_dir))
+        # Run any single script on the selected album / track.
+        if album_dir:
+            run_target = path if is_track else album_dir
+            run_menu = tk.Menu(menu, tearoff=0, bg=PANEL, fg=TEXT,
+                               activebackground=ACCENT_DARK,
+                               activeforeground="#ffffff")
+            for sid in sorted(SCRIPT_NAMES):
+                run_menu.add_command(
+                    label=SCRIPT_NAMES[sid],
+                    command=lambda s=sid, t=run_target: self._run_scripts(
+                        [s], f"{SCRIPT_NAMES[s]} — {os.path.basename(t)}",
+                        targets=[t]))
+            menu.add_cascade(label="Run Script…", menu=run_menu)
         if menu.index("end") is not None:
             menu.tk_popup(event.x_root, event.y_root)
         try:
             menu.grab_release()
         except tk.TclError:
             pass
+
+    def _open_in_explorer(self, path):
+        """Open the given folder (or a file's folder) in Windows Explorer."""
+        try:
+            d = path if os.path.isdir(path) else os.path.dirname(path)
+            if os.path.isdir(d):
+                subprocess.Popen(["explorer", os.path.normpath(d)],
+                                 creationflags=0x08000000)
+        except Exception as e:
+            self.log(f"Could not open in Explorer: {e}", tag="red")
 
     # ------------------------------------------------------------------
     # External taggers (Mp3tag / MusicBrainz Picard)
@@ -3723,6 +3756,9 @@ class App(tk.Tk):
         if not hasattr(self, "dep_label"):
             return
         n = len(tools_mod.detect_all_tools())
+        # simple-dr-meter is a source script (not an exe), detected separately.
+        if tools_mod.simple_dr_meter_path():
+            n += 1
         total = len(fetchdeps.DISPLAY_NAMES)
         self.dep_label.configure(
             text=f"{n}/{total} tools detected" if n else "No tools detected"

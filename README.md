@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.0
+# Music Library Optimizer v1.0.1
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,7 +18,7 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.0.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.1.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
@@ -26,6 +26,25 @@ run it, and follow the first-launch wizard to pick your music folder.
 (requires `pip install mutagen`, optionally `Pillow` and `tqdm`).
 
 **Console menu:** `python -m mlo`
+
+## New in v1.0.1
+
+- **JXL reverse fix** — "Convert JXL back to JPEG/PNG" is now an exclusive
+  mode: it only converts `.jxl` back and leaves other files untouched, so
+  files no longer alternate between `.jpg/.png` and `.jxl` on every run.
+- **8/8 tools detected** — the sidebar tool counter now counts simple-dr-meter
+  too (previously showed 7/8 even though everything worked).
+- **Performance** — Auto Tagging and CD rip-log scoring now run
+  multithreaded across albums (in addition to the already-threaded lyrics,
+  cue, FLAC, image and grading passes).
+- **Guaranteed clean text output** — `.lrc`, embedded lyrics and `.cue`
+  files are guaranteed to have no trailing spaces on any line and no blank
+  line at the end (verified byte-exact).
+- **Quality of life** — right-click a track/album in the Library tree for a
+  **Run Script…** submenu (run any of the 8 scripts on just that item) and
+  an **Open in Explorer** option.
+- **Setup wizard updated** — reflects the full 8-script feature set, the
+  current toolchain (rsgain, ffmpeg, simple-dr-meter) and the new preset.
 
 ## New in v1.0.0
 
@@ -327,7 +346,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.0.0.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.0.1.exe`
 
 ## Rebuilding the exe (without installer)
 

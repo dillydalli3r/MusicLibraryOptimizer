@@ -20,6 +20,7 @@ Albums / tracks that already carry the correct values are skipped unless
 the run is forced.
 """
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .audio import AudioFile
 from .paths import AUDIO_EXTS
@@ -169,37 +170,47 @@ def run_auto_tagging(config):
         log("No albums found.")
         return stats
 
-    counts = {"ok": 0, "skip": 0, "fail": 0}
-    pbar = _make_pbar(len(album_dirs), "AutoTag", unit="album")
-    for album in sorted(album_dirs):
+    def process_album(album):
         files = _album_files(album)
         if not files:
-            stats["skipped_count"] += 1
-            _pbar_skip(pbar, counts)
-            continue
-
+            return album, 0, None, None
         advisory_value = (album_advisory_from_tracks(files)
                           if do_advisory else None)
-
         modified = 0
         if do_advisory and (force or not _advisory_ok(album, advisory_value)):
             modified += _write_advisory(album, advisory_value)
         if do_instrumental and (force or not _instrumental_ok(album)):
             modified += _write_instrumental(album)
+        notes = []
+        if advisory_value is not None and modified:
+            notes.append(f"advisory={advisory_value}")
+        if do_instrumental and modified:
+            notes.append("instrumental")
+        return album, modified, notes, advisory_value
 
-        if modified:
-            stats["total_scanned"] += 1
-            stats["modified_count"] += 1
-            notes = []
-            if advisory_value is not None:
-                notes.append(f"advisory={advisory_value}")
-            if do_instrumental:
-                notes.append("instrumental")
-            log(f"  {os.path.basename(album)} ({', '.join(notes)})")
-            _pbar_update(pbar, counts, kind="ok")
-        else:
-            stats["skipped_count"] += 1
-            _pbar_skip(pbar, counts)
+    counts = {"ok": 0, "skip": 0, "fail": 0}
+    pbar = _make_pbar(len(album_dirs), "AutoTag", unit="album")
+    workers = max(2, min(8, os.cpu_count() or 2, len(album_dirs)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(process_album, a): a for a in sorted(album_dirs)}
+        for fut in as_completed(futures):
+            album = futures[fut]
+            try:
+                _album, modified, notes, advisory_value = fut.result()
+            except Exception as e:
+                stats["total_scanned"] += 1
+                stats["error_count"] += 1
+                stats["errors"].append((os.path.basename(album), str(e)))
+                _pbar_update(pbar, counts, kind="fail")
+                continue
+            if modified:
+                stats["total_scanned"] += 1
+                stats["modified_count"] += 1
+                log(f"  {os.path.basename(_album)} ({', '.join(notes)})")
+                _pbar_update(pbar, counts, kind="ok")
+            else:
+                stats["skipped_count"] += 1
+                _pbar_skip(pbar, counts)
 
     if pbar:
         pbar.close()

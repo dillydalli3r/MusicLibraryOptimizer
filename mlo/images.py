@@ -1033,10 +1033,8 @@ def run_process_images(config):
 
     print_header("Image Processing")
 
-    if convert_jxl_back and reencode_to_jxl:
-        mode = "JXL->original for .jxl, JPEG/PNG->JXL for others"
-    elif convert_jxl_back:
-        mode = "JXL->original, in-place JPEG/PNG"
+    if convert_jxl_back:
+        mode = "JXL -> original (reverse only; other files untouched)"
     elif reencode_to_jxl:
         mode = f"JPEG XL conversion (effort {effort})"
     else:
@@ -1062,24 +1060,28 @@ def run_process_images(config):
     for f in files:
         ext = os.path.splitext(f)[1].lower()
 
-        if ext == ".jxl" and convert_jxl_back:
-            tasks.append((
-                _process_jxl_back_to_original,
-                (
-                    djxl_path,
-                    ljt["jpegtran_exe"] if ljt else None,
-                    ljt["version"] if ljt else None,
-                    ox["oxipng_exe"] if ox else None,
-                    ox["version"] if ox else None,
+        if convert_jxl_back:
+            # Reverse mode is EXCLUSIVE: only .jxl files are converted back
+            # to their original format; other files are left untouched. This
+            # prevents the endless .jpg/.png <-> .jxl alternation on re-runs.
+            if ext == ".jxl":
+                tasks.append((
+                    _process_jxl_back_to_original,
+                    (
+                        djxl_path,
+                        ljt["jpegtran_exe"] if ljt else None,
+                        ljt["version"] if ljt else None,
+                        ox["oxipng_exe"] if ox else None,
+                        ox["version"] if ox else None,
+                        f,
+                        rename_to_cover,
+                        remove_alpha,
+                        HAS_PIL,
+                        force,
+                        enc,
+                    ),
                     f,
-                    rename_to_cover,
-                    remove_alpha,
-                    HAS_PIL,
-                    force,
-                    enc,
-                ),
-                f,
-            ))
+                ))
 
         elif reencode_to_jxl:
             tasks.append((

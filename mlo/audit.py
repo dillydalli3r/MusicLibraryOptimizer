@@ -365,19 +365,30 @@ def run_audit_library(config):
 
     # Rip-log grading for MEDIA=CD albums: rename logs/cues to CD-N and
     # write each disc's 0-100 cambia score to its tracks' LOG_GRADE.
+    # Parallelized across albums - each disc scores in its own CLI process,
+    # so thread workers scale instead of running one album at a time.
     album_dirs = sorted({os.path.dirname(p) for p in files})
     log_scores = {}
     log_notes = []
     from .discs import grade_album_logs
-    for album_dir in album_dirs:
+    from concurrent.futures import as_completed
+
+    def _grade_one(album_dir):
         if not os.path.isdir(album_dir):
-            continue
+            return album_dir, {}, []
         scores, notes = grade_album_logs(
             cli, album_dir, force=force,
             log_fn=(lambda m: log(f"  {m}")) if verbose else None)
-        if scores:
-            log_scores[album_dir] = scores
-        log_notes.extend(f"{os.path.basename(album_dir)}: {n}" for n in notes)
+        return album_dir, scores, notes
+
+    workers = max(1, min(8, os.cpu_count() or 1, len(album_dirs)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_grade_one, d) for d in album_dirs]
+        for fut in as_completed(futures):
+            album_dir, scores, notes = fut.result()
+            if scores:
+                log_scores[album_dir] = scores
+            log_notes.extend(f"{os.path.basename(album_dir)}: {n}" for n in notes)
 
     if log_scores:
         log("")
