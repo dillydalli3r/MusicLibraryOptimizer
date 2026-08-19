@@ -31,6 +31,7 @@ from tkinter import ttk, filedialog, messagebox
 
 from mlo import (
     load_config, save_config,
+    run_auto_tagging,
     run_format_lyrics, run_format_cues, run_optimize_flacs,
     run_grade_library, run_process_images, run_audit_library,
     run_calc_dr_replaygain,
@@ -53,6 +54,7 @@ SCRIPT_NAMES = {
     5: "Process Images",
     6: "Audit Library",
     7: "DR & ReplayGain",
+    8: "Auto Tagging",
 }
 
 RUNNERS = {
@@ -63,6 +65,7 @@ RUNNERS = {
     5: ("Process Images", run_process_images),
     6: ("Audit Library", run_audit_library),
     7: ("DR & ReplayGain", run_calc_dr_replaygain),
+    8: ("Auto Tagging", run_auto_tagging),
 }
 
 # Tag keys offered by the "Add tag" menu of the full tag editor.
@@ -141,6 +144,9 @@ CONFIG_FIELDS = [
     ("dr_replaygain_enabled", "DR/ReplayGain Enabled", "bool", None),
     ("replaygain_skip_existing", "ReplayGain Skip Existing", "bool", None),
     ("force_dr_replaygain", "Force DR/ReplayGain", "bool", None),
+    ("auto_advisory", "Auto Album Advisory", "bool", None),
+    ("auto_instrumental", "Auto Instrumental Tag", "bool", None),
+    ("force_auto_tag", "Force Auto Tagging", "bool", None),
     ("auto_advance", "Auto-Advance Between Scripts", "bool", None),
     ("run_all_order", "Run All Order", "choice", None),
     ("compact_ui", "Compact UI Mode", "bool", None),
@@ -609,6 +615,17 @@ FIELD_DESCRIPTIONS = {
         "DR & ReplayGain: re-calculate everything even when tags are "
         "already present. The Force ▾ menu in the Library tab sets this "
         "per-run.",
+    "auto_advisory":
+        "Auto Tagging: derive ALBUMITUNESADVISORY from each track's manual "
+        "ITUNESADVISORY (0 unrated / 1 explicit / 2 edited-safe). Any "
+        "explicit track -> 1, else any safe -> 2, else 0. Counts all "
+        "tracks including every disc.",
+    "auto_instrumental":
+        "Auto Tagging: set INSTRUMENTAL from lyrics presence — 0 when the "
+        "track has lyrics (embedded LYRICS or .lrc), otherwise 1.",
+    "force_auto_tag":
+        "Auto Tagging: rewrite tags even when already correct. The Force ▾ "
+        "menu in the Library tab sets this per-run.",
     "auto_advance":
         "Sequence runs (Run All / custom): when off, the app pauses for "
         "confirmation between scripts — the GUI shows a Continue button.",
@@ -908,6 +925,9 @@ class ConfigDialog(tk.Toplevel):
             ("DR / ReplayGain", [
                 "dr_replaygain_enabled", "replaygain_skip_existing",
                 "force_dr_replaygain",
+            ]),
+            ("Auto Tagging", [
+                "auto_advisory", "auto_instrumental", "force_auto_tag",
             ]),
             ("Interface", ["grade_verbose", "auto_advance", "compact_ui"]),
         ]
@@ -1898,9 +1918,12 @@ class App(tk.Tk):
             value=self.config.get("force_audit_ui", False))
         self.force_dr_var = tk.BooleanVar(
             value=self.config.get("force_dr_ui", False))
+        self.force_autotag_var = tk.BooleanVar(
+            value=self.config.get("force_auto_tag_ui", False))
         self.force_var = tk.BooleanVar(
             value=(self.force_flac_var.get() and self.force_images_var.get()
-                   and self.force_audit_var.get() and self.force_dr_var.get()))
+                   and self.force_audit_var.get() and self.force_dr_var.get()
+                   and self.force_autotag_var.get()))
         force_toggle = ToggleSwitch(
             force_box, self.force_var, bg=BG, command=self._on_force_master)
         force_toggle.pack(side=tk.LEFT)
@@ -2869,6 +2892,7 @@ class App(tk.Tk):
         self.force_images_var.set(on)
         self.force_audit_var.set(on)
         self.force_dr_var.set(on)
+        self.force_autotag_var.set(on)
         self._save_force_config()
 
     def _on_force_option(self):
@@ -2877,7 +2901,8 @@ class App(tk.Tk):
         self.force_var.set(self.force_flac_var.get()
                            and self.force_images_var.get()
                            and self.force_audit_var.get()
-                           and self.force_dr_var.get())
+                           and self.force_dr_var.get()
+                           and self.force_autotag_var.get())
         self._save_force_config()
 
     def _save_force_config(self):
@@ -2886,6 +2911,7 @@ class App(tk.Tk):
         self.config["force_images_ui"] = self.force_images_var.get()
         self.config["force_audit_ui"] = self.force_audit_var.get()
         self.config["force_dr_ui"] = self.force_dr_var.get()
+        self.config["force_auto_tag_ui"] = self.force_autotag_var.get()
         save_config(self.config)
 
     def _show_force_menu(self):
@@ -2898,6 +2924,7 @@ class App(tk.Tk):
             (self.force_images_var, "Re-encode images"),
             (self.force_audit_var, "Audit"),
             (self.force_dr_var, "DR & ReplayGain"),
+            (self.force_autotag_var, "Auto Tagging"),
         ):
             menu.add_checkbutton(label=label, variable=var, onvalue=True,
                                  offvalue=False,
@@ -3727,7 +3754,8 @@ class App(tk.Tk):
                   self.force_flac_var.get(),
                   self.force_images_var.get(),
                   self.force_audit_var.get(),
-                  self.force_dr_var.get()),
+                  self.force_dr_var.get(),
+                  self.force_autotag_var.get()),
             daemon=True
         )
         t.start()
@@ -3736,7 +3764,8 @@ class App(tk.Tk):
     # Worker thread
     # ------------------------------------------------------------------
     def _worker(self, script_ids, title, targets=None, force_flac=False,
-                force_images=False, force_audit=False, force_dr=False):
+                force_images=False, force_audit=False, force_dr=False,
+                force_autotag=False):
         started = time.monotonic()
         prev_tqdm, prev_hook = stats_mod.tqdm, stats_mod.progress_hook
         stats_mod.tqdm = None
@@ -3749,7 +3778,7 @@ class App(tk.Tk):
         # user-selected directories/tracks without affecting the app.
         run_cfg = self.config
         if (targets or force_flac or force_images or force_audit
-                or force_dr):
+                or force_dr or force_autotag):
             run_cfg = self.config.copy()
             if targets:
                 run_cfg["targets"] = list(targets)
@@ -3761,6 +3790,8 @@ class App(tk.Tk):
                 run_cfg["force_audit"] = True
             if force_dr:
                 run_cfg["force_dr_replaygain"] = True
+            if force_autotag:
+                run_cfg["force_auto_tag"] = True
 
         per_script = []
         total_bytes_added = total_bytes_removed = total_errors = 0

@@ -87,6 +87,7 @@ script (no Windows binary) that needs numpy and ffmpeg to run.
 | 5 | Process Images    | JPEG XL conversion / lossless JPEG/PNG optimize / reverse  |
 | 6 | Audit Library     | Audio integrity audit via the AudioAuditor CLI            |
 | 7 | DR & ReplayGain   | Writes ReplayGain (rsgain) and Dynamic Range (simple-dr-meter) tags |
+| 8 | Auto Tagging      | Derives ALBUMITUNESADVISORY (from track ITUNESADVISORY) and INSTRUMENTAL (from lyrics presence) |
 
 Only FLAC is losslessly re-encoded; other audio formats receive safe tag
 operations only. Every processed artifact carries ENCODER marker tags so
@@ -198,6 +199,19 @@ For every album folder this writes the loudness tags the grader requires:
 
 A full-library run invokes rsgain once on the whole tree (its album gain is
 still per folder); "selected" runs invoke it per album.
+
+### Auto Tagging (script 8)
+
+Derives tags that would otherwise be filled in by hand:
+
+- **ALBUMITUNESADVISORY** from each track's manual `ITUNESADVISORY`
+  (`0` unrated / `1` explicit / `2` edited-safe). Counts **every** track in
+  the album (all discs): any explicit → `1`, else any edited/safe → `2`,
+  else `0`. The derived value is written to every track.
+- **INSTRUMENTAL** from lyrics presence: `0` when the track has lyrics
+  (embedded LYRICS or an `.lrc` sidecar), otherwise `1`.
+
+Albums that already carry the correct values are skipped unless forced.
 
 ## Library view
 

@@ -23,6 +23,7 @@ operations only. Encoder marker tags (ENCODER_PROGRAM / QUALITY / VERSION) are
 written to every processed artifact so re-runs can skip finished files.
 """
 from .config import load_config, save_config, DEFAULT_CONFIG
+from .autotag import run_auto_tagging
 from .cue import run_format_cues
 from .flac import run_optimize_flacs
 from .grader import run_grade_library
@@ -34,6 +35,7 @@ from .audit import run_audit_library
 __version__ = "1.0.0"
 __all__ = [
     "load_config", "save_config", "DEFAULT_CONFIG",
+    "run_auto_tagging",
     "run_format_lyrics", "run_format_cues", "run_optimize_flacs",
     "run_grade_library", "run_process_images", "run_audit_library",
     "run_calc_dr_replaygain",

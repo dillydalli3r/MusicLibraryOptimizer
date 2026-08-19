@@ -2,6 +2,7 @@
 import os
 
 from .audit import run_audit_library
+from .autotag import run_auto_tagging
 from .cue import run_format_cues
 from .deps import HAS_MUTAGEN
 from .paths import DEFAULT_DIGITAL_SOURCE
@@ -39,6 +40,7 @@ def edit_run_all_order(config):
         print("    5. Process Images")
         print("    6. Audit Library")
         print("    7. DR & ReplayGain")
+        print("    8. Auto Tagging")
         print("-" * 72)
 
         current = config.get("run_all_order", [1, 2, 3, 5, 4])
@@ -55,7 +57,7 @@ def edit_run_all_order(config):
         valid = True
 
         for p in parts:
-            if p in ("1", "2", "3", "4", "5", "6", "7"):
+            if p in ("1", "2", "3", "4", "5", "6", "7", "8"):
                 order.append(int(p))
             else:
                 print(c(f"  Invalid entry: '{p}'", Color.RED))
@@ -125,6 +127,9 @@ def show_config_menu(config):
         print(f" 33. Audit BPM                : {config.get('audit_bpm', True)}")
         print(f" 34. DR/ReplayGain Enabled    : {config.get('dr_replaygain_enabled', True)}")
         print(f" 35. ReplayGain Skip Existing : {config.get('replaygain_skip_existing', True)}")
+        print(f" 36. Auto Album Advisory      : {config.get('auto_advisory', True)}")
+        print(f" 37. Auto Instrumental Tag    : {config.get('auto_instrumental', True)}")
+        print(f" 38. Force Auto Tagging       : {config.get('force_auto_tag', False)}")
 
         print_separator()
         print("  Auto-detected encoder versions (.dependencies):")
@@ -373,6 +378,24 @@ def show_config_menu(config):
             print(f"\nSaved. ReplayGain Skip Existing = {config['replaygain_skip_existing']}")
             pause_for_input()
 
+        elif choice == "36":
+            config["auto_advisory"] = tf("Auto-derive ALBUMITUNESADVISORY from track ITUNESADVISORY? (y/n): ")
+            save_config(config)
+            print(f"\nSaved. Auto Album Advisory = {config['auto_advisory']}")
+            pause_for_input()
+
+        elif choice == "37":
+            config["auto_instrumental"] = tf("Auto-set INSTRUMENTAL from lyrics presence? (y/n): ")
+            save_config(config)
+            print(f"\nSaved. Auto Instrumental = {config['auto_instrumental']}")
+            pause_for_input()
+
+        elif choice == "38":
+            config["force_auto_tag"] = tf("Force re-tagging even when tags are already correct? (y/n): ")
+            save_config(config)
+            print(f"\nSaved. Force Auto Tagging = {config['force_auto_tag']}")
+            pause_for_input()
+
         elif choice == "0":
             break
 
@@ -393,6 +416,7 @@ def show_custom_menu():
     print("    5. Process Images")
     print("    6. Audit Library")
     print("    7. DR & ReplayGain")
+    print("    8. Auto Tagging")
     print_separator()
 
     print("Enter the order of scripts to run (comma-separated, e.g. '3,1,2,5'):")
@@ -402,7 +426,7 @@ def show_custom_menu():
     order = []
 
     for p in parts:
-        if p in ("1", "2", "3", "4", "5", "6", "7"):
+        if p in ("1", "2", "3", "4", "5", "6", "7", "8"):
             order.append(int(p))
         else:
             print(c(f"  Ignoring invalid entry: '{p}'", Color.YELLOW))
@@ -423,6 +447,7 @@ def run_scripts_sequence(config, script_ids, title):
         5: ("Process Images", run_process_images),
         6: ("Audit Library", run_audit_library),
         7: ("DR & ReplayGain", run_calc_dr_replaygain),
+        8: ("Auto Tagging", run_auto_tagging),
     }
 
     auto_advance = config.get("auto_advance", True)
@@ -498,10 +523,11 @@ def show_main_menu(config):
     print("  5. Process Images   (JXL / lossless / JXL-back)")
     print("  6. Audit Library    (AudioAuditor: fake lossless / AI / MQA)")
     print("  7. DR & ReplayGain  (rsgain + simple-dr-meter tags)")
-    print(f"  8. Run All          {config.get('run_all_order', [1, 2, 3, 5, 4])}")
-    print("  9. Run Custom       (select order)")
-    print(" 10. Configuration")
-    print(" 11. Dependencies     (download latest tools)")
+    print("  8. Auto Tagging     (advisory + instrumental)")
+    print(f"  9. Run All          {config.get('run_all_order', [1, 2, 3, 5, 4])}")
+    print(" 10. Run Custom       (select order)")
+    print(" 11. Configuration")
+    print(" 12. Dependencies     (download latest tools)")
     print(c("  0. Exit", Color.YELLOW))
 
     print()
@@ -575,6 +601,7 @@ def main():
         5: ("Process Images", run_process_images),
         6: ("Audit Library", run_audit_library),
         7: ("DR & ReplayGain", run_calc_dr_replaygain),
+        8: ("Auto Tagging", run_auto_tagging),
     }
 
     while True:
@@ -584,7 +611,7 @@ def main():
         if choice == "0":
             break
 
-        elif choice in ("1", "2", "3", "4", "5", "6", "7"):
+        elif choice in ("1", "2", "3", "4", "5", "6", "7", "8"):
             script_id = int(choice)
             name, runner = runners[script_id]
 
@@ -601,11 +628,11 @@ def main():
 
             pause_for_input()
 
-        elif choice == "8":
+        elif choice == "9":
             order = config.get("run_all_order", [1, 2, 3, 5, 4])
             run_scripts_sequence(config, order, title="RUN ALL SCRIPTS")
 
-        elif choice == "9":
+        elif choice == "10":
             order = show_custom_menu()
 
             if not order:
@@ -615,10 +642,10 @@ def main():
 
             run_scripts_sequence(config, order, title="CUSTOM RUN ORDER")
 
-        elif choice == "10":
+        elif choice == "11":
             show_config_menu(config)
 
-        elif choice == "11":
+        elif choice == "12":
             manage_dependencies()
 
         else:

@@ -69,6 +69,14 @@ DEFAULT_CONFIG = {
     "force_dr_replaygain": False,
     "force_dr_ui": False,
 
+    # Auto Tagging (script 8): derive ALBUMITUNESADVISORY from manual
+    # per-track ITUNESADVISORY (0 unrated / 1 explicit / 2 edited-safe) and
+    # derive INSTRUMENTAL from lyrics presence (0 with lyrics, 1 without).
+    "auto_advisory": True,
+    "auto_instrumental": True,
+    "force_auto_tag": False,
+    "force_auto_tag_ui": False,
+
     # Misc
     "auto_advance": True,
     "run_all_order": [1, 2, 3, 5, 4],
@@ -127,7 +135,7 @@ def load_config() -> dict:
     try:
         for x in order:
             xi = int(x)
-            if 1 <= xi <= 7 and xi not in clean_order:
+            if 1 <= xi <= 8 and xi not in clean_order:
                 clean_order.append(xi)
     except Exception:
         clean_order = [1, 2, 3, 5, 4]
