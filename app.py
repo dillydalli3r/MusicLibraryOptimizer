@@ -1803,8 +1803,9 @@ class App(tk.Tk):
         self._update_dep_label()
 
         # --- Notebook (Library + Console tabs) ------------------------------
-        notebook = ttk.Notebook(main)
-        notebook.grid(row=0, column=1, sticky="nswe", padx=16, pady=(8, 8))
+        self.notebook = ttk.Notebook(main)
+        self.notebook.grid(row=0, column=1, sticky="nswe", padx=16, pady=(8, 8))
+        notebook = self.notebook
 
         # --- Library tab ---------------------------------------------------
         library_frame = ttk.Frame(notebook, padding=(16, 12))
