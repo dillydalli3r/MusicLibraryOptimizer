@@ -148,6 +148,7 @@ CONFIG_FIELDS = [
     ("auto_instrumental", "Auto Instrumental Tag", "bool", None),
     ("force_auto_tag", "Force Auto Tagging", "bool", None),
     ("auto_advance", "Auto-Advance Between Scripts", "bool", None),
+    ("check_updates_on_start", "Check for Updates on Start", "bool", None),
     ("run_all_order", "Run All Order", "choice", None),
     ("compact_ui", "Compact UI Mode", "bool", None),
 ]
@@ -629,6 +630,10 @@ FIELD_DESCRIPTIONS = {
     "auto_advance":
         "Sequence runs (Run All / custom): when off, the app pauses for "
         "confirmation between scripts — the GUI shows a Continue button.",
+    "check_updates_on_start":
+        "Check GitHub for a new release when the app starts (once per "
+        "interval). Works for both the portable and the installed version. "
+        "You can always check manually via ⓘ About → Check for Updates.",
     "run_all_order":
         "Execution order used by the Run All button.",
 }
@@ -929,7 +934,8 @@ class ConfigDialog(tk.Toplevel):
             ("Auto Tagging", [
                 "auto_advisory", "auto_instrumental", "force_auto_tag",
             ]),
-            ("Interface", ["grade_verbose", "auto_advance", "compact_ui"]),
+            ("Interface", ["grade_verbose", "auto_advance", "compact_ui",
+                           "check_updates_on_start"]),
         ]
         field_lookup = {f[0]: f for f in CONFIG_FIELDS}
 
@@ -1537,6 +1543,11 @@ class App(tk.Tk):
         self._continue_event = threading.Event()
         self._continue_event.set()
 
+        # Portable/self-contained: create .dependencies/ next to the app and
+        # verify the app folder is writable (config.json lives there too).
+        from mlo.paths import ensure_data_dirs
+        self._data_dir_error = ensure_data_dirs()
+
         global UI_FAMILY
         UI_FAMILY = _pick_ui_family()
 
@@ -1589,8 +1600,13 @@ class App(tk.Tk):
             self.log("WARNING: Pillow not found - PNG alpha removal will be skipped.",
                      tag="yellow")
         self.log(f"Library folder: {self.config.get('music_folder', '')}", tag="muted")
-        # Auto-check for updates
-        self.after(5000, lambda: updater.maybe_auto_check())
+        if getattr(self, "_data_dir_error", None):
+            self.log("WARNING: The app folder is not writable - config.json and "
+                     f".dependencies cannot be saved here. ({self._data_dir_error})",
+                     tag="yellow")
+        # Auto-check for updates on start (configurable; respects interval).
+        if self.config.get("check_updates_on_start", True):
+            self.after(5000, lambda: updater.maybe_auto_check())
 
     # ------------------------------------------------------------------
     @staticmethod

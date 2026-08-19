@@ -18,6 +18,28 @@ CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 DEPS_DIR = os.path.join(SCRIPT_DIR, ".dependencies")
 
 
+def ensure_data_dirs():
+    """Create .dependencies/ next to the app and verify the app folder is
+    writable (so config.json can be saved there). Both the portable and the
+    installed versions keep everything in their own folder.
+
+    Returns None when OK, or a human-readable error string when the folder
+    is not writable.
+    """
+    try:
+        os.makedirs(DEPS_DIR, exist_ok=True)
+        probe = os.path.join(SCRIPT_DIR, ".write_test")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("")
+        try:
+            os.remove(probe)
+        except OSError:
+            pass
+        return None
+    except OSError as e:
+        return f"{e}"
+
+
 AUDIO_EXTS = (".flac", ".ogg", ".opus", ".aac", ".m4a", ".mp3")
 
 

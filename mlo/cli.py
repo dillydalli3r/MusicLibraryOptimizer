@@ -130,6 +130,7 @@ def show_config_menu(config):
         print(f" 36. Auto Album Advisory      : {config.get('auto_advisory', True)}")
         print(f" 37. Auto Instrumental Tag    : {config.get('auto_instrumental', True)}")
         print(f" 38. Force Auto Tagging       : {config.get('force_auto_tag', False)}")
+        print(f" 39. Check Updates on Start   : {config.get('check_updates_on_start', True)}")
 
         print_separator()
         print("  Auto-detected encoder versions (.dependencies):")
@@ -394,6 +395,12 @@ def show_config_menu(config):
             config["force_auto_tag"] = tf("Force re-tagging even when tags are already correct? (y/n): ")
             save_config(config)
             print(f"\nSaved. Force Auto Tagging = {config['force_auto_tag']}")
+            pause_for_input()
+
+        elif choice == "39":
+            config["check_updates_on_start"] = tf("Check for updates when the app starts? (y/n): ")
+            save_config(config)
+            print(f"\nSaved. Check Updates on Start = {config['check_updates_on_start']}")
             pause_for_input()
 
         elif choice == "0":

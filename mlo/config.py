@@ -104,6 +104,8 @@ DEFAULT_CONFIG = {
     # First run / updates
     "first_run_done": False,
     "last_update_check": 0,
+    # Check for a new release when the app starts (once per interval).
+    "check_updates_on_start": True,
 }
 
 
