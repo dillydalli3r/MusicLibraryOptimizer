@@ -215,8 +215,11 @@ Derives tags that would otherwise be filled in by hand:
   (`0` unrated / `1` explicit / `2` edited-safe). Counts **every** track in
   the album (all discs): any explicit → `1`, else any edited/safe → `2`,
   else `0`. The derived value is written to every track.
-- **INSTRUMENTAL** from lyrics presence: `0` when the track has lyrics
-  (embedded LYRICS or an `.lrc` sidecar), otherwise `1`.
+- **INSTRUMENTAL** from lyrics presence: a track **with** lyrics (embedded
+  LYRICS or an `.lrc` sidecar) is always tagged `0` (non-instrumental),
+  regardless of its current value. Tracks **without** lyrics are left
+  untouched — they may still be non-instrumental, just missing downloaded
+  lyric files.
 
 Albums that already carry the correct values are skipped unless forced.
 

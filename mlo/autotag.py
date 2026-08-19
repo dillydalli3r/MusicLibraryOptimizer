@@ -12,7 +12,9 @@ filled in by hand:
 
 2) INSTRUMENTAL from lyrics presence per track:
        has lyrics (embedded LYRICS or an .lrc sidecar) -> 0 (not instrumental)
-       no lyrics                                        -> 1 (instrumental)
+       no lyrics -> LEFT UNTOUCHED. A track without downloaded lyric files
+       may still be non-instrumental, so it is never auto-marked as
+       instrumental.
 
 Albums / tracks that already carry the correct values are skipped unless
 the run is forced.
@@ -61,10 +63,6 @@ def _has_lyrics(path):
     return os.path.exists(os.path.splitext(path)[0] + ".lrc")
 
 
-def _instrumental_value(path):
-    return 0 if _has_lyrics(path) else 1
-
-
 # ----------------------------------------------------------------------
 # Album helpers
 # ----------------------------------------------------------------------
@@ -99,29 +97,41 @@ def _write_advisory(album_dir, value):
 
 
 def _instrumental_ok(album_dir):
+    """True when every track WITH lyrics already has INSTRUMENTAL=0.
+
+    Tracks without lyrics are left alone (they may be non-instrumental but
+    simply lack downloaded lyric files), so they never block a skip.
+    """
     for path in _album_files(album_dir):
-        want = _instrumental_value(path)
+        if not _has_lyrics(path):
+            continue
         try:
             af = AudioFile(path)
             have = str(af.get_tag("INSTRUMENTAL") or "").strip()
         except Exception:
             return False
-        if have != str(want):
+        if have != "0":
             return False
     return True
 
 
 def _write_instrumental(album_dir):
+    """Set INSTRUMENTAL=0 on every track that HAS lyrics.
+
+    Tracks without lyrics are NOT touched - they could still be
+    non-instrumental, just missing lyric files.
+    """
     modified = 0
     for path in _album_files(album_dir):
-        want = _instrumental_value(path)
+        if not _has_lyrics(path):
+            continue
         try:
             af = AudioFile(path)
             have = str(af.get_tag("INSTRUMENTAL") or "").strip()
         except Exception:
             continue
-        if have != str(want):
-            if af.set_tag("INSTRUMENTAL", str(want)):
+        if have != "0":
+            if af.set_tag("INSTRUMENTAL", "0"):
                 modified += 1
     return modified
 
@@ -139,7 +149,8 @@ def run_auto_tagging(config):
         log("  ALBUMITUNESADVISORY: from per-track ITUNESADVISORY "
             "(any explicit -> 1, else any safe -> 2, else 0)")
     if config.get("auto_instrumental", True):
-        log("  INSTRUMENTAL: 0 if lyrics present, else 1")
+        log("  INSTRUMENTAL: 0 when lyrics present (no-lyrics tracks left "
+            "untouched)")
 
     force = config.get("force_auto_tag", False)
     do_advisory = config.get("auto_advisory", True)
