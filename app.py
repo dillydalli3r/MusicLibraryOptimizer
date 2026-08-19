@@ -1761,11 +1761,44 @@ class App(tk.Tk):
         main.columnconfigure(1, weight=1)
         main.rowconfigure(0, weight=1)
 
-        sidebar = ttk.Frame(main, style="Side.TFrame", padding=(16, 16))
+        sidebar = ttk.Frame(main, style="Side.TFrame")
         sidebar.grid(row=0, column=0, sticky="nswe")
+        sidebar.rowconfigure(0, weight=1)
+        sidebar.columnconfigure(0, weight=1)
+
+        # Scrollable sidebar: the settings buttons gain a vertical scrollbar
+        # when the window gets too short for them.
+        self._side_canvas = tk.Canvas(
+            sidebar, highlightthickness=0, background=SIDEBAR, width=230)
+        self._side_scroll = ttk.Scrollbar(
+            sidebar, orient=tk.VERTICAL, command=self._side_canvas.yview)
+        self._side_canvas.configure(yscrollcommand=self._side_scroll.set)
+        self._side_canvas.grid(row=0, column=0, sticky="nswe")
+        self._side_scroll.grid(row=0, column=1, sticky="ns")
+
+        inner = ttk.Frame(self._side_canvas, style="Side.TFrame",
+                          padding=(16, 16))
+        self._side_inner = inner
+        inner_id = self._side_canvas.create_window((0, 0), window=inner,
+                                                   anchor="nw")
+        inner.bind(
+            "<Configure>",
+            lambda e: (self._side_canvas.configure(
+                scrollregion=self._side_canvas.bbox("all")),
+                self._sync_side_scrollbar()))
+        self._side_canvas.bind(
+            "<Configure>",
+            lambda e: (self._side_canvas.itemconfigure(inner_id, width=e.width),
+                       self._sync_side_scrollbar()))
+        self._side_canvas.bind(
+            "<Enter>",
+            lambda e: self._side_canvas.bind_all(
+                "<MouseWheel>", self._side_on_wheel))
+        self._side_canvas.bind(
+            "<Leave>", lambda e: self._side_canvas.unbind_all("<MouseWheel>"))
 
         # Branded header
-        brand = ttk.Frame(sidebar, style="Side.TFrame")
+        brand = ttk.Frame(inner, style="Side.TFrame")
         brand.pack(fill=tk.X, pady=(0, 16))
         brand_text = ttk.Frame(brand, style="Side.TFrame")
         brand_text.pack(side=tk.LEFT)
@@ -1774,42 +1807,46 @@ class App(tk.Tk):
         ttk.Label(brand_text, text="Optimizer",
                   style="Side.TLabel", font=_sfont(13), foreground=BRIGHT).pack(anchor="w")
 
-        ttk.Label(sidebar, text="RUN SCRIPTS", style="Section.Side.TLabel").pack(
+        ttk.Label(inner, text="RUN SCRIPTS", style="Section.Side.TLabel").pack(
             anchor="w", pady=(0, 8)
         )
         for sid, name in SCRIPT_NAMES.items():
             b = ttk.Button(
-                sidebar, text=name, style="Side.TButton",
+                inner, text=name, style="Side.TButton",
                 command=lambda s=sid: self._run_scripts([s], f"RUN — {SCRIPT_NAMES[s]}"),
             )
             b.pack(fill=tk.X, pady=2)
             self.run_buttons.append(b)
 
-        ttk.Label(sidebar, text="BATCH", style="Section.Side.TLabel").pack(
+        ttk.Label(inner, text="BATCH", style="Section.Side.TLabel").pack(
             anchor="w", pady=(18, 8)
         )
-        b = ttk.Button(sidebar, text="Run All", style="Side.Accent.TButton",
+        b = ttk.Button(inner, text="Run All", style="Side.Accent.TButton",
                        command=self._run_all)
         b.pack(fill=tk.X, pady=2)
         ToolTip(b, "Run every script in order.\n"
                 "Enable ⚡ Force in the Library tab to force re-encoding.")
         self.run_buttons.append(b)
-        b = ttk.Button(sidebar, text="Run Custom…", style="Side.TButton",
+        b = ttk.Button(inner, text="Run Custom…", style="Side.TButton",
                        command=self._run_custom)
         b.pack(fill=tk.X, pady=2)
         self.run_buttons.append(b)
 
-        ttk.Label(sidebar, text="MANAGE", style="Section.Side.TLabel").pack(
+        ttk.Label(inner, text="MANAGE", style="Section.Side.TLabel").pack(
             anchor="w", pady=(18, 8)
         )
-        b = ttk.Button(sidebar, text="Dependencies…", style="Side.TButton",
+        b = ttk.Button(inner, text="Dependencies…", style="Side.TButton",
                        command=self._open_deps)
         b.pack(fill=tk.X, pady=2)
         self.run_buttons.append(b)
 
+        # Size the canvas to the widest button, and pin the tool-status label
+        # below the scrollable area.
+        self._side_canvas.configure(width=inner.winfo_reqwidth())
         self.dep_label = ttk.Label(sidebar, text="", style="Muted.Side.TLabel",
                                    font=_font(8))
-        self.dep_label.pack(side=tk.BOTTOM, anchor="w", pady=(8, 0))
+        self.dep_label.grid(row=1, column=0, columnspan=2, sticky="w",
+                            padx=16, pady=(8, 0))
         self._update_dep_label()
 
         # --- Notebook (Library + Console tabs) ------------------------------
@@ -2771,6 +2808,27 @@ class App(tk.Tk):
             size = geo.split("+")[0]
             if size and size.count("x") == 1:
                 self.geometry(size)
+        except Exception:
+            pass
+
+    def _side_on_wheel(self, event):
+        """Mouse-wheel scrolling over the sidebar."""
+        try:
+            self._side_canvas.yview_scroll(int(-event.delta / 120), "units")
+        except Exception:
+            pass
+
+    def _sync_side_scrollbar(self):
+        """Show the sidebar scrollbar only when its content overflows."""
+        try:
+            c = self._side_canvas
+            bbox = c.bbox("all")
+            if not bbox:
+                return
+            if c.winfo_height() < bbox[3]:
+                self._side_scroll.grid()
+            else:
+                self._side_scroll.grid_remove()
         except Exception:
             pass
 
