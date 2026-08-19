@@ -74,7 +74,9 @@ one is unpacked with 7-Zip when available (also used for libjxl's
 non-standard zip compression); without 7-Zip it falls back to a silent
 install into a temporary folder. AudioAuditor ships a single self-contained
 exe that is copied as-is — no extraction needed. simple-dr-meter is a Python
-script (no Windows binary) that needs numpy and ffmpeg to run.
+script (no Windows binary) that needs ffmpeg on PATH and the Python packages
+`numpy` and `chardet` installed (e.g. `pip install numpy chardet`) in the
+Python used to run the app.
 
 ## Scripts
 

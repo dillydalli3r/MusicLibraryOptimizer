@@ -29,9 +29,13 @@ from .subproc import run_tool
 from .tools import detect_all_tools, simple_dr_meter_path
 from .ui import print_header, log, c, Color
 
-# Track row: "DR12      -0.15 dB   -11.21 dB      3:30 01 - Song.flac"
+# Track row: "DR12      -0.15 dB   -11.21 dB      3:30 05-Spiders"
+# Columns: DR, Peak (val unit), RMS (val unit), Duration, Track label.
+# simple-dr-meter labels each row with the TRACK NUMBER and TITLE from the
+# file's tags (e.g. "05-Spiders"), NOT the filename - so we key by track
+# number and match files via their TRACKNUMBER tag.
 TRACK_ROW_RE = re.compile(
-    r"^\s*DR(\d{1,2})\s+\S+\s+\S+\s+\S+\s+(.+?)\s*$"
+    r"^\s*DR(\d{1,2})\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\d+)-(.*?)\s*$"
 )
 # Album: "Official DR value: DR11"
 OFFICIAL_DR_RE = re.compile(
@@ -113,6 +117,14 @@ def _run_dr_meter(script_path, ffmpeg_dir, album, workdir):
         return None
     env = dict(os.environ)
     env["PATH"] = ffmpeg_dir + os.pathsep + env.get("PATH", "")
+    dr_path = os.path.join(album, "dr.txt")
+    # simple-dr-meter refuses to overwrite an existing dr.txt log; drop any
+    # stale one so re-runs work.
+    try:
+        if os.path.exists(dr_path):
+            os.remove(dr_path)
+    except OSError:
+        return None
     try:
         proc = run_tool(
             [python, script_path, album],
@@ -124,7 +136,6 @@ def _run_dr_meter(script_path, ffmpeg_dir, album, workdir):
             log(c(f"      dr-meter: {(tail[-1] if tail else 'failed')}",
                   Color.YELLOW))
             return None
-        dr_path = os.path.join(album, "dr.txt")
         return dr_path if os.path.isfile(dr_path) else None
     except Exception as e:
         log(c(f"      dr-meter error: {e}", Color.YELLOW))
@@ -132,7 +143,7 @@ def _run_dr_meter(script_path, ffmpeg_dir, album, workdir):
 
 
 def _parse_dr_file(dr_path):
-    """Parse dr.txt -> ({basename_lower: dr}, album_dr)."""
+    """Parse dr.txt -> ({track_number: dr}, album_dr)."""
     per_track = {}
     album_dr = None
     try:
@@ -140,7 +151,10 @@ def _parse_dr_file(dr_path):
             for line in f:
                 m = TRACK_ROW_RE.match(line)
                 if m:
-                    per_track[os.path.basename(m.group(2)).lower()] = int(m.group(1))
+                    try:
+                        per_track[int(m.group(2))] = int(m.group(1))
+                    except ValueError:
+                        pass
                     continue
                 m2 = OFFICIAL_DR_RE.search(line)
                 if m2:
@@ -151,17 +165,29 @@ def _parse_dr_file(dr_path):
 
 
 def _write_dr_tags(album, per_track, album_dr):
-    """Write DYNAMIC RANGE + ALBUM DYNAMIC RANGE to the album's files."""
+    """Write DYNAMIC RANGE + ALBUM DYNAMIC RANGE to the album's files.
+
+    Rows in dr.txt are keyed by TRACK NUMBER, so each file is matched via
+    its TRACKNUMBER tag.
+    """
     modified = 0
     for f in sorted(os.listdir(album)):
         if not is_audio_file(f):
             continue
         path = os.path.join(album, f)
-        dr = per_track.get(f.lower())
+        try:
+            af = AudioFile(path)
+            # TRACKNUMBER isn't in TAG_MAP; read it from the raw tags.
+            raw_tags = {str(k).lower(): v
+                        for k, v in af.all_tags().items()}
+            raw = str(raw_tags.get("tracknumber", "") or "").strip()
+            num = int(raw) if raw.isdigit() else None
+        except Exception:
+            continue
+        dr = per_track.get(num) if num is not None else None
         if dr is None:
             continue
         try:
-            af = AudioFile(path)
             changed = False
             if str(af.get_tag("DYNAMIC RANGE") or "").strip() != str(dr):
                 if af.set_tag("DYNAMIC RANGE", str(dr)):
@@ -274,6 +300,11 @@ def run_calc_dr_replaygain(config):
                         per_track, album_dr = _parse_dr_file(dr_path)
                         album_modified += _write_dr_tags(
                             album, per_track, album_dr)
+                        # Don't leave dr.txt cluttering the album folder.
+                        try:
+                            os.remove(dr_path)
+                        except OSError:
+                            pass
 
             if album_failed:
                 stats["total_scanned"] += 1
