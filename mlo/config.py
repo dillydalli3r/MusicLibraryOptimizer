@@ -80,6 +80,7 @@ DEFAULT_CONFIG = {
 
     # UI
     "compact_ui": False,
+    "sidebar_visible": True,
     "force_ui": False,
     "force_flac_ui": False,
     "force_images_ui": False,

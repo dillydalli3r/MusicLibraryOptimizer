@@ -1741,18 +1741,28 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     def _build_ui(self):
         # --- Folder bar ---------------------------------------------------
-        folder_bar = ttk.Frame(self, padding=(18, 16, 18, 8))
+        folder_bar = ttk.Frame(self, padding=(12, 16, 18, 8))
         folder_bar.pack(fill=tk.X)
-        folder_bar.columnconfigure(1, weight=1)
+        folder_bar.columnconfigure(2, weight=1)
+        # Sidebar toggle (always visible, outside the collapsible sidebar).
+        self.sidebar_visible = tk.BooleanVar(
+            value=self.config.get("sidebar_visible", True))
+        toggle_btn = ttk.Button(
+            folder_bar, text="\u2261", style="Small.TButton", width=2,
+            command=self._toggle_sidebar)
+        toggle_btn.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        ToolTip(toggle_btn, "Toggle the sidebar (Ctrl+B)")
+        self.bind("<Control-b>", self._toggle_sidebar)
+        self.bind("<Control-B>", self._toggle_sidebar)
         ttk.Label(folder_bar, text="LIBRARY FOLDER", style="Section.TLabel").grid(
-            row=0, column=0, sticky="w", padx=(0, 12)
+            row=0, column=1, sticky="w", padx=(0, 12)
         )
         self.folder_var = tk.StringVar(value=self.config.get("music_folder", ""))
         ttk.Entry(folder_bar, textvariable=self.folder_var).grid(
-            row=0, column=1, sticky="ew"
+            row=0, column=2, sticky="ew"
         )
         ttk.Button(folder_bar, text="Browse…", command=self._pick_folder).grid(
-            row=0, column=2, padx=(10, 0)
+            row=0, column=3, padx=(10, 0)
         )
 
         # --- Main area ------------------------------------------------------
@@ -1761,7 +1771,7 @@ class App(tk.Tk):
         main.columnconfigure(1, weight=1)
         main.rowconfigure(0, weight=1)
 
-        sidebar = ttk.Frame(main, style="Side.TFrame")
+        self._sidebar = sidebar = ttk.Frame(main, style="Side.TFrame")
         sidebar.grid(row=0, column=0, sticky="nswe")
         sidebar.rowconfigure(0, weight=1)
         sidebar.columnconfigure(0, weight=1)
@@ -1840,14 +1850,21 @@ class App(tk.Tk):
         b.pack(fill=tk.X, pady=2)
         self.run_buttons.append(b)
 
-        # Size the canvas to the widest button, and pin the tool-status label
-        # below the scrollable area.
-        self._side_canvas.configure(width=inner.winfo_reqwidth())
+        # Size the canvas to the widest button (after fonts are laid out,
+        # with a small margin so button text is never clipped horizontally),
+        # and pin the tool-status label below the scrollable area.
+        self.update_idletasks()
+        self._side_canvas.configure(
+            width=max(inner.winfo_reqwidth() + 8, 232))
         self.dep_label = ttk.Label(sidebar, text="", style="Muted.Side.TLabel",
                                    font=_font(8))
         self.dep_label.grid(row=1, column=0, columnspan=2, sticky="w",
                             padx=16, pady=(8, 0))
         self._update_dep_label()
+
+        # Restore a hidden sidebar (persisted toggle state).
+        if not self.sidebar_visible.get():
+            sidebar.grid_remove()
 
         # --- Notebook (Library + Console tabs) ------------------------------
         self.notebook = ttk.Notebook(main)
@@ -2817,6 +2834,19 @@ class App(tk.Tk):
             self._side_canvas.yview_scroll(int(-event.delta / 120), "units")
         except Exception:
             pass
+
+    def _toggle_sidebar(self, event=None):
+        """Show / hide the sidebar; the notebook expands to fill the space."""
+        vis = self.sidebar_visible.get()
+        self.sidebar_visible.set(not vis)
+        self.config["sidebar_visible"] = self.sidebar_visible.get()
+        save_config(self.config)
+        if self.sidebar_visible.get():
+            self._sidebar.grid()
+        else:
+            self._sidebar.grid_remove()
+        self.update_idletasks()
+        return "break"
 
     def _sync_side_scrollbar(self):
         """Show the sidebar scrollbar only when its content overflows."""
