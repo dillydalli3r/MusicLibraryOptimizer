@@ -67,7 +67,7 @@ def _find_python():
 def _album_dirs(config):
     """Album folders to process (from targets, else the whole library)."""
     folder = config["music_folder"]
-    if config.get("targets"):
+    if config.get("targets") is not None:
         target_files = _collect_targets(config["targets"], AUDIO_EXTS)
         dirs = sorted({os.path.dirname(f) for f in target_files})
         return [d for d in dirs if os.path.isdir(d)]
@@ -180,7 +180,7 @@ def _raw_tag(af, name):
     return ""
 
 
-def _write_dr_tags(album, per_track, per_title, album_dr):
+def _write_dr_tags(album, per_track, per_title, album_dr, write_tags=True):
     """Write DYNAMIC RANGE + ALBUM DYNAMIC RANGE to the album's files.
 
     Rows in dr.txt are keyed by TRACK NUMBER + TITLE; files are matched by
@@ -204,6 +204,8 @@ def _write_dr_tags(album, per_track, per_title, album_dr):
         if dr is None:
             continue
         try:
+            if not write_tags:
+                continue
             changed = False
             if str(af.get_tag("DYNAMIC RANGE") or "").strip() != str(dr):
                 if af.set_tag("DYNAMIC RANGE", str(dr)):
@@ -235,9 +237,11 @@ def run_calc_dr_replaygain(config):
     log(f"music folder: {folder}")
 
     tools = detect_all_tools()
-    rsgain = tools.get("rsgain")
+    rsgain = (tools.get("rsgain")
+              if config.get("write_replaygain_tags", True) else None)
     ffmpeg = tools.get("ffmpeg")
-    dr_script = simple_dr_meter_path()
+    dr_script = (simple_dr_meter_path()
+                 if config.get("write_dynamic_range_tags", True) else None)
     force = config.get("force_dr_replaygain", False)
     skip_existing = config.get("replaygain_skip_existing", True) and not force
 
@@ -249,7 +253,8 @@ def run_calc_dr_replaygain(config):
     if rsgain:
         log(f"replaygain: rsgain v{rsgain['version']} · skip-existing="
             f"{'on' if skip_existing else 'off'}")
-    if dr_script and ffmpeg:
+    if (dr_script and ffmpeg
+            and config.get("write_dynamic_range_tags", True)):
         log(f"dynamic range: simple-dr-meter + ffmpeg v{ffmpeg['version']}")
     else:
         log(c("dynamic range: unavailable (need simple-dr-meter + ffmpeg "
@@ -275,7 +280,7 @@ def run_calc_dr_replaygain(config):
     # Full-library runs let rsgain scan the whole tree in one go (its album
     # gain is computed per folder anyway), which is much faster than spawning
     # rsgain once per album.
-    if rsgain and not config.get("targets") and os.path.isdir(folder):
+    if rsgain and config.get("targets") is None and os.path.isdir(folder):
         log("running rsgain over the whole library…")
         ok, err = _run_rsgain(rsgain["rsgain_exe"], folder, skip_existing)
         if not ok:
@@ -293,7 +298,7 @@ def run_calc_dr_replaygain(config):
             album_failed = None
 
             # 1) ReplayGain (per album when targeting a subset).
-            if rsgain and config.get("targets"):
+            if rsgain and config.get("targets") is not None:
                 ok, err = _run_rsgain(rsgain["rsgain_exe"], album, skip_existing)
                 if not ok:
                     album_failed = f"rsgain: {err}"
@@ -315,7 +320,9 @@ def run_calc_dr_replaygain(config):
                     if dr_path:
                         per_track, per_title, album_dr = _parse_dr_file(dr_path)
                         album_modified += _write_dr_tags(
-                            album, per_track, per_title, album_dr)
+                            album, per_track, per_title, album_dr,
+                            write_tags=config.get("write_dynamic_range_tags", True),
+                        )
                         # Don't leave dr.txt cluttering the album folder.
                         try:
                             os.remove(dr_path)

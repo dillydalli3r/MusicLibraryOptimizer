@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.4
+# Music Library Optimizer v1.0.5
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.4_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.5_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.0.4_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.0.5_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -35,6 +35,45 @@ external folders. Keep the whole folder together to move it anywhere.
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.0.5
+
+- **Safe update workflow** — the app now closes all idle instances and
+  waits for external encoder processes before launching the installer.
+  Updates are blocked while a script, dependency download, tag edit, or
+  library scan is active.
+- **Worker limit** — Settings → Interface → **Worker Limit** caps the
+  thread pool size used by every processing pass (0 = automatic), preventing
+  disk contention on slower or shared machines.
+- **Exact LRC/CUE/image controls** — new settings for LRC timestamp precision
+  (2/3 decimals), metadata stripping, blank-line collapsing, optional final
+  newline, CUE FILE type (WAVE/MP3), JPEG progressive output, and PNG
+  optimization level (0–6).
+- **Explicit target scope** — choosing a script from the right-click
+  "Run Script…" menu or the sidebar now operates **only** on the selected
+  files/folders; it never falls back to a full-library scan.
+- **Per-format tag editor** — right-click any track or album → **Edit
+  tags…** opens a semantic editor that writes the correct ID3 frame,
+  Vorbis comment, or MP4 atom for each container. Grading fields
+  (GENRE, INSTRUMENTAL, AUDIT, LOG_GRADE, Dynamic Range, ReplayGain) and
+  sort fields (DISCNUMBER, TRACKNUMBER, TITLE, ARTIST, ALBUMARTIST,
+  ALBUM) appear first; mixed values across files are shown as "⟨mixed⟩"
+  and highlighted; empty values delete the tag.
+- **Music-tag write toggles** — Settings → Tags now lets you enable/disable
+  AUDIT, LOG_GRADE, ReplayGain, and Dynamic Range tag writes independently.
+- **Setup Guide** — the first-run wizard is now a modal **Setup Guide**
+  with folder validation, preset overview, and dependency list. It can be
+  reopened anytime via the status bar ★ Guide button.
+- **Atomic config saves** — `config.json` is written to a temporary file
+  and `os.replace`’d, so power loss or crashes never leave a corrupt file.
+- **Toolbar wrapping** — the left action cluster wraps onto new rows when
+  the window is narrow, so it never overlaps the right-side controls.
+- **Tab border alignment** — Library/Console tabs now share identical
+  padding and a 2px left margin so the selected tab’s white border isn’t
+  clipped at the strip edge.
+- **Sidebar redesign** — buttons are compact (8×6 padding, centered),
+  carry icon glyphs, and the sidebar’s minimum width is 204 for a more
+  square look.
 
 ## New in v1.0.4
 

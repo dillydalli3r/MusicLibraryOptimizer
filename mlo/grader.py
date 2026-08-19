@@ -8,6 +8,7 @@ from .paths import AUDIO_EXTS
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, is_audio_file,
     _find_albums, _clean_set, _summarize_values, _collect_targets,
+    worker_count,
 )
 from .ui import print_header, log, c, Color, print_separator, _short_val
 
@@ -503,7 +504,7 @@ def run_grade_library(config):
 
     albums = _find_albums(folder)
 
-    if config.get("targets"):
+    if config.get("targets") is not None:
         target_files = _collect_targets(config["targets"], AUDIO_EXTS)
         albums = sorted({os.path.dirname(f) for f in target_files})
 
@@ -513,7 +514,7 @@ def run_grade_library(config):
 
     results = []
     counts = {"ok": 0, "skip": 0, "fail": 0}
-    workers = min(16, os.cpu_count() or 1, len(albums))
+    workers = worker_count(config, default=16, maximum=16, items=len(albums))
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(_grade_album, a, lyrics_format): a for a in albums}

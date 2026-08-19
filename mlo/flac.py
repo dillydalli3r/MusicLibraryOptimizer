@@ -11,7 +11,7 @@ from .paths import DEPS_DIR
 from .tools import detect_all_tools, _version_is_older
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _diff_bytes, _walk_files,
-    _collect_targets,
+    _collect_targets, worker_count,
 )
 from .ui import print_header, log, c, Color, log_file_result
 
@@ -220,8 +220,9 @@ def run_optimize_flacs(config):
     log(f"target: {target}")
     log(f"flac.exe: {flac_exe} · metaflac.exe: {metaflac_exe or '(not found)'}")
 
-    flac_files = _collect_targets(config.get("targets"), (".flac",))
-    if not flac_files:
+    targets = config.get("targets")
+    flac_files = _collect_targets(targets, (".flac",))
+    if targets is None:
         flac_files = sorted(
             [
                 f
@@ -234,7 +235,8 @@ def run_optimize_flacs(config):
         log("No FLAC files found.")
         return stats
 
-    workers = min(os.cpu_count() or 1, len(flac_files))
+    workers = worker_count(config, default=os.cpu_count() or 1,
+                          items=len(flac_files))
     counts = {"ok": 0, "skip": 0, "fail": 0}
 
     args_list = [

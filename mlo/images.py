@@ -16,7 +16,7 @@ from .paths import (
 )
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _diff_bytes,
-    _existing_size, _safe_remove, _walk_files, _collect_targets,
+    _existing_size, _safe_remove, _walk_files, _collect_targets, worker_count,
 )
 from .tools import detect_all_tools, _version_is_older
 from .ui import log, fmt_size, print_header, c, Color, log_file_result
@@ -364,7 +364,8 @@ def _process_image_to_jxl(args):
 
 
 def _process_jpeg_in_place(args):
-    jpegtran_exe, ljt_version, filepath, force, rename_to_cover, enc = args
+    (jpegtran_exe, ljt_version, filepath, force, rename_to_cover,
+     progressive, enc) = args
     enabled = enc.get("jpeg") or {}
 
     filename = os.path.basename(filepath)
@@ -401,10 +402,10 @@ def _process_jpeg_in_place(args):
         jpegtran_exe,
         "-copy", "none",
         "-optimize",
-        "-progressive",
-        "-outfile", temp_path,
-        filepath,
     ]
+    if progressive:
+        cmd.append("-progressive")
+    cmd.extend(["-outfile", temp_path, filepath])
 
     try:
         result = run_tool(
@@ -467,6 +468,7 @@ def _process_png_in_place(args):
         force,
         rename_to_cover,
         remove_alpha,
+        optimization_level,
         enc,
     ) = args
     enabled = enc.get("png") or {}
@@ -491,7 +493,7 @@ def _process_png_in_place(args):
 
         if not _identity_missing(enabled, q, v):
             try:
-                if int(q) >= PNG_OPTIMIZATION_LEVEL and not _version_is_older(v, oxipng_version):
+                if int(q) >= optimization_level and not _version_is_older(v, oxipng_version):
                     return (
                         filename,
                         "unchanged",
@@ -519,7 +521,7 @@ def _process_png_in_place(args):
 
     cmd = [
         oxipng_exe,
-        "-o", str(PNG_OPTIMIZATION_LEVEL),
+        "-o", str(optimization_level),
         "--strip", "safe",
         "--force",
         "--output", temp_path,
@@ -552,7 +554,7 @@ def _process_png_in_place(args):
         try:
             _inject_png_text(
                 filepath,
-                _encoder_dict("oxipng", PNG_OPTIMIZATION_LEVEL,
+                _encoder_dict("oxipng", optimization_level,
                               oxipng_version, enabled),
             )
         except Exception as e:
@@ -753,6 +755,8 @@ def _process_jxl_back_to_original(args):
         remove_alpha,
         remove_alpha_pil,
         force,
+        progressive,
+        optimization_level,
         enc,
     ) = args
 
@@ -803,15 +807,17 @@ def _process_jxl_back_to_original(args):
                 temp_files.append(optimized)
 
                 try:
+                    jpeg_cmd = [
+                        jpegtran_exe,
+                        "-copy", "none",
+                        "-optimize",
+                        "-outfile", optimized,
+                        input_file,
+                    ]
+                    if progressive:
+                        jpeg_cmd.insert(4, "-progressive")
                     result = run_tool(
-                        [
-                            jpegtran_exe,
-                            "-copy", "none",
-                            "-optimize",
-                            "-progressive",
-                            "-outfile", optimized,
-                            input_file,
-                        ],
+                        jpeg_cmd,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.PIPE,
                         text=True,
@@ -915,7 +921,7 @@ def _process_jxl_back_to_original(args):
                 result = run_tool(
                     [
                         oxipng_exe,
-                        "-o", str(PNG_OPTIMIZATION_LEVEL),
+                        "-o", str(optimization_level),
                         "--strip", "safe",
                         "--force",
                         "--output", optimized,
@@ -957,7 +963,7 @@ def _process_jxl_back_to_original(args):
         if oxipng_exe:
             enc_ver = oxipng_version
             program = "oxipng"
-            quality = PNG_OPTIMIZATION_LEVEL
+            quality = optimization_level
         else:
             enc_ver = "decoded"
             program = "djxl/decoded"
@@ -999,6 +1005,9 @@ def run_process_images(config):
     convert_jxl_back = config.get("convert_jxl_back", False)
     rename_to_cover = config.get("rename_to_cover", True)
     remove_alpha = config.get("remove_alpha", True)
+    progressive = config.get("jpeg_progressive", True)
+    optimization_level = config.get("png_optimization_level",
+                                    PNG_OPTIMIZATION_LEVEL)
     force = config.get("force_reencode_images", False)
     enc = config.get("encoder_tags") or {}
 
@@ -1043,8 +1052,9 @@ def run_process_images(config):
     log(f"mode: {mode}")
     log(f"target: {target_dir}")
 
-    files = _collect_targets(config.get("targets"), VALID_EXTENSIONS)
-    if not files:
+    targets = config.get("targets")
+    files = _collect_targets(targets, VALID_EXTENSIONS)
+    if targets is None:
         files = sorted(_walk_files(target_dir, VALID_EXTENSIONS))
 
     if not files:
@@ -1052,7 +1062,7 @@ def run_process_images(config):
         return stats
 
     cpu_count = os.cpu_count() or 1
-    est_workers = min(len(files), cpu_count)
+    est_workers = worker_count(config, default=cpu_count, items=len(files))
     threads_per_file = max(1, cpu_count // max(1, est_workers))
 
     tasks = []
@@ -1078,6 +1088,8 @@ def run_process_images(config):
                         remove_alpha,
                         HAS_PIL,
                         force,
+                        progressive,
+                        optimization_level,
                         enc,
                     ),
                     f,
@@ -1112,6 +1124,7 @@ def run_process_images(config):
                             f,
                             force,
                             rename_to_cover,
+                            progressive,
                             enc,
                         ),
                         f,
@@ -1130,6 +1143,7 @@ def run_process_images(config):
                             force,
                             rename_to_cover,
                             remove_alpha,
+                            optimization_level,
                             enc,
                         ),
                         f,
@@ -1158,7 +1172,7 @@ def run_process_images(config):
         log(f"No active image tasks after skips ({stats['skipped_count']} skipped).")
         return stats
 
-    workers = min(len(tasks), cpu_count)
+    workers = worker_count(config, default=cpu_count, items=len(tasks))
     counts = {"ok": 0, "skip": 0, "fail": 0}
 
     with ThreadPoolExecutor(max_workers=workers) as executor:

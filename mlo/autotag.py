@@ -26,7 +26,7 @@ from .audio import AudioFile
 from .paths import AUDIO_EXTS
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _collect_targets,
-    _find_albums, is_audio_file,
+    _find_albums, is_audio_file, worker_count,
 )
 from .ui import print_header, log, c, Color
 
@@ -157,7 +157,7 @@ def run_auto_tagging(config):
     do_advisory = config.get("auto_advisory", True)
     do_instrumental = config.get("auto_instrumental", True)
 
-    if config.get("targets"):
+    if config.get("targets") is not None:
         target_files = _collect_targets(config["targets"], AUDIO_EXTS)
         album_dirs = sorted({os.path.dirname(f) for f in target_files})
     else:
@@ -190,7 +190,7 @@ def run_auto_tagging(config):
 
     counts = {"ok": 0, "skip": 0, "fail": 0}
     pbar = _make_pbar(len(album_dirs), "AutoTag", unit="album")
-    workers = max(2, min(8, os.cpu_count() or 2, len(album_dirs)))
+    workers = worker_count(config, default=8, maximum=8, items=len(album_dirs))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(process_album, a): a for a in sorted(album_dirs)}
         for fut in as_completed(futures):

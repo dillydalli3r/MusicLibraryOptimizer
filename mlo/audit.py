@@ -28,7 +28,7 @@ from .audio import AudioFile
 from .paths import AUDIO_EXTS, DEPS_DIR
 from .stats import (
     new_stats, _make_pbar, _pbar_update, _collect_targets, _walk_files,
-    _diff_bytes,
+    _diff_bytes, worker_count,
 )
 from .subproc import run_tool
 from .tools import detect_all_tools
@@ -167,7 +167,7 @@ def _audit_tag_value(severity, cli_status):
     return "REAL" if cli_status == "Valid" else "FAKE"
 
 
-def _read_and_normalize_audit(path):
+def _read_and_normalize_audit(path, write_tags=True):
     """Read the AUDIT verdict and fix legacy mixed-case values (Real -> REAL)
     in a single file open. Returns (verdict, changed)."""
     try:
@@ -175,7 +175,7 @@ def _read_and_normalize_audit(path):
         raw = str(af.get_tag("AUDIT") or "").strip()
         v = raw.upper()
         changed = False
-        if raw and v in ("REAL", "FAKE") and raw != v:
+        if write_tags and raw and v in ("REAL", "FAKE") and raw != v:
             changed = bool(af.set_tag("AUDIT", v))
         return (v if v in ("REAL", "FAKE") else None), changed
     except Exception:
@@ -237,8 +237,9 @@ def run_audit_library(config):
         log(c(f"ERROR: folder does not exist: {folder}", Color.RED))
         return stats
 
-    files = _collect_targets(config.get("targets"), AUDIO_EXTS)
-    if not files:
+    targets = config.get("targets")
+    files = _collect_targets(targets, AUDIO_EXTS)
+    if targets is None:
         files = sorted(_walk_files(folder, AUDIO_EXTS))
     if not files:
         log("No audio files found.")
@@ -252,8 +253,14 @@ def run_audit_library(config):
     todo = files
     skipped = 0
     if not force:
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            results = list(pool.map(_read_and_normalize_audit, files))
+        workers = worker_count(config, default=8, maximum=8, items=len(files))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(
+                lambda path: _read_and_normalize_audit(
+                    path, config.get("write_audit_tag", True)
+                ),
+                files,
+            ))
         todo = []
         for path, (verdict, changed) in zip(files, results):
             if verdict is not None:
@@ -308,8 +315,11 @@ def run_audit_library(config):
 
             # Persist the verdict into the file's AUDIT tag.
             tag_value = _audit_tag_value(severity, cli_status)
-            changed, b_rem, b_add, tag_err = _write_audit_tag(
-                path, tag_value)
+            if config.get("write_audit_tag", True):
+                changed, b_rem, b_add, tag_err = _write_audit_tag(
+                    path, tag_value)
+            else:
+                changed, b_rem, b_add, tag_err = False, 0, 0, None
             if tag_err:
                 log(c(f"    [tag warn] {os.path.basename(rel)}: {tag_err}",
                       Color.YELLOW))
@@ -370,10 +380,11 @@ def run_audit_library(config):
             return album_dir, {}, []
         scores, notes = grade_album_logs(
             cli, album_dir, force=force,
+            write_tags=config.get("write_log_grade", True),
             log_fn=(lambda m: log(f"  {m}")) if verbose else None)
         return album_dir, scores, notes
 
-    workers = max(1, min(8, os.cpu_count() or 1, len(album_dirs)))
+    workers = worker_count(config, default=8, maximum=8, items=len(album_dirs))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(_grade_one, d) for d in album_dirs]
         for fut in as_completed(futures):

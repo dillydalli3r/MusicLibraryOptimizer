@@ -222,3 +222,24 @@ def _collect_targets(targets, extensions):
             files.update(_walk_files(t, extensions))
     return sorted(files)
 
+
+def worker_count(config=None, default=None, maximum=None, items=None):
+    """Choose a bounded worker count from the shared performance setting.
+
+    ``worker_limit=0`` keeps the module's normal automatic behavior. An
+    explicit positive limit prevents a Run All job from creating too many
+    competing encoder processes on a busy or slower disk.
+    """
+    config = config or {}
+    cpu = os.cpu_count() or 1
+    try:
+        requested = int(config.get("worker_limit", 0) or 0)
+    except (TypeError, ValueError):
+        requested = 0
+    count = requested if requested > 0 else (default or cpu)
+    if maximum is not None:
+        count = min(count, maximum)
+    if items is not None:
+        count = min(count, max(1, int(items)))
+    return max(1, count)
+

@@ -40,10 +40,11 @@ from mlo import stats as stats_mod
 from mlo import tools as tools_mod
 from mlo import fetchdeps
 from mlo import updater
-from mlo.config import DEFAULT_CONFIG, DEFAULT_RUN_ALL_ORDER
+from mlo.config import DEFAULT_CONFIG, DEFAULT_RUN_ALL_ORDER, normalize_config
 from mlo.paths import DEFAULT_DIGITAL_SOURCE, DEPS_DIR, SCRIPT_DIR
 from mlo.deps import HAS_MUTAGEN, HAS_PIL
 from mlo.report import print_results, print_grade_results, print_combined_results
+from mlo.subproc import active_process_count
 from mlo.ui import set_file_lines
 
 SCRIPT_NAMES = {
@@ -80,24 +81,21 @@ RUNNERS = {
     8: ("Auto Tagging", run_auto_tagging),
 }
 
-# Tag keys offered by the "Add tag" menu of the full tag editor.
-# Display name -> raw container key (vorbis-friendly names; ID3 IDs and
-# MP4 atoms included for the container-aware user).
-COMMON_TAGS = [
-    ("Title", "TITLE"), ("Album", "ALBUM"), ("Artist", "ARTIST"),
-    ("Album Artist", "ALBUMARTIST"), ("Track Number", "TRACKNUMBER"),
-    ("Disc Number", "DISCNUMBER"), ("Genre", "GENRE"),
-    ("Date", "DATE"), ("Year", "YEAR"), ("Composer", "COMPOSER"),
-    ("Lyricist", "LYRICIST"), ("Copyright", "COPYRIGHT"),
-    ("Comment", "COMMENT"), ("Lyrics", "LYRICS"), ("BPM", "BPM"),
-    ("Media", "MEDIA"), ("Source", "SOURCE"),
-    ("Instrumental (0/1)", "INSTRUMENTAL"),
-    ("iTunes Advisory (0/1)", "ITUNESADVISORY"),
-    ("ReplayGain Track Gain", "REPLAYGAIN_TRACK_GAIN"),
-    ("ReplayGain Track Peak", "REPLAYGAIN_TRACK_PEAK"),
-    ("ReplayGain Album Gain", "REPLAYGAIN_ALBUM_GAIN"),
-    ("ReplayGain Album Peak", "REPLAYGAIN_ALBUM_PEAK"),
+# Tag editor ordering is intentional: the fields most often corrected first
+# are visible immediately, grading fields stay near them, and sort fields are
+# together before the remaining tags found in the file.
+TAG_EDITOR_PRIORITY = [
+    "GENRE", "INSTRUMENTAL",
+    "AUDIT", "LOG_GRADE", "ALBUMITUNESADVISORY", "ITUNESADVISORY",
+    "DYNAMIC RANGE", "ALBUM DYNAMIC RANGE",
+    "REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK",
+    "REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_PEAK",
+    "DISCNUMBER", "TRACKNUMBER", "TITLE", "ARTIST", "ALBUMARTIST",
+    "ALBUM", "MEDIA", "SOURCE", "DATE", "COMPOSER", "COMMENT",
+    "LYRICS", "BPM", "COPYRIGHT",
 ]
+COMMON_TAGS = [(key, key) for key in TAG_EDITOR_PRIORITY]
+TAG_EDITOR_MIXED = "<mixed>"
 RAW_TAGS = [
     ("ID3 TIT2", "TIT2"), ("ID3 TALB", "TALB"), ("ID3 TPE1", "TPE1"),
     ("ID3 TPE2", "TPE2"), ("ID3 TRCK", "TRCK"), ("ID3 TPOS", "TPOS"),
@@ -132,14 +130,26 @@ CONFIG_FIELDS = [
     ("convert_jxl_back", "Convert JXL Back to JPEG/PNG", "bool", None),
     ("rename_to_cover", "Rename Images to cover.<ext>", "bool", None),
     ("remove_alpha", "Remove Alpha from PNGs", "bool", None),
+    ("jpeg_progressive", "JPEG Progressive Output", "bool", None),
+    ("png_optimization_level", "PNG Optimization Level (0-6)", "int", (0, 6)),
     ("force_reencode_images", "Force Re-encode Images", "bool", None),
     ("optimize_lrc", "Optimize LRC Files", "bool", None),
     ("optimize_embedded_lyrics", "Optimize Embedded Lyrics", "bool", None),
     ("lyrics_format", "Lyrics Format", "choice", ("EMBEDDED", "LRC", "BOTH")),
+    ("lrc_timestamp_precision", "LRC Timestamp Decimals", "choice", ("2", "3")),
+    ("lrc_strip_metadata", "Remove LRC Metadata Lines", "bool", None),
+    ("lrc_collapse_blank_lines", "Collapse Blank Lyric Lines", "bool", None),
+    ("append_final_newline", "Append Final Newline", "bool", None),
     ("keep_empty_cue_lines", "Keep Empty CUE Lines", "bool", None),
     ("keep_other_cue_lines", "Keep Other CUE Lines", "bool", None),
+    ("cue_file_type", "CUE FILE Type", "choice", ("WAVE", "MP3")),
     ("normalize_media_source", "Normalize MEDIA/SOURCE", "bool", None),
     ("digital_media_source_value", "Digital SOURCE Value", "str", None),
+    ("fix_instrumental_from_lyrics", "Fix INSTRUMENTAL from Lyrics", "bool", None),
+    ("write_audit_tag", "Write AUDIT Tags", "bool", None),
+    ("write_log_grade", "Write LOG_GRADE Tags", "bool", None),
+    ("write_replaygain_tags", "Write ReplayGain Tags", "bool", None),
+    ("write_dynamic_range_tags", "Write Dynamic Range Tags", "bool", None),
     ("grade_verbose", "Grade Verbose Output", "bool", None),
     ("audit_thorough", "Thorough Audit (slower)", "bool", None),
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
@@ -160,7 +170,11 @@ CONFIG_FIELDS = [
     ("auto_instrumental", "Auto Instrumental Tag", "bool", None),
     ("force_auto_tag", "Force Auto Tagging", "bool", None),
     ("auto_advance", "Auto-Advance Between Scripts", "bool", None),
+    ("worker_limit", "Worker Limit (0=Auto)", "int", (0, 64)),
     ("check_updates_on_start", "Check for Updates on Start", "bool", None),
+    ("update_check_interval_days", "Update Check Interval (days)", "int", (1, 30)),
+    ("update_close_other_instances", "Close Other Instances for Updates", "bool", None),
+    ("confirm_before_update", "Confirm Before Installing Updates", "bool", None),
     ("run_all_order", "Run All Order", "choice", None),
     ("compact_ui", "Compact UI Mode", "bool", None),
 ]
@@ -588,6 +602,12 @@ FIELD_DESCRIPTIONS = {
     "remove_alpha":
         "Flatten alpha transparency out of PNG images before encoding. "
         "Requires Pillow.",
+    "jpeg_progressive":
+        "Ask jpegtran to write progressive JPEG output. This is still "
+        "lossless and can improve streaming size without changing pixels.",
+    "png_optimization_level":
+        "oxipng optimization effort 0-6. Higher levels use more CPU for "
+        "smaller lossless PNG files.",
     "force_reencode_images":
         "Reprocess images even when their ENCODER marker tags are current.",
     "optimize_lrc":
@@ -598,17 +618,40 @@ FIELD_DESCRIPTIONS = {
     "lyrics_format":
         "Where lyrics should live: EMBEDDED in tags, LRC sidecar files, or "
         "BOTH. Conversion happens during Format Lyrics.",
+    "lrc_timestamp_precision":
+        "Write lyric timestamps with two or three decimal places.",
+    "lrc_strip_metadata":
+        "Remove [ar:], [ti:], [al:] and other LRC metadata lines.",
+    "lrc_collapse_blank_lines":
+        "Collapse repeated blank lyric lines while retaining intentional "
+        "single spacing.",
+    "append_final_newline":
+        "Add one final LF byte to formatted .cue, .lrc, and embedded lyric "
+        "text. Off by default for the existing byte-minimal format.",
     "keep_empty_cue_lines":
         "Preserve blank lines when formatting .cue files.",
     "keep_other_cue_lines":
         "Preserve non-standard CUE lines (PREGAP, REM, etc.) instead of "
         "dropping them.",
+    "cue_file_type":
+        "FILE line type written by the CUE formatter: WAVE or MP3.",
     "normalize_media_source":
         "Enforce the MEDIA/SOURCE rule: albums with MEDIA 'Digital Media' "
         "must have SOURCE populated; all other albums must not have SOURCE.",
     "digital_media_source_value":
         "Fallback SOURCE value written on Digital Media albums whose tracks "
         "are missing SOURCE. Existing values are never overwritten.",
+    "fix_instrumental_from_lyrics":
+        "When lyrics are present, change INSTRUMENTAL=1 to INSTRUMENTAL=0 "
+        "during lyric formatting.",
+    "write_audit_tag":
+        "Persist AudioAuditor's REAL/FAKE verdict in the AUDIT tag.",
+    "write_log_grade":
+        "Persist CD rip-log scores in LOG_GRADE tags.",
+    "write_replaygain_tags":
+        "Allow rsgain to write the four REPLAYGAIN_* tags.",
+    "write_dynamic_range_tags":
+        "Allow simple-dr-meter results to write DYNAMIC RANGE tags.",
     "grade_verbose":
         "Include the per-track tag dump in grading reports.",
     "audit_thorough":
@@ -678,10 +721,20 @@ FIELD_DESCRIPTIONS = {
     "auto_advance":
         "Sequence runs (Run All / custom): when off, the app pauses for "
         "confirmation between scripts — the GUI shows a Continue button.",
+    "worker_limit":
+        "Maximum worker threads per processing pass. 0 automatically sizes "
+        "pools from CPU count and file count.",
     "check_updates_on_start":
         "Check GitHub for a new release when the app starts (once per "
         "interval). Works for both the portable and the installed version. "
         "You can always check manually via ⓘ About → Check for Updates.",
+    "update_check_interval_days":
+        "How often automatic GitHub release checks are attempted.",
+    "update_close_other_instances":
+        "Ask other Music Library Optimizer windows to close before an update "
+        "installer starts. Busy instances prevent the update.",
+    "confirm_before_update":
+        "Ask for confirmation before downloading and installing an update.",
     "run_all_order":
         "Execution order used by the Run All button.",
 }
@@ -799,6 +852,8 @@ class DependenciesDialog(tk.Toplevel):
 
     def _set_busy(self, flag):
         self.busy = flag
+        self.app._deps_busy = flag
+        self.app._set_job_busy("dependency download", flag)
         state = tk.DISABLED if flag else tk.NORMAL
         for row in self.rows.values():
             row["button"].configure(state=state)
@@ -896,7 +951,9 @@ class DependenciesDialog(tk.Toplevel):
 class ConfigDialog(tk.Toplevel):
     def __init__(self, parent, config, on_saved):
         super().__init__(parent)
-        self.config = config
+        # Work on a validated candidate so Cancel never changes the live
+        # configuration in memory.
+        self.config = normalize_config(config)
         self.on_saved = on_saved
         self.vars = {}
 
@@ -962,13 +1019,23 @@ class ConfigDialog(tk.Toplevel):
             ("Images", [
                 "jpegxl_effort", "reencode_images", "reencode_to_jxl",
                 "convert_jxl_back", "rename_to_cover", "remove_alpha",
+                "jpeg_progressive", "png_optimization_level",
                 "force_reencode_images",
             ]),
             ("Lyrics", [
                 "optimize_lrc", "optimize_embedded_lyrics", "lyrics_format",
+                "lrc_timestamp_precision", "lrc_strip_metadata",
+                "lrc_collapse_blank_lines", "append_final_newline",
             ]),
-            ("CUE Sheets", ["keep_empty_cue_lines", "keep_other_cue_lines"]),
-            ("Tags", ["normalize_media_source", "digital_media_source_value"]),
+            ("CUE Sheets", [
+                "keep_empty_cue_lines", "keep_other_cue_lines", "cue_file_type",
+            ]),
+            ("Tags", [
+                "normalize_media_source", "digital_media_source_value",
+                "fix_instrumental_from_lyrics", "write_audit_tag",
+                "write_log_grade", "write_replaygain_tags",
+                "write_dynamic_range_tags",
+            ]),
             ("Audio Auditor", [
                 "audit_thorough", "force_audit", "audit_cutoff_allow",
                 "audit_clipping", "audit_mqa", "audit_ai",
@@ -982,8 +1049,11 @@ class ConfigDialog(tk.Toplevel):
             ("Auto Tagging", [
                 "auto_advisory", "auto_instrumental", "force_auto_tag",
             ]),
-            ("Interface", ["grade_verbose", "auto_advance", "compact_ui",
-                           "check_updates_on_start"]),
+            ("Interface", [
+                "grade_verbose", "auto_advance", "worker_limit", "compact_ui",
+                "check_updates_on_start", "update_check_interval_days",
+                "update_close_other_instances", "confirm_before_update",
+            ]),
         ]
         field_lookup = {f[0]: f for f in CONFIG_FIELDS}
 
@@ -1242,6 +1312,7 @@ class ConfigDialog(tk.Toplevel):
         if not str(self.config.get("digital_media_source_value", "")).strip():
             self.config["digital_media_source_value"] = DEFAULT_DIGITAL_SOURCE
 
+        self.config = normalize_config(self.config)
         if not save_config(self.config):
             messagebox.showerror("Save failed", "Could not write config.json.", parent=self)
             return
@@ -1313,17 +1384,19 @@ class CustomRunDialog(tk.Toplevel):
 class FirstRunWizard(tk.Toplevel):
     """Wizard shown on first launch to configure library folder and settings."""
 
-    def __init__(self, parent, config, on_complete):
+    def __init__(self, parent, config, on_complete, reopen=False):
         super().__init__(parent)
         self.config = config
         self.on_complete = on_complete
+        self.reopen = reopen
         self.vars = {}
 
-        self.title("Welcome to Music Library Optimizer")
+        self.title("Setup Guide" if reopen else "Welcome to Music Library Optimizer")
         self.configure(background=PANEL)
         self.transient(parent)
-        # Non-modal: the wizard never blocks the main window, so the app
-        # always opens and stays responsive even if the wizard misbehaves.
+        # Setup must finish before a script can be started; this also prevents
+        # a half-configured first launch from racing the library scanner.
+        self.grab_set()
         self.resizable(False, False)
         self.geometry("720x580")
         self.lift()
@@ -1343,7 +1416,7 @@ class FirstRunWizard(tk.Toplevel):
 
         # Step indicator
         self.step = 0
-        self.steps = ["Library Folder", "Settings Preset", "Dependencies", "Ready"]
+        self.steps = ["Welcome", "Settings Preset", "Dependencies", "Ready"]
         self.step_frame = ttk.Frame(outer)
         self.step_frame.pack(fill=tk.X, pady=(0, 16))
         self.step_labels = []
@@ -1403,8 +1476,18 @@ class FirstRunWizard(tk.Toplevel):
 
     def _go_next(self):
         if self.step == 0:
-            if not self.vars.get("music_folder", "").get().strip():
-                messagebox.showwarning("Required", "Please select a music library folder.", parent=self)
+            folder = self.vars.get("music_folder", "").get().strip()
+            if not folder:
+                messagebox.showwarning(
+                    "Required", "Please select a music library folder.", parent=self
+                )
+                return
+            if not os.path.isdir(folder):
+                messagebox.showwarning(
+                    "Folder not found",
+                    "Choose an existing music library folder before continuing.",
+                    parent=self,
+                )
                 return
         elif self.step == 1:
             pass  # preset step has no validation
@@ -1414,23 +1497,44 @@ class FirstRunWizard(tk.Toplevel):
             self._show_step(self.step + 1)
 
     def _finish(self):
-        # Save the music folder chosen in step 1
+        # Save the music folder chosen in the welcome step.
         folder = self.vars.get("music_folder", "").get().strip()
-        if folder:
-            self.config["music_folder"] = folder
+        if not os.path.isdir(folder):
+            messagebox.showwarning(
+                "Folder not found",
+                "Choose an existing music library folder before finishing.",
+                parent=self,
+            )
+            self._show_step(0)
+            return
+        self.config["music_folder"] = folder
         # Apply preset if selected
         if self.vars.get("use_preset", tk.BooleanVar(value=True)).get():
             self._apply_preset()
         # Mark first run complete
         self.config["first_run_done"] = True
-        save_config(self.config)
+        self.config = normalize_config(self.config)
+        if not save_config(self.config):
+            messagebox.showerror(
+                "Save failed", "Could not save setup settings to config.json.",
+                parent=self,
+            )
+            return
         self.on_complete()
         self.destroy()
 
     def _skip(self):
         """Close the wizard without completing setup; the app keeps working."""
+        if self.reopen:
+            self.destroy()
+            return
         self.config["first_run_done"] = True
-        save_config(self.config)
+        if not save_config(self.config):
+            messagebox.showerror(
+                "Save failed", "Could not save setup settings to config.json.",
+                parent=self,
+            )
+            return
         self.on_complete()
         self.destroy()
 
@@ -1439,23 +1543,31 @@ class FirstRunWizard(tk.Toplevel):
         box.pack(fill=tk.BOTH, expand=True)
         box.columnconfigure(1, weight=1)
 
-        ttk.Label(box, text="Where is your music library?", style="Card.TLabel",
+        ttk.Label(box, text="Welcome to your library workspace", style="Card.TLabel",
                   font=_sfont(11)).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
 
+        ttk.Label(
+            box,
+            text="Music Library Optimizer only changes files when you run a script. "
+                 "The default preset is conservative about metadata, keeps "
+                 "processing repeatable, and can be changed later in Settings.",
+            style="Muted.Card.TLabel", wraplength=560, justify=tk.LEFT,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
+
         ttk.Label(box, text="Music Folder:", style="Card.TLabel").grid(
-            row=1, column=0, sticky="w", padx=(0, 8), pady=8)
+            row=2, column=0, sticky="w", padx=(0, 8), pady=8)
         folder_var = tk.StringVar(value=self.config.get("music_folder", ""))
         self.vars["music_folder"] = folder_var
         ttk.Entry(box, textvariable=folder_var, width=50).grid(
-            row=1, column=1, sticky="ew", pady=8)
+            row=2, column=1, sticky="ew", pady=8)
         ttk.Button(box, text="Browse…", command=lambda: self._browse(folder_var)).grid(
-            row=1, column=2, padx=(8, 0), pady=8)
+            row=2, column=2, padx=(8, 0), pady=8)
 
         ttk.Label(box,
                   text="This should be the root folder containing your artist folders "
                        "(e.g., F:\\Music\\Artists). The app scans recursively.",
                   style="Muted.Card.TLabel", wraplength=500).grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+            row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
     def _browse(self, var):
         path = filedialog.askdirectory(parent=self, initialdir=var.get() or "/")
@@ -1474,7 +1586,7 @@ class FirstRunWizard(tk.Toplevel):
                        "You can customize any setting later in ⚙ Settings.",
                   style="Muted.Card.TLabel", wraplength=560).pack(anchor="w", pady=(0, 12))
 
-        preset_var = tk.BooleanVar(value=True)
+        preset_var = tk.BooleanVar(value=not self.reopen)
         self.vars["use_preset"] = preset_var
         ttk.Checkbutton(box, text="Use recommended preset",
                         variable=preset_var, style="TCheckbutton").pack(anchor="w")
@@ -1554,7 +1666,9 @@ class FirstRunWizard(tk.Toplevel):
             if key not in user_keys:
                 self.config[key] = value
         # Ensure encoder_tags preset is applied
-        self.config["encoder_tags"] = DEFAULT_CONFIG["encoder_tags"].copy()
+        self.config["encoder_tags"] = normalize_config({
+            "encoder_tags": DEFAULT_CONFIG["encoder_tags"]
+        })["encoder_tags"]
         # Run all order preset
         self.config["run_all_order"] = DEFAULT_CONFIG["run_all_order"].copy()
 
@@ -1586,7 +1700,14 @@ class App(tk.Tk):
 
         self.config = load_config()
         self.log_q = queue.Queue()
+        self._instance_state_path = updater.register_instance()
+        self._busy_reasons = set()
         self.running = False
+        self._run_thread = None
+        self._tag_edit_busy = False
+        self._deps_busy = False
+        self._shutdown_for_update = False
+        self._update_result = None
         self.run_buttons = []
         self._continue_event = threading.Event()
         self._continue_event.set()
@@ -1654,7 +1775,14 @@ class App(tk.Tk):
                      tag="yellow")
         # Auto-check for updates on start (configurable; respects interval).
         if self.config.get("check_updates_on_start", True):
-            self.after(5000, lambda: updater.maybe_auto_check())
+            self.after(
+                5000,
+                lambda: updater.maybe_auto_check(
+                    callback=lambda *result: self.log_q.put(
+                        ("update_auto", result)
+                    )
+                ),
+            )
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -1672,7 +1800,20 @@ class App(tk.Tk):
     def _after_first_run(self):
         """Called when first-run wizard completes. Main window is already
         visible; just refresh the library with the chosen folder."""
+        self.config = normalize_config(self.config)
+        self.folder_var.set(self.config.get("music_folder", ""))
+        self._lib_folder = self.folder_var.get().strip()
         self._refresh_library(regrade=True)
+
+    def _show_setup_guide(self):
+        """Reopen the first-run introduction without resetting settings."""
+        if self._has_active_work():
+            messagebox.showinfo(
+                "Busy", "Wait for the current operation to finish before opening the guide.",
+                parent=self,
+            )
+            return
+        FirstRunWizard(self, self.config, self._after_first_run, reopen=True)
 
     # ------------------------------------------------------------------
     def _setup_style(self):
@@ -2193,6 +2334,8 @@ class App(tk.Tk):
         self._agg = {}
         self._root_item = None
         self._scan_q = queue.Queue()
+        self._scan_generation = 0
+        self._scan_pending = False
         self._library_busy = False
         self._filter_job = None
         self._scan_draining = False
@@ -2300,6 +2443,8 @@ class App(tk.Tk):
         left.grid(row=0, column=0, sticky="w")
         ttk.Button(left, text="\u2699  Settings", style="Small.TButton",
                    command=self._open_config).pack(side=tk.LEFT)
+        ttk.Button(left, text="\u2726  Guide", style="Small.TButton",
+                   command=self._show_setup_guide).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(left, text="\u24d8  About", style="Small.TButton",
                    command=self._show_about).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Label(status, textvariable=self.status_var,
@@ -2337,6 +2482,9 @@ class App(tk.Tk):
 
     def _refresh_library(self, regrade=False):
         """Start a background scan + grade of the library folder."""
+        if getattr(self, "_library_busy", False):
+            self._scan_pending = self._scan_pending or regrade
+            return
         folder = self.folder_var.get().strip()
         self._lib_folder = folder
         self._lyrics_format = str(
@@ -2350,12 +2498,18 @@ class App(tk.Tk):
             self._root_albums = []
             self._rebuild_tree()
             return
+        self._scan_generation += 1
+        generation = self._scan_generation
         self._scan_q = queue.Queue()
         self._library_busy = True
+        self._set_job_busy("library scan", True)
         if hasattr(self, "status_var"):
             self.status_var.set("Scanning library…")
         threading.Thread(
-            target=self._library_worker, args=(regrade,), daemon=True
+            target=self._library_worker,
+            args=(regrade, generation, self._scan_q, folder, self._lyrics_format),
+            daemon=True,
+            name="mlo-library-scan",
         ).start()
         # One persistent drain loop serves every scan and the one-shot
         # re-grades queued by the tag editor; start it only once.
@@ -2363,16 +2517,14 @@ class App(tk.Tk):
             self._scan_draining = True
             self._drain_library()
 
-    def _library_worker(self, regrade):
+    def _library_worker(self, regrade, generation, q, folder, lyrics_format):
         # Capture the queue object: if the user starts a new scan, this
         # worker keeps filling the (abandoned) old queue instead of
         # mixing stale results into the new one.
-        q = self._scan_q
         try:
             from mlo.stats import _find_albums
             from mlo.grader import _grade_album
 
-            folder = self._lib_folder
             albums = _find_albums(folder)
             artists = {}
             root_albums = []
@@ -2395,7 +2547,7 @@ class App(tk.Tk):
 
             def grade_one(album_dir):
                 try:
-                    return album_dir, _grade_album(album_dir, self._lyrics_format)
+                    return album_dir, _grade_album(album_dir, lyrics_format)
                 except Exception:
                     return album_dir, None
 
@@ -2411,7 +2563,7 @@ class App(tk.Tk):
                     q.put(("grade", album_dir, result))
         except Exception:
             pass
-        q.put(("done",))
+        q.put(("done", generation))
 
     def _drain_library(self):
         try:
@@ -2431,11 +2583,22 @@ class App(tk.Tk):
                             self._folder_artist[parent] = artist
                     self._update_grade(album_dir, result)
                 elif kind == "done":
+                    generation = payload[0]
+                    if generation != self._scan_generation:
+                        continue
                     self._library_busy = False
+                    self._set_job_busy("library scan", False)
                     if hasattr(self, "status_var"):
                         self.status_var.set("Library scan complete")
                     if self._sort_mode() != "name" or self.bad_only_var.get():
                         self._rebuild_tree()
+                    if self._scan_pending:
+                        pending = self._scan_pending
+                        self._scan_pending = False
+                        self.after_idle(lambda p=pending: self._refresh_library(regrade=p))
+                elif kind == "regrade_done":
+                    self._tag_edit_busy = False
+                    self._set_job_busy("tag edit", False)
         except queue.Empty:
             pass
         self.after(120, self._drain_library)
@@ -3173,18 +3336,20 @@ class App(tk.Tk):
             return
         path = self._item_paths.get(item)
         album_dir, res = self._find_album_for_item(item)
+        is_track = bool(path and os.path.isfile(path))
+        edit_dir = album_dir or (path if path and os.path.isdir(path) else None)
 
         menu = tk.Menu(self, tearoff=0, bg=PANEL, fg=TEXT,
                        activebackground=ACCENT_DARK, activeforeground="#ffffff")
         if res is not None:
             menu.add_command(label="Grade details…",
                              command=lambda: self._show_grade_details(item))
-        if album_dir:
-            is_track = path is not None and path != album_dir
+        if edit_dir:
             menu.add_command(
-                label="Edit track tags…" if is_track else "Edit album tags…",
+                label=("Edit file tags…" if is_track
+                       else "Edit folder tags…"),
                 command=lambda: self._open_tag_editor(
-                    album_dir, path if is_track else None))
+                    edit_dir, path if is_track else None))
         target_dir = path if (path and os.path.isdir(path)) else album_dir
         if target_dir:
             menu.add_separator()
@@ -3355,31 +3520,49 @@ class App(tk.Tk):
         ttk.Button(btn, text="Close", style="Small.TButton",
                    command=win.destroy).pack()
 
-    def _open_tag_editor(self, album_dir, track_path=None):
-        """Dialog to edit every textual tag on a track / album's tracks."""
-        if track_path:
+    def _open_tag_editor(self, edit_dir, track_path=None):
+        """Dialog to edit tags on a track or all tracks in an album folder."""
+        from mlo.stats import is_audio_file
+        from mlo.audio import AudioFile
+
+        if track_path and os.path.isfile(track_path):
             files = [track_path]
+        elif edit_dir and os.path.isdir(edit_dir):
+            files = sorted(os.path.join(edit_dir, f)
+                           for f in os.listdir(edit_dir) if is_audio_file(f))
         else:
-            from mlo.stats import is_audio_file
-            files = sorted(
-                os.path.join(album_dir, f)
-                for f in os.listdir(album_dir) if is_audio_file(f))
+            messagebox.showinfo("Edit Tags", "No audio files to edit.")
+            return
+
         if not files:
             messagebox.showinfo("Edit Tags", "No audio files to edit.")
             return
 
-        from mlo.audio import AudioFile
-        first = AudioFile(files[0])
-        if first.audio is None:
-            messagebox.showerror(
-                "Edit Tags",
-                f"Cannot read {os.path.basename(files[0])}: {first.error}")
+        # Build per-file tag snapshots
+        file_tags = {}
+        for path in files:
+            af = AudioFile(path)
+            if af.audio is not None:
+                file_tags[path] = af.all_tags()
+
+        if not file_tags:
+            messagebox.showerror("Edit Tags", "Could not read any selected files.")
             return
 
-        title = ("Tag Editor — " + os.path.basename(track_path)
-                 if track_path else
-                 f"Tag Editor — {os.path.basename(album_dir)} "
-                 f"({len(files)} files)")
+        # Determine all unique tag keys across files (semantic names from AudioFile)
+        all_keys = set()
+        for tags in file_tags.values():
+            all_keys.update(tags.keys())
+
+        # Order keys: priority list first, then alphabetical remainder
+        priority_order = [k for k in TAG_EDITOR_PRIORITY if k in all_keys]
+        other_keys = sorted(k for k in all_keys if k not in TAG_EDITOR_PRIORITY)
+        ordered_keys = priority_order + other_keys
+
+        is_single = len(files) == 1
+        title = (f"Tag Editor — {os.path.basename(files[0])}"
+                 if is_single else
+                 f"Tag Editor — {os.path.basename(edit_dir)} ({len(files)} files)")
 
         win = tk.Toplevel(self)
         win.title(title)
@@ -3418,22 +3601,38 @@ class App(tk.Tk):
             canvas.unbind_all("<MouseWheel>")
             win.destroy()
 
-        existing = first.all_tags()
-        seen = {}
-        for key in list(existing) + [k for _, k in COMMON_TAGS]:
-            folded = key.lower()
-            if folded not in seen:
-                seen[folded] = key
-        keys = sorted(seen.values(), key=str.lower)
+        # Detect mixed values per key across files
+        mixed_values = {}
+        for key in ordered_keys:
+            values = set()
+            for path, tags in file_tags.items():
+                v = tags.get(key)
+                if v is not None:
+                    values.add(str(v).strip())
+            if len(values) > 1:
+                mixed_values[key] = values
+
         row_meta = {}
 
         def add_row(key):
             row = ttk.Frame(rows_frame, style="Card.TFrame")
             row.grid(row=len(row_meta), column=0, sticky="ew", padx=10, pady=2)
             row.columnconfigure(1, weight=1)
-            var = tk.StringVar(value=existing.get(key, ""))
+
+            # For mixed values, show indicator instead of blank
+            if key in mixed_values:
+                display = TAG_EDITOR_MIXED
+                var = tk.StringVar(value=TAG_EDITOR_MIXED)
+            else:
+                # Use first file's value as representative
+                first_path = next(iter(file_tags))
+                display = file_tags[first_path].get(key, "")
+                var = tk.StringVar(value=display)
+
             var._row_widget = row
+            var._is_mixed = key in mixed_values
             row_meta[key] = var
+
             ttk.Button(
                 row, text="\u00d7", style="Small.TButton", width=2,
                 command=lambda k=key: remove_row(k)
@@ -3441,8 +3640,11 @@ class App(tk.Tk):
             ttk.Label(row, text=key, style="Card.TLabel",
                       font=_sfont(9)).grid(
                 row=0, column=1, sticky="w", padx=(0, 12))
-            ttk.Entry(row, textvariable=var).grid(
-                row=0, column=2, sticky="ew", padx=(0, 6))
+            entry = ttk.Entry(row, textvariable=var)
+            entry.grid(row=0, column=2, sticky="ew", padx=(0, 6))
+            if var._is_mixed:
+                entry.configure(foreground=YELLOW)
+                ToolTip(entry, "Mixed values across files — editing will apply to all.")
             self._relabel_tag_rows(rows_frame)
 
         def remove_row(key):
@@ -3450,7 +3652,7 @@ class App(tk.Tk):
             var._row_widget.destroy()
             self._relabel_tag_rows(rows_frame)
 
-        for key in keys:
+        for key in ordered_keys:
             add_row(key)
 
         canvas.bind_all(
@@ -3467,7 +3669,9 @@ class App(tk.Tk):
         ).grid(row=0, column=0, sticky="w")
         ttk.Label(
             footer,
-            text="Empty value removes the tag. Applies to all listed files.",
+            text=("Empty value removes the tag. Applies to all listed files."
+                  if not is_single else
+                  "Empty value removes the tag."),
             style="Muted.TLabel", font=_font(8),
         ).grid(row=0, column=1, sticky="w", padx=(10, 0))
 
@@ -3475,7 +3679,7 @@ class App(tk.Tk):
         btns.grid(row=0, column=2, sticky="e")
         ttk.Button(btns, text="Save", style="Accent.TButton",
                    command=lambda: self._save_tag_editor(
-                       win, album_dir, files, row_meta, close)
+                       win, files, file_tags, row_meta, close)
                    ).pack(side=tk.RIGHT)
         ttk.Button(btns, text="Cancel", style="Small.TButton",
                    command=close).pack(side=tk.RIGHT, padx=(0, 8))
@@ -3512,11 +3716,18 @@ class App(tk.Tk):
         if key and key.strip() and key.strip() not in row_meta:
             add_row(key.strip())
 
-    def _save_tag_editor(self, win, album_dir, files, row_meta, close):
+    def _save_tag_editor(self, win, files, file_tags, row_meta, close):
         """Write edited tag values (per-file diff) on a worker thread, then
         re-grade. The dialog closes immediately; progress lands in the
         console / status bar."""
-        changes = {key: var.get().strip() for key, var in row_meta.items()}
+        changes = {}
+        for key, var in row_meta.items():
+            val = var.get().strip()
+            if var._is_mixed and val == TAG_EDITOR_MIXED:
+                # User didn't change the mixed indicator — skip this key
+                continue
+            changes[key] = val
+
         close()
 
         def work():
@@ -3533,21 +3744,14 @@ class App(tk.Tk):
                 current = af.all_tags()
                 file_changed = False
                 for key, new in changes.items():
-                    cur_key = None
-                    cur_str = ""
-                    for k, v in current.items():
-                        if k.lower() == key.lower():
-                            cur_key = k
-                            cur_str = str(v).strip()
-                            break
+                    cur_str = current.get(key, "")
                     if cur_str == new:
                         continue
                     if new == "":
-                        if cur_str and af.delete_any_tag(key):
+                        if cur_str and af.delete_tag(key):
                             file_changed = True
                     else:
-                        target = cur_key or key
-                        if af.set_any_tag(target, new):
+                        if af.set_tag(key, new):
                             file_changed = True
                         else:
                             errors.append(
@@ -3558,10 +3762,13 @@ class App(tk.Tk):
             if errors:
                 self.log("Tag edit errors: " + "; ".join(errors), tag="red")
             if modified_files:
+                album_dir = os.path.dirname(files[0])
                 self.log(f"Edited tags in {modified_files} file(s): "
                          f"{os.path.basename(album_dir)}", tag="green")
                 self.log_q.put(("status", "Tags updated — re-grading album…"))
-                self._regrade_album(album_dir)
+                self._tag_edit_busy = True
+                self._set_job_busy("tag edit", True)
+                self._scan_q.put(("regrade", files))
             else:
                 self.log_q.put(("status", "No tag changes saved."))
 
@@ -3661,6 +3868,48 @@ class App(tk.Tk):
                 elif kind == "pause":
                     self.continue_btn.pack(side=tk.LEFT, padx=(0, 10))
                     self.status_var.set(f"Paused — Continue to run {payload}")
+                elif kind == "regrade":
+                    # Tag editor finished: re-grade the affected album(s)
+                    files = payload
+                    self._regrade_targets(files)
+                elif kind in ("update_auto", "update_check"):
+                    if kind == "update_check":
+                        win, btn, result = payload
+                    else:
+                        win, btn, result = None, None, None
+                    self._update_result = result
+                    has_update, version, url, notes, error = result
+                    if btn is not None and btn.winfo_exists():
+                        btn.configure(state=tk.NORMAL, text="Check for Updates")
+                    if error:
+                        self.log(f"Update check failed: {error}", tag="yellow")
+                        if win is not None and win.winfo_exists():
+                            messagebox.showerror(
+                                "Update Check Failed",
+                                f"Could not reach GitHub releases:\n{error}",
+                                parent=win,
+                            )
+                    elif has_update:
+                        self.log(f"Update available: v{version}", tag="yellow")
+                        if win is not None and win.winfo_exists():
+                            self._show_update_dialog(version, url, notes)
+                    elif win is not None and win.winfo_exists():
+                        messagebox.showinfo(
+                            "No Updates",
+                            "You are already on the latest version.",
+                            parent=win,
+                        )
+                elif kind == "update_download":
+                    win, btn, ok, path, error = payload
+                    if not ok:
+                        if btn.winfo_exists():
+                            btn.configure(state=tk.NORMAL, text="Download & Install")
+                        messagebox.showerror(
+                            "Update failed", error or "Installer download failed.",
+                            parent=win,
+                        )
+                    else:
+                        self._start_update_shutdown(path, dialog=win)
         except queue.Empty:
             pass
         self.after(80, self._drain_log)
@@ -3668,6 +3917,34 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
+    def _publish_instance_state(self):
+        reason = ", ".join(sorted(self._busy_reasons))
+        updater.update_instance(
+            self._instance_state_path,
+            busy=self._has_active_work(include_processes=False),
+            reason=reason,
+        )
+
+    def _set_job_busy(self, name, busy):
+        if busy:
+            self._busy_reasons.add(name)
+        else:
+            self._busy_reasons.discard(name)
+        self._publish_instance_state()
+
+    def _has_active_work(self, include_processes=True):
+        """Return true while closing or replacing the app would be unsafe."""
+        active = bool(
+            self.running
+            or getattr(self, "_library_busy", False)
+            or self._tag_edit_busy
+            or self._deps_busy
+            or (self._run_thread is not None and self._run_thread.is_alive())
+        )
+        if include_processes and active_process_count():
+            active = True
+        return active
+
     def _pick_folder(self):
         path = filedialog.askdirectory(initialdir=self.folder_var.get() or "/")
         if path:
@@ -3733,26 +4010,26 @@ class App(tk.Tk):
                   text="GitHub: https://github.com/dillydalli3r/MusicLibraryOptimizer",
                   style="Muted.TLabel", wraplength=400).pack(anchor="w", pady=(0, 16))
 
+        update_status = tk.StringVar(value="")
+        if self._update_result and self._update_result[4] is None:
+            if self._update_result[0]:
+                update_status.set(
+                    f"Update available: v{self._update_result[1]}"
+                )
+            else:
+                update_status.set("Update status: already current")
+        ttk.Label(box, textvariable=update_status, foreground=YELLOW,
+                  wraplength=400).pack(anchor="w", pady=(0, 8))
+
         ttk.Separator(box).pack(fill=tk.X, pady=(0, 12))
 
         def check_updates():
             btn.configure(state=tk.DISABLED, text="Checking...")
             def cb(has_update, version, url, notes, error):
-                def apply():
-                    btn.configure(state=tk.NORMAL, text="Check for Updates")
-                    if error:
-                        messagebox.showerror(
-                            "Update Check Failed",
-                            f"Could not reach GitHub releases:\n{error}",
-                            parent=win)
-                    elif has_update:
-                        self._show_update_dialog(version, url, notes)
-                    else:
-                        messagebox.showinfo(
-                            "No Updates",
-                            "You are already on the latest version.",
-                            parent=win)
-                win.after(0, apply)
+                self.log_q.put((
+                    "update_check", (win, btn,
+                                      (has_update, version, url, notes, error))
+                ))
             updater.check_for_updates(silent=False, callback=cb)
 
         def open_github():
@@ -3793,13 +4070,83 @@ class App(tk.Tk):
             txt.configure(state=tk.DISABLED)
 
         def download_and_install():
+            if self._has_active_work():
+                messagebox.showinfo(
+                    "Update postponed",
+                    "Finish the current operation before installing an update.",
+                    parent=win,
+                )
+                return
+            if self.config.get("confirm_before_update", True) and not messagebox.askyesno(
+                "Install update",
+                "The app will close all idle Music Library Optimizer windows "
+                "before the installer starts. Continue?",
+                parent=win,
+            ):
+                return
             btn.configure(state=tk.DISABLED, text="Downloading...")
-            updater.download_and_run_installer(url, lambda ok: win.after(0, win.destroy))
+            updater.download_and_prepare_installer(
+                url,
+                lambda ok, path, error: self.log_q.put(
+                    ("update_download", (win, btn, ok, path, error))
+                ),
+            )
         btn = ttk.Button(box, text="Download & Install", style="Accent.TButton",
                          command=download_and_install)
         btn.pack(side=tk.LEFT, pady=(12, 0))
         ttk.Button(box, text="Later", style="Small.TButton",
                    command=win.destroy).pack(side=tk.RIGHT, pady=(12, 0))
+
+    def _start_update_shutdown(self, installer_path, dialog=None):
+        """Coordinate every app instance, then let the helper run setup."""
+        if self._has_active_work():
+            messagebox.showinfo(
+                "Update postponed",
+                "The update cannot start while the library, a script, a tag "
+                "edit, or an external tool is still working.",
+                parent=self,
+            )
+            try:
+                os.remove(installer_path)
+            except OSError:
+                pass
+            return
+
+        other_busy = updater.busy_instance_pids(os.getpid())
+        if other_busy:
+            reasons = ", ".join(
+                f"PID {pid}: {reason}" for pid, reason in other_busy.items()
+            )
+            messagebox.showwarning(
+                "Update postponed",
+                "Another Music Library Optimizer instance is still working. "
+                f"Finish it before updating.\n\n{reasons}",
+                parent=self,
+            )
+            try:
+                os.remove(installer_path)
+            except OSError:
+                pass
+            return
+
+        pids = updater.app_instance_pids()
+        other_pids = pids - {os.getpid()}
+        if self.config.get("update_close_other_instances", True):
+            updater.request_close_instances(other_pids)
+        try:
+            updater.launch_installer_after_shutdown(installer_path, pids)
+        except Exception as e:
+            self.log(f"Could not schedule installer: {e}", tag="red")
+            messagebox.showerror(
+                "Update failed", f"Could not schedule the installer:\n{e}",
+                parent=self,
+            )
+            return
+
+        self._shutdown_for_update = True
+        if dialog is not None and dialog.winfo_exists():
+            dialog.destroy()
+        self.on_destroy()
 
     def _show_no_update(self):
         messagebox.showinfo("No Updates", "You are already on the latest version.", parent=self)
@@ -3818,6 +4165,7 @@ class App(tk.Tk):
 
     def _set_running(self, flag, label=""):
         self.running = flag
+        self._set_job_busy("script run", flag)
         state = tk.DISABLED if flag else tk.NORMAL
         for b in self.run_buttons:
             b.configure(state=state)
@@ -3862,6 +4210,7 @@ class App(tk.Tk):
         folder = self.folder_var.get().strip()
         if folder:
             self.config["music_folder"] = folder
+            save_config(self.config)
 
         self._set_running(True, title)
         self.log("")
@@ -3885,6 +4234,7 @@ class App(tk.Tk):
                   self.force_autotag_var.get()),
             daemon=True
         )
+        self._run_thread = t
         t.start()
 
     # ------------------------------------------------------------------
@@ -3903,22 +4253,19 @@ class App(tk.Tk):
 
         # Runners never mutate the config; a copy lets us scope a run to
         # user-selected directories/tracks without affecting the app.
-        run_cfg = self.config
-        if (targets or force_flac or force_images or force_audit
-                or force_dr or force_autotag):
-            run_cfg = self.config.copy()
-            if targets:
-                run_cfg["targets"] = list(targets)
-            if force_flac:
-                run_cfg["force_reencode_flac"] = True
-            if force_images:
-                run_cfg["force_reencode_images"] = True
-            if force_audit:
-                run_cfg["force_audit"] = True
-            if force_dr:
-                run_cfg["force_dr_replaygain"] = True
-            if force_autotag:
-                run_cfg["force_auto_tag"] = True
+        run_cfg = normalize_config(self.config)
+        if targets is not None:
+            run_cfg["targets"] = list(targets)
+        if force_flac:
+            run_cfg["force_reencode_flac"] = True
+        if force_images:
+            run_cfg["force_reencode_images"] = True
+        if force_audit:
+            run_cfg["force_audit"] = True
+        if force_dr:
+            run_cfg["force_dr_replaygain"] = True
+        if force_autotag:
+            run_cfg["force_auto_tag"] = True
 
         per_script = []
         total_bytes_added = total_bytes_removed = total_errors = 0
@@ -3989,13 +4336,15 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------
     def on_destroy(self):
-        if self.running:
-            if not messagebox.askyesno(
+        if not self._shutdown_for_update and self._has_active_work():
+            messagebox.showinfo(
                 "Operation in progress",
-                "An operation is still running. Closing now may leave files "
-                "half-processed. Close anyway?",
-            ):
-                return
+                "Finish the current scan, script, download, tag edit, or "
+                "external tool before closing the application.",
+                parent=self,
+            )
+            return
+        updater.unregister_instance(self._instance_state_path)
         sys.stdout, sys.stderr = self._real_stdout, self._real_stderr
         self.destroy()
 

@@ -6,12 +6,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _walk_files, _diff_bytes,
-    _collect_targets,
+    _collect_targets, worker_count,
 )
 from .ui import print_header, log, log_file_result
 
 def _process_cue_file(args):
-    filename, keep_empty_lines, keep_other_lines = args
+    filename, keep_empty_lines, keep_other_lines, file_type, append_final_newline = args
     tmp_path = None
 
     try:
@@ -65,7 +65,7 @@ def _process_cue_file(args):
             elif upper.startswith("FILE"):
                 m = re.search(r'"([^"]*)"', stripped)
                 name = m.group(1) if m else stripped
-                formatted.append(f'FILE "{name}" WAVE')
+                formatted.append(f'FILE "{name}" {file_type}')
 
             elif upper.startswith("TRACK"):
                 parts = stripped.split(None, 2)
@@ -106,6 +106,8 @@ def _process_cue_file(args):
         # Guarantee no trailing blank / whitespace-only lines AND no trailing
         # newline byte at all (empty cue -> empty file).
         new_content = new_content.rstrip()
+        if new_content and append_final_newline:
+            new_content += "\n"
 
         if new_content == original_content:
             return (filename, False, None, 0, 0)
@@ -142,6 +144,10 @@ def run_format_cues(config):
     target = config["music_folder"]
     keep_empty = config.get("keep_empty_cue_lines", False)
     keep_other = config.get("keep_other_cue_lines", False)
+    file_type = config.get("cue_file_type", "WAVE").upper()
+    if file_type not in ("WAVE", "MP3"):
+        file_type = "WAVE"
+    append_final_newline = config.get("append_final_newline", False)
     stats = new_stats()
 
     print_header("CUE Formatter")
@@ -153,8 +159,9 @@ def run_format_cues(config):
 
     # First pass: deterministically rename multi-CD cues to CD-N.cue
     # (based on their FILE entries), then re-collect.
-    cues = _collect_targets(config.get("targets"), (".cue",))
-    if not cues:
+    targets = config.get("targets")
+    cues = _collect_targets(targets, (".cue",))
+    if targets is None:
         cues = sorted(_walk_files(target, (".cue",)))
 
     from .discs import rename_cues_for_discs
@@ -164,20 +171,26 @@ def run_format_cues(config):
             renamed_any = True
             log(f"cue renamed: {old} -> {new}")
     if renamed_any:
-        cues = _collect_targets(config.get("targets"), (".cue",))
-        if not cues:
+        cues = _collect_targets(targets, (".cue",))
+        if targets is None:
             cues = sorted(_walk_files(target, (".cue",)))
 
     if not cues:
         log("No .cue files found.")
         return stats
 
-    threads = min(64, (os.cpu_count() or 4) * 4)
+    threads = worker_count(
+        config, default=(os.cpu_count() or 4) * 4,
+        maximum=64, items=len(cues)
+    )
     counts = {"ok": 0, "skip": 0, "fail": 0}
 
     with ThreadPoolExecutor(max_workers=threads) as ex:
         futures = {
-            ex.submit(_process_cue_file, (f, keep_empty, keep_other)): f
+            ex.submit(
+                _process_cue_file,
+                (f, keep_empty, keep_other, file_type, append_final_newline),
+            ): f
             for f in cues
         }
 

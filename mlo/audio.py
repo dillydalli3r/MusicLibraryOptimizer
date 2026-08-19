@@ -5,11 +5,49 @@ from mutagen.id3 import TextFrame, Frames
 
 from .deps import (
     FLAC, OggVorbis, OggOpus, MP3, MP4, MP4FreeForm,
-    TXXX, USLT, Encoding,
+    TXXX, USLT, COMM, Encoding,
 )
 from .stats import _decode_mp4_value
 
 TAG_MAP = {
+    # Standard sorting/display fields. These are semantic names; the
+    # container-specific keys below keep tag editing safe across formats.
+    "TITLE": {
+        "flac": "TITLE", "mp3": ("TIT2", None), "mp4": "\xa9nam",
+    },
+    "ALBUM": {
+        "flac": "ALBUM", "mp3": ("TALB", None), "mp4": "\xa9alb",
+    },
+    "ARTIST": {
+        "flac": "ARTIST", "mp3": ("TPE1", None), "mp4": "\xa9ART",
+    },
+    "ALBUMARTIST": {
+        "flac": "ALBUMARTIST", "mp3": ("TPE2", None), "mp4": "aART",
+    },
+    "TRACKNUMBER": {
+        "flac": "TRACKNUMBER", "mp3": ("TRCK", None), "mp4": "trkn",
+    },
+    "DISCNUMBER": {
+        "flac": "DISCNUMBER", "mp3": ("TPOS", None), "mp4": "disk",
+    },
+    "DATE": {
+        "flac": "DATE", "mp3": ("TDRC", None), "mp4": "\xa9day",
+    },
+    "COMPOSER": {
+        "flac": "COMPOSER", "mp3": ("TCOM", None), "mp4": "\xa9wrt",
+    },
+    "COMMENT": {
+        "flac": "COMMENT", "mp3": ("COMM", None), "mp4": "\xa9cmt",
+    },
+    "BPM": {
+        "flac": "BPM", "mp3": ("TBPM", None), "mp4": "tmpo",
+    },
+    "COPYRIGHT": {
+        "flac": "COPYRIGHT", "mp3": ("TCOP", None), "mp4": "cprt",
+    },
+    "LYRICS": {
+        "flac": "LYRICS", "mp3": ("USLT", None), "mp4": "\xa9lyr",
+    },
     "GENRE": {
         "flac": "GENRE",
         "mp3": ("TCON", None),
@@ -165,6 +203,34 @@ class AudioFile:
     # ------------------------------------------------------------------
     # Tag read
     # ------------------------------------------------------------------
+    @staticmethod
+    def _id3_text(frame):
+        value = getattr(frame, "text", None)
+        if isinstance(value, list):
+            return "; ".join(str(item) for item in value)
+        return str(value) if value is not None else None
+
+    @staticmethod
+    def _mp4_text(value):
+        if isinstance(value, (tuple, list)) and value:
+            value = value[0]
+        if isinstance(value, tuple) and len(value) >= 2:
+            return f"{value[0]}/{value[1]}"
+        if isinstance(value, bytes):
+            return value.decode("utf-8", "replace")
+        return str(value) if value is not None else None
+
+    @staticmethod
+    def _mp4_pair(value):
+        text = str(value).strip()
+        parts = text.split("/", 1)
+        try:
+            first = int(parts[0])
+            second = int(parts[1]) if len(parts) > 1 else 0
+            return (first, second)
+        except (TypeError, ValueError):
+            return None
+
     def get_tag(self, name):
         if self.audio is None:
             return None
@@ -188,15 +254,19 @@ class AudioFile:
 
             elif kind == "mp3":
                 frame_type, desc = spec["mp3"]
-
-                if frame_type == "TCON":
-                    for f in self.audio.tags.getall("TCON"):
-                        return f.text[0] if f.text else None
+                if self.audio.tags is None:
                     return None
-
-                for f in self.audio.tags.getall("TXXX"):
-                    if f.desc == desc:
-                        return f.text[0] if f.text else None
+                if frame_type == "TXXX":
+                    for frame in self.audio.tags.getall("TXXX"):
+                        if frame.desc.upper() == desc.upper():
+                            return self._id3_text(frame)
+                    return None
+                if frame_type == "USLT":
+                    return self.get_lyrics()
+                for frame in self.audio.tags.getall(frame_type):
+                    if frame_type == "COMM" and getattr(frame, "lang", "eng") != "eng":
+                        continue
+                    return self._id3_text(frame)
                 return None
 
             elif kind == "mp4":
@@ -210,12 +280,7 @@ class AudioFile:
                         return None
                     return _decode_mp4_value(vals[0])
 
-                v = self.audio.get(atom)
-                if isinstance(v, list) and v:
-                    v = v[0]
-                if isinstance(v, bytes):
-                    return v.decode("utf-8", "replace")
-                return str(v) if v is not None else None
+                return self._mp4_text(self.audio.get(atom))
 
         except Exception:
             return None
@@ -230,11 +295,12 @@ class AudioFile:
     # Generic tag enumeration / edit (used by the GUI tag editor)
     # ------------------------------------------------------------------
     def all_tags(self):
-        """Return {display_key: value} for every textual tag on the file.
+        """Return semantic tag names and unknown raw keys for the file.
 
-        Keys are the raw container keys (vorbis comment names, ID3 frame
-        IDs, MP4 atoms). Binary frames (cover art, unsynced lyrics) are
-        skipped.
+        Standard fields are normalized to names such as ``TITLE`` and
+        ``TRACKNUMBER`` so the editor can safely write the correct ID3 frame,
+        Vorbis comment, or MP4 atom for each container. Binary artwork is
+        omitted; textual custom tags remain available under their raw key.
         """
         if self.audio is None or self.audio.tags is None:
             return {}
@@ -246,7 +312,13 @@ class AudioFile:
                     val = v[0] if isinstance(v, list) and v else v
                     if isinstance(val, bytes):
                         continue
-                    out[str(k)] = str(val)
+                    raw = str(k)
+                    canonical = next(
+                        (name for name, spec in TAG_MAP.items()
+                         if str(spec.get("flac", "")).lower() == raw.lower()),
+                        raw,
+                    )
+                    out[canonical] = str(val)
 
             elif self.kind == "mp3":
                 for frame in self.audio.tags.values():
@@ -254,12 +326,28 @@ class AudioFile:
                     if not fid:
                         continue
                     if fid == "TXXX":
-                        out[f"TXXX:{frame.desc}"] = (
-                            str(frame.text[0]) if frame.text else "")
-                    elif fid in ("USLT", "APIC", "COMM"):
+                        desc = str(frame.desc)
+                        canonical = next(
+                            (name for name, spec in TAG_MAP.items()
+                             if spec.get("mp3") == ("TXXX", desc)
+                             or (spec.get("mp3", (None, None))[0] == "TXXX"
+                                 and str(spec["mp3"][1]).upper() == desc.upper())),
+                            f"TXXX:{desc}",
+                        )
+                        out[canonical] = self._id3_text(frame) or ""
+                    elif fid == "USLT":
+                        out["LYRICS"] = self.get_lyrics() or ""
+                    elif fid == "APIC":
                         continue
+                    elif fid == "COMM":
+                        out.setdefault("COMMENT", self._id3_text(frame) or "")
                     elif isinstance(frame, TextFrame):
-                        out[fid] = str(frame.text[0]) if frame.text else ""
+                        canonical = next(
+                            (name for name, spec in TAG_MAP.items()
+                             if spec.get("mp3", (None, None))[0] == fid),
+                            fid,
+                        )
+                        out[canonical] = self._id3_text(frame) or ""
 
             elif self.kind == "mp4":
                 for k, v in self.audio.tags.items():
@@ -270,13 +358,32 @@ class AudioFile:
                         val = _decode_mp4_value(val)
                     if isinstance(val, bytes):
                         continue
-                    out[str(k)] = str(val)
+                    raw = str(k)
+                    canonical = raw
+                    if raw.startswith("----:com.apple.iTunes:"):
+                        name = raw.rsplit(":", 1)[-1]
+                        canonical = next(
+                            (n for n, spec in TAG_MAP.items()
+                             if isinstance(spec.get("mp4"), tuple)
+                             and spec["mp4"][0] == "freeform"
+                             and spec["mp4"][2].lower() == name.lower()),
+                            raw,
+                        )
+                    else:
+                        canonical = next(
+                            (n for n, spec in TAG_MAP.items()
+                             if spec.get("mp4") == raw), raw
+                        )
+                    out[canonical] = self._mp4_text(val) or ""
         except Exception:
             return {}
         return out
 
     def set_any_tag(self, key, value):
         """Write an arbitrary tag key (raw container key)."""
+        canonical = str(key).upper()
+        if canonical in TAG_MAP:
+            return self.set_tag(canonical, value)
         self._invalidate_cache()
         if self.audio is None:
             return False
@@ -343,6 +450,9 @@ class AudioFile:
 
     def delete_any_tag(self, key):
         """Remove an arbitrary tag key (raw container key)."""
+        canonical = str(key).upper()
+        if canonical in TAG_MAP:
+            return self.delete_tag(canonical)
         self._invalidate_cache()
         if self.audio is None:
             return False
@@ -396,6 +506,9 @@ class AudioFile:
         if self.audio is None:
             return False
 
+        name = str(name).upper()
+        if name == "LYRICS":
+            return self.set_lyrics(value)
         spec = TAG_MAP.get(name)
         if spec is None:
             return False
@@ -416,22 +529,35 @@ class AudioFile:
 
             elif kind == "mp3":
                 frame_type, desc = spec["mp3"]
-                if frame_type != "TXXX":
-                    return False
-
                 if self.audio.tags is None:
                     self.audio.add_tags()
 
-                for frame in list(self.audio.tags.getall("TXXX")):
-                    if frame.desc == desc:
-                        try:
-                            del self.audio.tags[frame.HashKey]
-                        except Exception:
-                            pass
-
-                self.audio.tags.add(
-                    TXXX(encoding=Encoding.UTF8, desc=desc, text=[value])
-                )
+                if frame_type == "USLT":
+                    return self.set_lyrics(value)
+                if frame_type == "TXXX":
+                    for frame in list(self.audio.tags.getall("TXXX")):
+                        if frame.desc.upper() == desc.upper():
+                            try:
+                                del self.audio.tags[frame.HashKey]
+                            except Exception:
+                                pass
+                    self.audio.tags.add(
+                        TXXX(encoding=Encoding.UTF8, desc=desc, text=[value])
+                    )
+                else:
+                    self.audio.tags.delall(frame_type)
+                    if frame_type == "COMM":
+                        self.audio.tags.add(
+                            COMM(encoding=Encoding.UTF8, lang="eng",
+                                 desc="", text=value)
+                        )
+                    else:
+                        frame_cls = Frames.get(frame_type)
+                        if frame_cls is None:
+                            return False
+                        self.audio.tags.add(
+                            frame_cls(encoding=Encoding.UTF8, text=[value])
+                        )
                 self.audio.save()
                 return True
 
@@ -455,6 +581,16 @@ class AudioFile:
                         self.audio[key] = [
                             MP4FreeForm(value.encode("utf-8"))
                         ]
+                elif atom in ("trkn", "disk"):
+                    pair = self._mp4_pair(value)
+                    if pair is None:
+                        return False
+                    self.audio[atom] = [pair]
+                elif atom == "tmpo":
+                    try:
+                        self.audio[atom] = [int(value)]
+                    except (TypeError, ValueError):
+                        return False
                 else:
                     self.audio[atom] = [value]
 
@@ -472,6 +608,9 @@ class AudioFile:
         if self.audio is None:
             return False
 
+        name = str(name).upper()
+        if name == "LYRICS":
+            return self.delete_lyrics()
         spec = TAG_MAP.get(name)
         if spec is None:
             return False
@@ -498,21 +637,24 @@ class AudioFile:
 
             elif kind == "mp3":
                 frame_type, desc = spec["mp3"]
-                if frame_type != "TXXX":
-                    return False
-
                 if self.audio.tags is None:
                     return True
 
                 changed = False
-
-                for frame in list(self.audio.tags.getall("TXXX")):
-                    if frame.desc == desc:
-                        try:
-                            del self.audio.tags[frame.HashKey]
-                            changed = True
-                        except Exception:
-                            pass
+                if frame_type == "USLT":
+                    return self.delete_lyrics()
+                if frame_type == "TXXX":
+                    for frame in list(self.audio.tags.getall("TXXX")):
+                        if frame.desc.upper() == desc.upper():
+                            try:
+                                del self.audio.tags[frame.HashKey]
+                                changed = True
+                            except Exception:
+                                pass
+                else:
+                    before = len(self.audio.tags.getall(frame_type))
+                    self.audio.tags.delall(frame_type)
+                    changed = before > 0
 
                 if changed:
                     self.audio.save()

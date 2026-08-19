@@ -11,11 +11,55 @@ nothing is lost.
 
 import os
 import subprocess
+import threading
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+_ACTIVE = {}
+_ACTIVE_LOCK = threading.Lock()
+
+
+def active_process_count():
+    """Return the number of external tools currently owned by this process."""
+    with _ACTIVE_LOCK:
+        for pid, proc in list(_ACTIVE.items()):
+            if proc.poll() is not None:
+                _ACTIVE.pop(pid, None)
+        return len(_ACTIVE)
 
 
 def run_tool(*args, **kwargs):
-    """Drop-in subprocess.run() that hides child console windows on Windows."""
+    """Run a tool without a console window and keep an active-process count.
+
+    The wrapper mirrors the subset of ``subprocess.run`` used by the project,
+    including ``capture_output``, ``input``, ``timeout`` and ``check``.
+    """
     kwargs.setdefault("creationflags", CREATE_NO_WINDOW)
-    return subprocess.run(*args, **kwargs)
+    input_data = kwargs.pop("input", None)
+    capture_output = kwargs.pop("capture_output", False)
+    check = kwargs.pop("check", False)
+    if capture_output:
+        if "stdout" in kwargs or "stderr" in kwargs:
+            raise ValueError("stdout and stderr arguments may not be used with capture_output")
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    timeout = kwargs.pop("timeout", None)
+
+    proc = subprocess.Popen(*args, **kwargs)
+    with _ACTIVE_LOCK:
+        _ACTIVE[proc.pid] = proc
+    try:
+        stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        raise
+    finally:
+        with _ACTIVE_LOCK:
+            _ACTIVE.pop(proc.pid, None)
+
+    result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+    if check and proc.returncode:
+        raise subprocess.CalledProcessError(
+            proc.returncode, proc.args, output=stdout, stderr=stderr
+        )
+    return result

@@ -293,7 +293,8 @@ def score_disc_log(cli_exe, log_path, disc_files, timeout=300):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None):
+def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
+                     write_tags=True):
     """Rename logs/cues to CD-N and write LOG_GRADE (0-100) to every
     track of MEDIA=CD albums, one score per disc.
 
@@ -336,6 +337,8 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None):
             continue
         scores[d] = score
         for p in paths:
+            if not write_tags:
+                continue
             t = AudioFile(p)
             if str(t.get_tag("LOG_GRADE") or "").strip() != str(score):
                 if t.set_tag("LOG_GRADE", str(score)):

@@ -9,14 +9,14 @@ from .paths import AUDIO_EXTS, DEFAULT_DIGITAL_SOURCE
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _diff_bytes,
     _walk_files, is_audio_file, _find_albums, _clean_set, _summarize_values,
-    _collect_targets,
+    _collect_targets, worker_count,
 )
 from .ui import print_header, log, c, Color, log_file_result
 
 TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]")
 
 
-SPACE_AFTER_TS_RE = re.compile(r"(\[\d{2}:\d{2}\.\d{2}\])\s+")
+SPACE_AFTER_TS_RE = re.compile(r"(\[\d{2}:\d{2}\.\d{2,3}\])\s+")
 
 
 LRC_META_RE = re.compile(
@@ -25,35 +25,36 @@ LRC_META_RE = re.compile(
 )
 
 
-def _round_ms_to_2(ms_str):
+def _round_ms(ms_str, precision=2):
     try:
         d = Decimal("0." + ms_str).quantize(
-            Decimal("0.01"),
+            Decimal("0." + ("0" * max(1, precision))),
             rounding=ROUND_HALF_UP,
         )
         s = format(d, "f")
         digits = s.split(".", 1)[1] if "." in s else "00"
-        return digits[:2].ljust(2, "0")
+        return digits[:precision].ljust(precision, "0")
     except (InvalidOperation, ValueError):
-        return ms_str[:2].ljust(2, "0")
+        return ms_str[:precision].ljust(precision, "0")
 
 
-def _reformat_ts(m):
+def _reformat_ts(m, precision=2):
     mins = m.group(1).zfill(2)
     secs = m.group(2).zfill(2)
     ms = m.group(3)
 
     if ms is None:
-        ms = "00"
-    elif len(ms) > 2:
-        ms = _round_ms_to_2(ms)
+        ms = "0" * precision
+    elif len(ms) > precision:
+        ms = _round_ms(ms, precision)
     else:
-        ms = ms.ljust(2, "0")[:2]
+        ms = ms.ljust(precision, "0")[:precision]
 
     return f"[{mins}:{secs}.{ms}]"
 
 
-def format_lyrics_text(text):
+def format_lyrics_text(text, precision=2, strip_metadata=True,
+                       collapse_blank_lines=True):
     """
     Cleans lyrics:
     - POSIX newlines
@@ -66,7 +67,10 @@ def format_lyrics_text(text):
         return text
 
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = TIMESTAMP_RE.sub(_reformat_ts, text)
+    precision = 3 if int(precision) == 3 else 2
+    text = TIMESTAMP_RE.sub(
+        lambda match: _reformat_ts(match, precision), text
+    )
     text = SPACE_AFTER_TS_RE.sub(r"\1", text)
 
     lines = []
@@ -76,20 +80,21 @@ def format_lyrics_text(text):
 
         if not s:
             lines.append("")
-        elif LRC_META_RE.match(s):
+        elif strip_metadata and LRC_META_RE.match(s):
             continue
         else:
             lines.append(s)
 
-    cleaned = []
-    prev_blank = False
-
-    for line in lines:
-        is_blank = line == ""
-        if is_blank and prev_blank:
-            continue
-        cleaned.append(line)
-        prev_blank = is_blank
+    cleaned = lines
+    if collapse_blank_lines:
+        cleaned = []
+        prev_blank = False
+        for line in lines:
+            is_blank = line == ""
+            if is_blank and prev_blank:
+                continue
+            cleaned.append(line)
+            prev_blank = is_blank
 
     while cleaned and cleaned[0] == "":
         cleaned.pop(0)
@@ -103,7 +108,7 @@ def _lrc_for(audio_path):
     return os.path.splitext(audio_path)[0] + ".lrc"
 
 
-def _canonical_lyrics(text):
+def _canonical_lyrics(text, append_final_newline=False):
     """Canonicalize lyrics for storage.
 
     - CRLF -> LF.
@@ -124,7 +129,26 @@ def _canonical_lyrics(text):
         lines.pop(0)
     while lines and not lines[-1].strip():
         lines.pop()
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    if result and append_final_newline:
+        result += "\n"
+    return result
+
+
+def _format_for_storage(text, cfg, optimize=True):
+    """Format lyrics using the persisted exact-output choices."""
+    source = text
+    if optimize:
+        source = format_lyrics_text(
+            text,
+            precision=cfg.get("lrc_timestamp_precision", 2),
+            strip_metadata=cfg.get("lrc_strip_metadata", True),
+            collapse_blank_lines=cfg.get("lrc_collapse_blank_lines", True),
+        )
+    return _canonical_lyrics(
+        source,
+        append_final_newline=cfg.get("append_final_newline", False),
+    )
 
 
 def _process_lyrics_for_audio(audio_path, cfg):
@@ -144,7 +168,7 @@ def _process_lyrics_for_audio(audio_path, cfg):
     if cfg.get("optimize_embedded_lyrics", True):
         cur = af.get_lyrics()
         if cur:
-            cleaned = _canonical_lyrics(format_lyrics_text(cur))
+            cleaned = _format_for_storage(cur, cfg, optimize=True)
             if cleaned != cur:
                 if af.set_lyrics(cleaned):
                     modified = True
@@ -155,7 +179,9 @@ def _process_lyrics_for_audio(audio_path, cfg):
             with open(lrc_path, "r", encoding="utf-8", errors="replace") as f:
                 lrc_content = f.read()
 
-            final = _canonical_lyrics(format_lyrics_text(lrc_content))
+            final = _format_for_storage(
+                lrc_content, cfg, optimize=cfg.get("optimize_lrc", True)
+            )
 
             if final != lrc_content:
                 with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
@@ -174,10 +200,9 @@ def _process_lyrics_for_audio(audio_path, cfg):
         except Exception as e:
             return ("fail", 0, 0, f"lrc read: {e}")
 
-        cleaned = _canonical_lyrics(
-            format_lyrics_text(lrc_content)
-            if cfg.get("optimize_lrc", True)
-            else lrc_content)
+        cleaned = _format_for_storage(
+            lrc_content, cfg, optimize=cfg.get("optimize_lrc", True)
+        )
 
         if af.set_lyrics(cleaned):
             try:
@@ -192,10 +217,9 @@ def _process_lyrics_for_audio(audio_path, cfg):
         cur = af.get_lyrics()
         if cur:
             # Copy embedded -> LRC, then drop the embedded tag.
-            final = _canonical_lyrics(
-                format_lyrics_text(cur)
-                if cfg.get("optimize_lrc", True)
-                else cur)
+            final = _format_for_storage(
+                cur, cfg, optimize=cfg.get("optimize_lrc", True)
+            )
 
             try:
                 with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
@@ -213,10 +237,9 @@ def _process_lyrics_for_audio(audio_path, cfg):
         cur = af.get_lyrics()
         if cur:
             if not lrc_exists:
-                final = _canonical_lyrics(
-                    format_lyrics_text(cur)
-                    if cfg.get("optimize_lrc", True)
-                    else cur)
+                final = _format_for_storage(
+                    cur, cfg, optimize=cfg.get("optimize_lrc", True)
+                )
                 try:
                     with open(lrc_path, "w", encoding="utf-8",
                               newline="\n") as f:
@@ -231,10 +254,9 @@ def _process_lyrics_for_audio(audio_path, cfg):
                     lrc_content = f.read()
             except Exception as e:
                 return ("fail", 0, 0, f"lrc read: {e}")
-            cleaned = _canonical_lyrics(
-                format_lyrics_text(lrc_content)
-                if cfg.get("optimize_lrc", True)
-                else lrc_content)
+            cleaned = _format_for_storage(
+                lrc_content, cfg, optimize=cfg.get("optimize_lrc", True)
+            )
             if af.set_lyrics(cleaned):
                 modified = True
 
@@ -242,7 +264,8 @@ def _process_lyrics_for_audio(audio_path, cfg):
 
     # INSTRUMENTAL=1 with lyrics present is contradictory: flip it to 0.
     inst = af.get_tag("INSTRUMENTAL")
-    if inst is not None and str(inst).strip() == "1":
+    if (cfg.get("fix_instrumental_from_lyrics", True)
+            and inst is not None and str(inst).strip() == "1"):
         embedded_now = bool(af.get_lyrics() and str(af.get_lyrics()).strip())
         lrc_now = os.path.exists(lrc_path)
 
@@ -391,7 +414,7 @@ def _normalize_media_source_library(config, stats):
 
     albums = _find_albums(folder)
 
-    if config.get("targets"):
+    if config.get("targets") is not None:
         target_files = _collect_targets(config["targets"], AUDIO_EXTS)
         albums = sorted({os.path.dirname(f) for f in target_files})
 
@@ -399,7 +422,7 @@ def _normalize_media_source_library(config, stats):
         return stats
 
     counts = {"ok": 0, "skip": 0, "fail": 0}
-    workers = min(16, os.cpu_count() or 1, len(albums))
+    workers = worker_count(config, default=16, maximum=16, items=len(albums))
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
@@ -466,12 +489,16 @@ def run_format_lyrics(config):
         log(c(f"ERROR: folder does not exist: {folder}", Color.RED))
         return stats
 
-    files = _collect_targets(config.get("targets"), AUDIO_EXTS)
-    if not files:
+    targets = config.get("targets")
+    files = _collect_targets(targets, AUDIO_EXTS)
+    if targets is None:
         files = sorted(_walk_files(folder, AUDIO_EXTS))
 
     if files:
-        threads = min(64, (os.cpu_count() or 1) * 3)
+        threads = worker_count(
+            config, default=(os.cpu_count() or 1) * 3,
+            maximum=64, items=len(files)
+        )
         counts = {"ok": 0, "skip": 0, "fail": 0}
 
         with ThreadPoolExecutor(max_workers=threads) as ex:
