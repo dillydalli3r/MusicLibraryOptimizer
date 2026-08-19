@@ -2028,6 +2028,13 @@ class App(tk.Tk):
         console_tab.rowconfigure(0, weight=1)
         notebook.add(console_tab, text="Console")
 
+        # Force both tab buttons to identical padding so their size never
+        # changes when switching between them, and re-pin the window size on
+        # tab changes so nothing can resize while toggling Library/Console.
+        for _tid in notebook.tabs():
+            notebook.tab(_tid, padding=(28, 11))
+        notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
         # Determine compact mode
         compact = self.compact_var.get()
 
@@ -2741,6 +2748,21 @@ class App(tk.Tk):
         self.library_tree.configure(
             show="tree" if self.compact_var.get() else "tree headings")
         self._refresh_console_compact()
+
+    def _on_tab_changed(self, event=None):
+        """Switching Library/Console tabs must never resize the window.
+
+        Belt-and-suspenders on top of pack_propagate(False): re-assert the
+        current window size in case any geometry propagation tried to grow
+        or shrink the window to fit the newly-selected tab's content.
+        """
+        try:
+            geo = self.winfo_geometry()
+            size = geo.split("+")[0]
+            if size and size.count("x") == 1:
+                self.geometry(size)
+        except Exception:
+            pass
 
     def _on_force_master(self):
         """Master Force pill: on = every force option on, off = all off."""
