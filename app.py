@@ -1306,10 +1306,12 @@ class FirstRunWizard(tk.Toplevel):
             pass
         if self.step < len(self.steps) - 1:
             self._show_step(self.step + 1)
-        else:
-            self._show_step(self.step + 1)
 
     def _finish(self):
+        # Save the music folder chosen in step 1
+        folder = self.vars.get("music_folder", "").get().strip()
+        if folder:
+            self.config["music_folder"] = folder
         # Apply preset if selected
         if self.vars.get("use_preset", tk.BooleanVar(value=True)).get():
             self._apply_preset()
@@ -1443,7 +1445,8 @@ class FirstRunWizard(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Music Library Optimizer")
+        from mlo import __version__
+        self.title(f"Music Library Optimizer v{__version__}")
         self.configure(background=BG)
         self.geometry("1180x760")
         self.minsize(880, 580)
@@ -1458,24 +1461,25 @@ class App(tk.Tk):
             return
 
         self.config = load_config()
-        
+        self.log_q = queue.Queue()
+        self.running = False
+        self.run_buttons = []
+        self._continue_event = threading.Event()
+        self._continue_event.set()
+
+        global UI_FAMILY
+        UI_FAMILY = _pick_ui_family()
+
+        # Set up styles before anything renders (wizard or main window).
+        self._setup_style()
+
         # First-run wizard
         if not self.config.get("first_run_done", False):
             self.withdraw()  # Hide main window until wizard completes
             FirstRunWizard(self, self.config, self._after_first_run)
             return
 
-        self.log_q = queue.Queue()
-        self.running = False
-        self.run_buttons = []
-        self._continue_event = threading.Event()
-        self._continue_event.set()
         self._monospace = self._pick_monospace()
-
-        global UI_FAMILY
-        UI_FAMILY = _pick_ui_family()
-
-        self._setup_style()
         self._build_ui()
 
         try:
@@ -1486,6 +1490,8 @@ class App(tk.Tk):
             pass
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _pick_monospace():
         try:
             families = set(tkfont.families())
             for name in ("Cascadia Code", "Cascadia Mono", "Consolas",
@@ -1499,7 +1505,7 @@ class App(tk.Tk):
     def _after_first_run(self):
         """Called when first-run wizard completes."""
         self.deiconify()  # Show main window
-        self._setup_style()
+        self._monospace = self._pick_monospace()
         self._build_ui()
 
         try:
@@ -1696,6 +1702,23 @@ class App(tk.Tk):
 
         sidebar = ttk.Frame(main, style="Side.TFrame", padding=(16, 16))
         sidebar.grid(row=0, column=0, sticky="nswe")
+
+        # Branded header
+        brand = ttk.Frame(sidebar, style="Side.TFrame")
+        brand.pack(fill=tk.X, pady=(0, 16))
+        try:
+            logo = tk.PhotoImage(file=os.path.join(SCRIPT_DIR, "app_icon.ico"))
+            logo_lbl = ttk.Label(brand, image=logo, style="Side.TLabel")
+            logo_lbl.image = logo
+            logo_lbl.pack(side=tk.LEFT, padx=(0, 10))
+        except Exception:
+            pass
+        brand_text = ttk.Frame(brand, style="Side.TFrame")
+        brand_text.pack(side=tk.LEFT)
+        ttk.Label(brand_text, text="Music Library",
+                  style="Side.TLabel", font=_sfont(13), foreground=BRIGHT).pack(anchor="w")
+        ttk.Label(brand_text, text="Optimizer",
+                  style="Side.TLabel", font=_sfont(13), foreground=BRIGHT).pack(anchor="w")
 
         ttk.Label(sidebar, text="RUN SCRIPTS", style="Section.Side.TLabel").pack(
             anchor="w", pady=(0, 8)
@@ -2036,10 +2059,12 @@ class App(tk.Tk):
         status.columnconfigure(1, weight=1)
 
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Button(status, text="\u2699  Settings", style="Small.TButton",
-                   command=self._open_config).grid(row=0, column=0, sticky="w")
-        ttk.Button(status, text="\u24d8  About", style="Small.TButton",
-                   command=self._show_about).grid(row=0, column=0, sticky="w", padx=(100, 0))
+        left = ttk.Frame(status, style="Panel.TFrame")
+        left.grid(row=0, column=0, sticky="w")
+        ttk.Button(left, text="\u2699  Settings", style="Small.TButton",
+                   command=self._open_config).pack(side=tk.LEFT)
+        ttk.Button(left, text="\u24d8  About", style="Small.TButton",
+                   command=self._show_about).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Label(status, textvariable=self.status_var,
                   style="Panel.TLabel").grid(row=0, column=1, sticky="w",
                                              padx=(12, 0))

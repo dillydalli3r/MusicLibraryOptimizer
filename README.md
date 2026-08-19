@@ -1,5 +1,13 @@
 # Music Library Optimizer v1.0.0
 
+> ## ⚠️ VIBE CODED
+>
+> This project was **vibe coded** — written with AI assistance and very
+> little careful review. It works for the author's specific use case, but
+> expect rough edges, unexpected behavior, and a few questionable design
+> decisions. Use at your own risk. Contributions, bug reports, and patience
+> are welcome.
+
 A Windows program for optimizing music libraries. It targets FLAC files,
 image files (mainly by converting to JPEG XL), cue sheets, and lyrics —
 optimizing both storage space and formatting. It also grades the library
