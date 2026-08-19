@@ -1,0 +1,110 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install build dependencies
+        run: |
+          pip install pyinstaller mutagen pillow
+
+      - name: Download AudioAuditorCLI
+        run: |
+          $url = "https://github.com/Angel2mp3/AudioAuditor/releases/latest/download/AudioAuditorCLI.exe"
+          $out = ".dependencies\AudioAuditor v2.0.0\AudioAuditorCLI.exe"
+          New-Item -ItemType Directory -Force -Path (Split-Path $out)
+          Invoke-WebRequest -Uri $url -OutFile $out
+
+      - name: Download flac
+        run: |
+          $url = "https://github.com/xiph/flac/releases/download/1.5.0/flac-1.5.0-win64.zip"
+          $zip = "$env:TEMP\flac.zip"
+          $outDir = ".dependencies\flac v1.5.0"
+          New-Item -ItemType Directory -Force -Path $outDir
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\flac" -Force
+          Copy-Item "$env:TEMP\flac\flac-1.5.0-win64\flac.exe" $outDir
+          Copy-Item "$env:TEMP\flac\flac-1.5.0-win64\metaflac.exe" $outDir
+          Remove-Item $zip
+
+      - name: Download libjxl
+        run: |
+          $url = "https://github.com/libjxl/libjxl/releases/download/v0.12.0/libjxl-0.12.0-win64.zip"
+          $zip = "$env:TEMP\libjxl.zip"
+          $outDir = ".dependencies\libjxl v0.12.0"
+          New-Item -ItemType Directory -Force -Path $outDir
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\libjxl" -Force
+          Copy-Item "$env:TEMP\libjxl\cjxl.exe" $outDir
+          Copy-Item "$env:TEMP\libjxl\djxl.exe" $outDir
+          Remove-Item $zip
+
+      - name: Download libjpeg-turbo (jpegtran)
+        run: |
+          $url = "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.0/libjpeg-turbo-3.2.0-vc64.zip"
+          $zip = "$env:TEMP\libjpeg.zip"
+          $outDir = ".dependencies\libjpeg-turbo v3.2.0"
+          New-Item -ItemType Directory -Force -Path $outDir
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\libjpeg" -Force
+          Copy-Item "$env:TEMP\libjpeg\libjpeg-turbo-3.2.0-vc64\jpegtran.exe" $outDir
+          Remove-Item $zip
+
+      - name: Download oxipng
+        run: |
+          $url = "https://github.com/oxipng/oxipng/releases/download/v10.2.0/oxipng-10.2.0-windows.zip"
+          $zip = "$env:TEMP\oxipng.zip"
+          $outDir = ".dependencies\oxipng v10.2.0"
+          New-Item -ItemType Directory -Force -Path $outDir
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\oxipng" -Force
+          Copy-Item "$env:TEMP\oxipng\oxipng.exe" $outDir
+          Remove-Item $zip
+
+      - name: Build executable
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
+            --name "Music Library Optimizer" --icon app_icon.ico `
+            --hidden-import mutagen.aac app.py
+
+      - name: Verify executable
+        run: |
+          $exe = "dist\Music Library Optimizer.exe"
+          if (Test-Path $exe) {
+            $size = (Get-Item $exe).Length / 1MB
+            Write-Host "Built $exe ($([math]::Round($size, 1)) MB)"
+          } else {
+            Write-Error "Executable not found at $exe"
+            exit 1
+          }
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/Music Library Optimizer.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
