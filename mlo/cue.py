@@ -118,7 +118,8 @@ def canonical_cue_text(content, keep_empty_lines, keep_other_lines,
 
 
 def _process_cue_file(args):
-    filename, keep_empty_lines, keep_other_lines, file_type, append_final_newline = args
+    (filename, keep_empty_lines, keep_other_lines, file_type,
+     append_final_newline, force) = args
     tmp_path = None
 
     try:
@@ -148,7 +149,7 @@ def _process_cue_file(args):
             file_type, append_final_newline,
         )
 
-        if new_content == raw_content:
+        if new_content == raw_content and not force:
             return (filename, False, None, 0, 0)
 
         fd, tmp_path = tempfile.mkstemp(
@@ -187,12 +188,14 @@ def run_format_cues(config):
     if file_type not in ("WAVE", "MP3"):
         file_type = "WAVE"
     append_final_newline = config.get("append_final_newline", False)
+    force = config.get("force_cue", False)
     stats = new_stats()
 
     print_header("CUE Formatter")
     log(
         f"keep empty={'on' if keep_empty else 'off'} · "
-        f"keep other={'on' if keep_other else 'off'}"
+        f"keep other={'on' if keep_other else 'off'} · "
+        f"force={'on' if force else 'off'}"
     )
     log(f"target: {target}")
 
@@ -236,7 +239,8 @@ def run_format_cues(config):
         futures = {
             ex.submit(
                 _process_cue_file,
-                (f, keep_empty, keep_other, file_type, append_final_newline),
+                (f, keep_empty, keep_other, file_type, append_final_newline,
+                 force),
             ): f
             for f in cues
         }

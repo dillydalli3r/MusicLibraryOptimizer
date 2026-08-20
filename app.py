@@ -542,10 +542,16 @@ class App(tk.Tk):
             value=self.config.get("force_dr_ui", False))
         self.force_autotag_var = tk.BooleanVar(
             value=self.config.get("force_auto_tag_ui", False))
+        self.force_lyrics_var = tk.BooleanVar(
+            value=self.config.get("force_lyrics_ui", False))
+        self.force_cue_var = tk.BooleanVar(
+            value=self.config.get("force_cue_ui", False))
         self.force_var = tk.BooleanVar(
             value=(self.force_flac_var.get() and self.force_images_var.get()
                    and self.force_audit_var.get() and self.force_dr_var.get()
-                   and self.force_autotag_var.get()))
+                   and self.force_autotag_var.get()
+                   and self.force_lyrics_var.get()
+                   and self.force_cue_var.get()))
         force_toggle = ToggleSwitch(
             force_box, self.force_var, bg=BG, command=self._on_force_master)
         force_toggle.pack(side=tk.LEFT)
@@ -631,6 +637,18 @@ class App(tk.Tk):
         bad_toggle.pack(side=tk.LEFT)
         ToolTip(bad_toggle, "Hide passing albums — show only failed / ungraded ones.")
         ttk.Label(bad_box, text="Bad only",
+                  style="Card.TLabel").pack(side=tk.LEFT, padx=(8, 0))
+
+        self.show_files_var = tk.BooleanVar(
+            value=self.config.get("show_sidecar_files", False))
+        files_box = ttk.Frame(filter_frame, style="Card.TFrame")
+        files_box.grid(row=0, column=4, sticky="e", padx=(14, 0))
+        files_toggle = ToggleSwitch(files_box, self.show_files_var, bg=CARD,
+                                    command=self._on_show_files_toggle)
+        files_toggle.pack(side=tk.LEFT)
+        ToolTip(files_toggle, "Show non-audio files (.cue/.log/.lrc/.jxl/"
+                              ".jpg/.png) with their own grades.")
+        ttk.Label(files_box, text="Show files",
                   style="Card.TLabel").pack(side=tk.LEFT, padx=(8, 0))
 
         self.sort_var = tk.StringVar()
@@ -724,6 +742,7 @@ class App(tk.Tk):
         self._folder_artist = {}
         self._grade_cache = {}
         self._checked = {}
+        self._folder_state = {}
         self._item_paths = {}
         self._item_base = {}
         self._path_items = {}
@@ -872,9 +891,96 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Library view
     # ------------------------------------------------------------------
-    def _checked_text(self, path, base):
-        """Compose row text with a selection checkbox prefix."""
-        return ("☑ " if self._checked.get(path, False) else "☐ ") + base
+    _CHECK_GLYPH = {0: "\u2610", 1: "\u25d0", 2: "\u2611"}  # ☐ ◐ ☑
+
+    def _item_state(self, item):
+        """0 = unchecked, 1 = some descendants checked, 2 = fully checked."""
+        if self.library_tree.get_children(item):
+            return self._folder_state.get(item, 0)
+        path = self._item_paths.get(item)
+        return 2 if self._checked.get(path, False) else 0
+
+    def _set_row_text(self, item):
+        """Re-render a row's checkbox glyph from its current state."""
+        base = self._item_base.get(item)
+        if base is None:
+            return
+        glyph = self._CHECK_GLYPH.get(self._item_state(item), "\u2610")
+        self.library_tree.item(item, text=glyph + " " + base)
+
+    def _branch_items(self, item):
+        """[item] + all descendants in display order (parents first)."""
+        out = []
+
+        def walk(i):
+            out.append(i)
+            for c in self.library_tree.get_children(i):
+                walk(c)
+
+        walk(item)
+        return out
+
+    def _recompute_folder_state(self, item):
+        """Derive a folder's check state from its immediate children.
+
+        A folder reads as fully checked (2) only when every child is
+        checked; unchecked (0) when none are; otherwise partial (1).
+        Returns the new state and mirrors it into ``_checked[path]``.
+        """
+        children = self.library_tree.get_children(item)
+        if not children:
+            return 0
+        checked = sum(1 for c in children if self._item_state(c))
+        total = len(children)
+        if checked == total:
+            st = 2
+        elif checked:
+            st = 1
+        else:
+            st = 0
+        self._folder_state[item] = st
+        path = self._item_paths.get(item)
+        if path is not None:
+            self._checked[path] = (st == 2)
+        return st
+
+    def _refresh_ancestors(self, item):
+        """Recompute folder states upward from ``item`` and re-render them,
+        stopping as soon as a folder's state stops changing."""
+        parent = self.library_tree.parent(item)
+        while parent:
+            old = self._folder_state.get(parent)
+            new = self._recompute_folder_state(parent)
+            self._set_row_text(parent)
+            if old is not None and old == new:
+                return
+            parent = self.library_tree.parent(parent)
+
+    def _set_branch(self, item, state):
+        """Check (state=True) or uncheck (state=False) every path under a
+        folder, then recompute and re-render the whole branch."""
+        def walk(i):
+            path = self._item_paths.get(i)
+            if path is not None:
+                self._checked[path] = bool(state)
+            for c in self.library_tree.get_children(i):
+                walk(c)
+
+        walk(item)
+        for i in reversed(self._branch_items(item)):
+            if self.library_tree.get_children(i):
+                self._recompute_folder_state(i)
+            self._set_row_text(i)
+
+    def _reconcile_all(self):
+        """Bottom-up recompute of every folder state + re-render all rows."""
+        self._folder_state = {}
+        order = self._tree_items_in_order()
+        for item in reversed(order):
+            if self.library_tree.get_children(item):
+                self._recompute_folder_state(item)
+        for item in order:
+            self._set_row_text(item)
 
     def _refresh_library(self, regrade=False):
         """Start a background scan + grade of the library folder."""
@@ -1085,8 +1191,9 @@ class App(tk.Tk):
             self._insert_album(tree, self._root_item, album_dir)
             self._agg_total[self._root_item] += 1
 
-        tree.item(self._root_item, text=self._checked_text(
-            folder, root_text + f" — {len(self._grade_cache)} graded"))
+        self._item_base[self._root_item] = (
+            root_text + f" — {len(self._grade_cache)} graded")
+        self._set_row_text(self._root_item)
 
         for item_id, path in self._item_paths.items():
             if path in open_paths:
@@ -1107,7 +1214,7 @@ class App(tk.Tk):
         self._apply_agg(self._root_item)
         for child in tree.get_children(self._root_item):
             self._apply_agg(child)
-        self._apply_check_state(self._root_item)
+        self._reconcile_all()
 
         if filter_text and not shown_any:
             tree.insert("", "end", text="No albums match the filter")
@@ -1127,11 +1234,12 @@ class App(tk.Tk):
     def _insert_album(self, tree, parent_item, album_dir):
         base = os.path.basename(album_dir)
         item = tree.insert(parent_item, "end",
-                           text=self._checked_text(album_dir, base),
+                           text="",
                            open=False, tags=("pending",))
         self._item_paths[item] = album_dir
         self._item_base[item] = base
         self._path_items.setdefault(album_dir, set()).add(item)
+        self._set_row_text(item)
         res = self._grade_cache.get(album_dir)
         if res is None:
             tree.item(item, values=("…", "…", "", "", "", "", ""))
@@ -1253,6 +1361,33 @@ class App(tk.Tk):
                 tree.delete(child)
             for tr in res["tracks"]:
                 self._insert_track(tree, item, album_dir, tr, aa_value)
+            if self.config.get("show_sidecar_files", False):
+                for sc in res.get("sidecars") or []:
+                    self._insert_sidecar(tree, item, album_dir, sc)
+            # Track rows changed -> recompute this album's check state and
+            # propagate it up the tree.
+            self._recompute_folder_state(item)
+            self._set_row_text(item)
+            self._refresh_ancestors(item)
+
+    def _insert_sidecar(self, tree, album_item, album_dir, sc):
+        """Insert a non-audio file row (.cue/.log/.lrc/image) under an album."""
+        path = os.path.join(album_dir, sc["file"])
+        item = tree.insert(album_item, "end", text="", open=False,
+                           tags=("pass" if sc.get("ok") else "fail",))
+        self._item_paths[item] = path
+        self._item_base[item] = sc["file"]
+        self._path_items.setdefault(path, set()).add(item)
+        self._set_row_text(item)
+        tree.item(item, values=(
+            "OK" if sc.get("ok") else "FAIL",
+            "—",
+            sc.get("detail", ""),
+            "—",
+            sc.get("type", ""),
+            "—",
+            "—",
+        ))
 
     def _insert_track(self, tree, album_item, album_dir, tr, aa_value=None):
         path = os.path.join(album_dir, tr["file"])
@@ -1261,12 +1396,13 @@ class App(tk.Tk):
         audit = tr.get("audit")
         base = tr["file"]
         item = tree.insert(album_item, "end",
-                           text=self._checked_text(path, base),
+                           text="",
                            open=False,
                            tags=(self._row_state(ok, audit),))
         self._item_paths[item] = path
         self._item_base[item] = base
         self._path_items.setdefault(path, set()).add(item)
+        self._set_row_text(item)
         tree.item(item, values=(
             "OK" if ok else "FAIL",
             audit or "—",
@@ -1360,14 +1496,6 @@ class App(tk.Tk):
             self.library_tree.item(
                 item, tags=(self._row_state(grade_ok, audit_txt),))
 
-    def _apply_check_state(self, item):
-        path = self._item_paths.get(item)
-        base = self._item_base.get(item)
-        if path and base is not None:
-            self.library_tree.item(item, text=self._checked_text(path, base))
-        for child in self.library_tree.get_children(item):
-            self._apply_check_state(child)
-
     def _on_tree_click(self, event):
         item = self.library_tree.identify_row(event.y)
         if not item:
@@ -1417,31 +1545,40 @@ class App(tk.Tk):
             lo = hi = len(items) - 1
         for iid in items[lo:hi + 1]:
             path = self._item_paths.get(iid)
-            base = self._item_base.get(iid)
-            if path and base is not None:
+            if path:
                 self._checked[path] = True
         if self._root_item is not None:
-            self._apply_check_state(self._root_item)
+            self._reconcile_all()
         self._update_selection_label()
         self._last_anchor = target
 
     def _toggle_item(self, item):
+        """Toggle one row. Folders flip every descendant; leaves toggle
+        themselves, and checked state cascades up to parent folders."""
         path = self._item_paths.get(item)
-        base = self._item_base.get(item)
-        if not path or base is None:
+        if not path:
             return
-        self._checked[path] = not self._checked.get(path, False)
-        self.library_tree.item(item, text=self._checked_text(path, base))
+        if self.library_tree.get_children(item):
+            # Folder: clicking a partial/checked folder unchecks it and its
+            # descendants; clicking an unchecked folder checks them all.
+            state = 0 if self._item_state(item) in (1, 2) else 2
+            self._set_branch(item, state == 2)
+            self._refresh_ancestors(item)
+        else:
+            self._checked[path] = not self._checked.get(path, False)
+            self._set_row_text(item)
+            self._refresh_ancestors(item)
         self._update_selection_label()
 
     def _select_all(self, event=None):
-        """Ctrl+A: check every item in the tree (except the root)."""
+        """Ctrl+A / Select All: check every row (except the root), then
+        reconcile folder states so all folder boxes render as checked too."""
         self._checked.clear()
         for item_id, path in self._item_paths.items():
             if path and item_id != self._root_item:
                 self._checked[path] = True
         if self._root_item is not None:
-            self._apply_check_state(self._root_item)
+            self._reconcile_all()
         self._update_selection_label()
         return "break"
 
@@ -1463,7 +1600,7 @@ class App(tk.Tk):
     def _clear_selection(self):
         self._checked.clear()
         if self._root_item is not None:
-            self._apply_check_state(self._root_item)
+            self._reconcile_all()
         self._update_selection_label()
 
     def _clear_filter(self):
@@ -1552,6 +1689,8 @@ class App(tk.Tk):
         self.force_audit_var.set(on)
         self.force_dr_var.set(on)
         self.force_autotag_var.set(on)
+        self.force_lyrics_var.set(on)
+        self.force_cue_var.set(on)
         self._save_force_config()
 
     def _on_force_option(self):
@@ -1561,7 +1700,9 @@ class App(tk.Tk):
                            and self.force_images_var.get()
                            and self.force_audit_var.get()
                            and self.force_dr_var.get()
-                           and self.force_autotag_var.get())
+                           and self.force_autotag_var.get()
+                           and self.force_lyrics_var.get()
+                           and self.force_cue_var.get())
         self._save_force_config()
 
     def _save_force_config(self):
@@ -1571,6 +1712,8 @@ class App(tk.Tk):
         self.config["force_audit_ui"] = self.force_audit_var.get()
         self.config["force_dr_ui"] = self.force_dr_var.get()
         self.config["force_auto_tag_ui"] = self.force_autotag_var.get()
+        self.config["force_lyrics_ui"] = self.force_lyrics_var.get()
+        self.config["force_cue_ui"] = self.force_cue_var.get()
         save_config(self.config)
 
     def _show_force_menu(self):
@@ -1579,6 +1722,8 @@ class App(tk.Tk):
         menu.add_command(label="Force options", state=tk.DISABLED)
         menu.add_separator()
         for var, label in (
+            (self.force_lyrics_var, "Format lyrics"),
+            (self.force_cue_var, "Format CUE sheets"),
             (self.force_flac_var, "Re-encode FLACs"),
             (self.force_images_var, "Re-encode images"),
             (self.force_audit_var, "Audit"),
@@ -1617,6 +1762,12 @@ class App(tk.Tk):
 
     def _on_filter_change(self):
         """Bad-only toggle changed."""
+        self._rebuild_tree()
+
+    def _on_show_files_toggle(self):
+        """'Show files' toggle: persist the setting and refresh the tree."""
+        self.config["show_sidecar_files"] = self.show_files_var.get()
+        save_config(self.config)
         self._rebuild_tree()
 
     def _on_sort_change(self, event=None):
@@ -2466,7 +2617,9 @@ class App(tk.Tk):
                   self.force_images_var.get(),
                   self.force_audit_var.get(),
                   self.force_dr_var.get(),
-                  self.force_autotag_var.get()),
+                  self.force_autotag_var.get(),
+                  self.force_lyrics_var.get(),
+                  self.force_cue_var.get()),
             daemon=True
         )
         self._run_thread = t
@@ -2477,7 +2630,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     def _worker(self, script_ids, title, targets=None, force_flac=False,
                 force_images=False, force_audit=False, force_dr=False,
-                force_autotag=False):
+                force_autotag=False, force_lyrics=False, force_cue=False):
         started = time.monotonic()
         prev_tqdm, prev_hook = stats_mod.tqdm, stats_mod.progress_hook
         stats_mod.tqdm = None
@@ -2501,6 +2654,10 @@ class App(tk.Tk):
             run_cfg["force_dr_replaygain"] = True
         if force_autotag:
             run_cfg["force_auto_tag"] = True
+        if force_lyrics:
+            run_cfg["force_lyrics"] = True
+        if force_cue:
+            run_cfg["force_cue"] = True
 
         per_script = []
         total_bytes_added = total_bytes_removed = total_errors = 0

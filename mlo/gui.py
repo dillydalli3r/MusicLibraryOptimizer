@@ -103,6 +103,7 @@ CONFIG_FIELDS = [
     ("update_check_interval_days", "Update Check Interval (days)", "int", (1, 30)),
     ("update_close_other_instances", "Close Other Instances for Updates", "bool", None),
     ("confirm_before_update", "Confirm Before Installing Updates", "bool", None),
+    ("show_sidecar_files", "Show Other Files in Library (.cue .log .lrc .jxl .jpg .png)", "bool", None),
     ("compact_ui", "Compact UI Mode", "bool", None),
 ]
 
@@ -671,6 +672,9 @@ FIELD_DESCRIPTIONS = {
         "installer starts. Busy instances prevent the update.",
     "confirm_before_update":
         "Ask for confirmation before downloading and installing an update.",
+    "show_sidecar_files":
+        "Show non-audio files (.cue/.log/.lrc/.jxl/.jpg/.png) in the library "
+        "viewer, each with its own grade row.",
     "run_all_order":
         "Execution order used by the Run All button.",
 }

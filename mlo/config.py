@@ -118,6 +118,8 @@ DEFAULT_CONFIG = {
     "force_flac_ui": False,
     "force_images_ui": False,
     "force_audit_ui": False,
+    "force_lyrics_ui": False,
+    "force_cue_ui": False,
     "library_sort": "name",
     "library_columns": {},
 
@@ -129,6 +131,7 @@ DEFAULT_CONFIG = {
     "update_check_interval_days": 7,
     "update_close_other_instances": True,
     "confirm_before_update": True,
+    "show_sidecar_files": False,
 }
 
 

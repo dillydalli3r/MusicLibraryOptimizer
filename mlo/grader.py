@@ -133,6 +133,72 @@ def _cue_formatted(path, cfg):
     return canonical == content
 
 
+# Non-audio files that the viewer can show alongside the tracks.
+SIDECAR_EXTS = (".cue", ".log", ".lrc", ".jxl", ".jpg", ".jpeg", ".png")
+SIDECAR_TYPES = {
+    ".cue": "cue", ".log": "log", ".lrc": "lrc",
+    ".jxl": "image", ".jpg": "image", ".jpeg": "image", ".png": "image",
+}
+
+
+def _log_file_ok(path):
+    """A .log passes when it is non-empty text (a usable rip log)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(8192)
+    except OSError:
+        return False
+    return bool(content and content.strip())
+
+
+def _image_file_ok(path):
+    """An image sidecar passes when it is a real, non-empty file."""
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def _grade_sidecars(album_dir, all_files, cfg):
+    """Per-file grades for non-audio files shown in the library viewer.
+
+    Returns a list of dicts: {file, type, ok, detail}. These are
+    informational rows; they do not change the album's pass/fail (the
+    album-level cue formatting check and the per-track lyrics checks
+    already cover formatting compliance).
+    """
+    sidecars = []
+    for f in sorted(all_files):
+        low = f.lower()
+        ext = os.path.splitext(low)[1]
+        if ext not in SIDECAR_EXTS:
+            continue
+        full = os.path.join(album_dir, f)
+        if ext == ".cue":
+            ok = _cue_formatted(full, cfg)
+            detail = "formatted" if ok else "needs formatting"
+        elif ext == ".lrc":
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                    lrc_text = fh.read()
+                ok = _lyrics_formatted(lrc_text, cfg) and \
+                    not _lyrics_merged_timestamps(lrc_text)
+            except OSError:
+                ok = False
+            detail = "formatted" if ok else "needs formatting"
+        elif ext == ".log":
+            ok = _log_file_ok(full)
+            detail = "present" if ok else "empty"
+        else:
+            ok = _image_file_ok(full)
+            detail = "present" if ok else "empty"
+        sidecars.append({
+            "file": f, "type": SIDECAR_TYPES.get(ext, "other"),
+            "ok": ok, "detail": detail,
+        })
+    return sidecars
+
+
 def _grade_album(album_dir, lyrics_format, cfg=None):
     if cfg is None:
         cfg = {}
@@ -452,6 +518,12 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
 
     pass_count = max(0, total_checks - failed_checks)
 
+    # Per-file grades for the non-audio files shown in the viewer (only
+    # computed when the viewer toggle is enabled, to avoid extra I/O).
+    sidecars = []
+    if cfg.get("show_sidecar_files", False):
+        sidecars = _grade_sidecars(album_dir, all_files, cfg)
+
     # Album-level audit summary from the per-track AUDIT tags.
     audit_summary = summarize_audits(tr["audit"] for tr in tracks)
 
@@ -471,6 +543,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         "lyrics_expected": lyrics_expected_count,
         "instrumental_count": instrumental_count,
         "tracks": tracks,
+        "sidecars": sidecars,
         "album_values": {
             t: _summarize_values(album_tag_values.get(t, set()))
             for t in ALBUM_TAGS

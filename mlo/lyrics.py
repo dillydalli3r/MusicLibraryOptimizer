@@ -29,6 +29,33 @@ LRC_META_RE = re.compile(
 )
 
 
+# A line carrying two or more timestamps. ESLyrics on foobar2000 cannot
+# parse "[a]text[b]more" on one line (it shows a duplicated line), and the
+# old space-after-timestamp bug glued whole lines together exactly like
+# this. Split every timestamp boundary onto its own line.
+_TS_TOKEN_RE = re.compile(r"\[\d{1,2}:\d{2}(?:\.\d+)?\]")
+
+
+def _split_merged_ts(line):
+    """Split a timestamp-run line into one line per timestamp.
+
+    '[00:00.00][00:45.53]Stretching, filing[00:46.86]Against her skin'
+      -> ['[00:00.00]', '[00:45.53]Stretching, filing',
+          '[00:46.86]Against her skin']
+    Only lines that START with a timestamp are considered.
+    """
+    if not line.startswith("["):
+        return [line]
+    matches = list(_TS_TOKEN_RE.finditer(line))
+    if len(matches) < 2:
+        return [line]
+    out = []
+    for i, m in enumerate(matches):
+        next_start = matches[i + 1].start() if i + 1 < len(matches) else len(line)
+        out.append(line[m.start():m.end()] + line[m.end():next_start])
+    return out
+
+
 def _reformat_ts(m, precision=2):
     """Reformat a [mm:ss.xxx] timestamp to the requested precision,
     carrying correctly: [01:59.999] at precision 2 becomes [02:00.00]."""
@@ -85,7 +112,9 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
         elif strip_metadata and LRC_META_RE.match(s):
             continue
         else:
-            lines.append(s)
+            # Split merged "[a][b]text" lines (ESLyrics can't parse them).
+            for part in _split_merged_ts(s):
+                lines.append(part)
 
     cleaned = lines
     if collapse_blank_lines:
@@ -165,9 +194,10 @@ def _process_lyrics_for_audio(audio_path, cfg):
     lrc_path = _lrc_for(audio_path)
     lrc_exists = os.path.exists(lrc_path)
     lyrics_format = cfg.get("lyrics_format", "EMBEDDED").upper()
+    force = cfg.get("force_lyrics", False)
 
     # Clean embedded lyrics (no trailing newline / blank lines).
-    if cfg.get("optimize_embedded_lyrics", True):
+    if force or cfg.get("optimize_embedded_lyrics", True):
         cur = af.get_lyrics()
         if cur:
             cleaned = _format_for_storage(cur, cfg, optimize=True)
@@ -176,7 +206,7 @@ def _process_lyrics_for_audio(audio_path, cfg):
                     modified = True
 
     # Clean existing LRC file (no trailing newline / blank lines).
-    if cfg.get("optimize_lrc", True) and lrc_exists:
+    if lrc_exists and (force or cfg.get("optimize_lrc", True)):
         try:
             with open(lrc_path, "r", encoding="utf-8", errors="replace") as f:
                 lrc_content = f.read()

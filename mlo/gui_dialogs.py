@@ -344,6 +344,7 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("Interface", [
                 "grade_verbose", "auto_advance", "worker_limit", "compact_ui",
+                "show_sidecar_files",
                 "check_updates_on_start", "auto_update_on_start",
                 "update_check_interval_days",
                 "update_close_other_instances", "confirm_before_update",

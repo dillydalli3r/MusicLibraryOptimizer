@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.7
+# Music Library Optimizer v1.0.8
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.7_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.8_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.0.7_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.0.8_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -35,6 +35,35 @@ external folders. Keep the whole folder together to move it anywhere.
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.0.8
+
+- **Reworked library checkboxes.** **Select All** / **Ctrl+A** now actually
+  ticks every row (the old handler set the internal state but never
+  re-rendered the ☑ glyphs). Folder rows cascade: an album is checked when
+  all of its tracks are, an artist when all albums are, and partially
+  selected folders show a ◐ partial box. Clicking a folder checks or
+  unchecks everything under it; clicking a leaf updates its folder chain.
+  Shift+click ranges and Clear Selection follow the same rules.
+- **Show other files in the library viewer.** The new **Show files** toggle
+  (Library filter bar, and Settings → Interface → **Show Other Files in
+  Library**) displays `.cue`, `.log`, `.lrc`, `.jxl`, `.jpg`/`.jpeg` and
+  `.png` rows under each album, **each with its own grade**: cues and LRCs
+  are checked against the canonical formatting (PASS/FAIL with a
+  "needs formatting" note), logs for being non-empty, and images for being
+  real files. They participate in the checkbox cascade and Select All too.
+- **Force menu is now complete.** Added **Format lyrics** and **Format CUE
+  sheets** to the Force ▾ menu (all force-able scripts are now listed).
+  `force_lyrics` bypasses the optimize on/off switches and forces a
+  re-format; `force_cue` rewrites every cue unconditionally. Run All always
+  runs all eight scripts across the whole library and honors every Force
+  option.
+- **Fixed embedded lyrics failing to optimize.** The old formatter bug
+  (space-after-timestamp regex eating newlines) glued lines together into
+  forms like `[00:00.00][00:45.53]Stretching, filing[00:46.86]Against her
+  skin`. The formatter now splits every timestamp boundary back onto its
+  own line, so running the Lyrics script fixes previously mangled embedded
+  lyrics (this also resolves the ESLyrics "duplicate first line" display).
 
 ## New in v1.0.7
 
