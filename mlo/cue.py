@@ -10,6 +10,113 @@ from .stats import (
 )
 from .ui import print_header, log, log_file_result
 
+def canonical_cue_text(content, keep_empty_lines, keep_other_lines,
+                       file_type, append_final_newline):
+    """Return the canonical (normalized) form of a cue sheet's text.
+
+    Pure function with no side effects: LF line endings, DISCID hex
+    normalization, quoted FILE lines with the configured type, TRACK/INDEX
+    normalization, structural directives preserved, REM comments stripped
+    (unless keep_other_lines), blank-line collapsing, and no trailing blank
+    lines. ``append_final_newline`` optionally adds a single trailing LF.
+    """
+    file_type = str(file_type).upper()
+    if file_type not in ("WAVE", "MP3"):
+        file_type = "WAVE"
+
+    original = content.replace("\r\n", "\n").replace("\r", "\n")
+    lines = original.split("\n")
+
+    discid_line = None
+    formatted = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not stripped:
+            if keep_empty_lines:
+                formatted.append("")
+            continue
+
+        upper = stripped.upper()
+
+        if upper.startswith("REM DISCID"):
+            if discid_line is None:
+                parts = stripped.split(None, 2)
+                if len(parts) >= 3:
+                    raw = parts[2].strip()
+                    hex_code = re.sub(r"[^0-9A-Fa-f]", "", raw).upper()[:8]
+                    discid_line = (
+                        f"REM DISCID {hex_code}"
+                        if hex_code
+                        else f"REM DISCID {raw.upper()}"
+                    )
+                else:
+                    discid_line = "REM DISCID"
+
+        elif upper == "FILE" or upper.startswith("FILE "):
+            m = re.search(r'"([^"]*)"', stripped)
+            if m:
+                name = m.group(1)
+            else:
+                parts = stripped.split(None, 2)
+                if len(parts) >= 2:
+                    name = parts[1].strip().strip("'\"")
+                else:
+                    formatted.append(stripped)
+                    continue
+            formatted.append(f'FILE "{name}" {file_type}')
+
+        elif upper.startswith("TRACK"):
+            parts = stripped.split(None, 2)
+            if len(parts) >= 3:
+                formatted.append(f"  TRACK {parts[1].zfill(2)} {parts[2].upper()}")
+            else:
+                formatted.append(f"  {stripped}")
+
+        elif upper.startswith("INDEX"):
+            parts = stripped.split(None, 2)
+            if len(parts) >= 3:
+                tp = parts[2].split(":")
+                if len(tp) == 3:
+                    try:
+                        formatted.append(
+                            f"    INDEX {parts[1].zfill(2)} "
+                            f"{int(tp[0]):02d}:{int(tp[1]):02d}:{int(tp[2]):02d}"
+                        )
+                    except ValueError:
+                        formatted.append(f"    {stripped}")
+                else:
+                    formatted.append(f"    {stripped}")
+            else:
+                formatted.append(f"    {stripped}")
+
+        else:
+            # Keep structural directives (PREGAP, POSTGAP, FLAGS,
+            # PERFORMER, TITLE, CATALOG, ISRC, SONGWRITER, ...)
+            # unconditionally — dropping them corrupts the sheet.
+            # Only REM comment lines are stripped when keep_other_lines
+            # is off.
+            if not (upper.startswith("REM ") and not keep_other_lines):
+                formatted.append(stripped)
+
+    if discid_line:
+        formatted.insert(0, discid_line)
+
+    new_content = "\n".join(formatted)
+
+    while "\n\n\n" in new_content:
+        new_content = new_content.replace("\n\n\n", "\n\n")
+
+    # No trailing blank / whitespace-only lines AND no trailing newline
+    # byte at all (empty cue -> empty string).
+    new_content = new_content.rstrip()
+    if new_content and append_final_newline:
+        new_content += "\n"
+
+    return new_content
+
+
 def _process_cue_file(args):
     filename, keep_empty_lines, keep_other_lines, file_type, append_final_newline = args
     tmp_path = None
@@ -35,95 +142,11 @@ def _process_cue_file(args):
         # Keep the raw text for the "unchanged" comparison so CRLF-only
         # files still get normalized to LF.
         raw_content = original_content
-        original_content = original_content.replace("\r\n", "\n").replace("\r", "\n")
-        lines = original_content.split("\n")
 
-        discid_line = None
-        formatted = []
-
-        for line in lines:
-            stripped = line.strip()
-
-            if not stripped:
-                if keep_empty_lines:
-                    formatted.append("")
-                continue
-
-            upper = stripped.upper()
-
-            if upper.startswith("REM DISCID"):
-                if discid_line is None:
-                    parts = stripped.split(None, 2)
-                    if len(parts) >= 3:
-                        raw = parts[2].strip()
-                        hex_code = re.sub(r"[^0-9A-Fa-f]", "", raw).upper()[:8]
-                        discid_line = (
-                            f"REM DISCID {hex_code}"
-                            if hex_code
-                            else f"REM DISCID {raw.upper()}"
-                        )
-                    else:
-                        discid_line = "REM DISCID"
-
-            elif upper == "FILE" or upper.startswith("FILE "):
-                m = re.search(r'"([^"]*)"', stripped)
-                if m:
-                    name = m.group(1)
-                else:
-                    parts = stripped.split(None, 2)
-                    if len(parts) >= 2:
-                        name = parts[1].strip().strip("'\"")
-                    else:
-                        formatted.append(stripped)
-                        continue
-                formatted.append(f'FILE "{name}" {file_type}')
-
-            elif upper.startswith("TRACK"):
-                parts = stripped.split(None, 2)
-                if len(parts) >= 3:
-                    formatted.append(f"  TRACK {parts[1].zfill(2)} {parts[2].upper()}")
-                else:
-                    formatted.append(f"  {stripped}")
-
-            elif upper.startswith("INDEX"):
-                parts = stripped.split(None, 2)
-                if len(parts) >= 3:
-                    tp = parts[2].split(":")
-                    if len(tp) == 3:
-                        try:
-                            formatted.append(
-                                f"    INDEX {parts[1].zfill(2)} "
-                                f"{int(tp[0]):02d}:{int(tp[1]):02d}:{int(tp[2]):02d}"
-                            )
-                        except ValueError:
-                            formatted.append(f"    {stripped}")
-                    else:
-                        formatted.append(f"    {stripped}")
-                else:
-                    formatted.append(f"    {stripped}")
-
-            else:
-                # Keep structural directives (PREGAP, POSTGAP, FLAGS,
-                # PERFORMER, TITLE, CATALOG, ISRC, SONGWRITER, ...)
-                # unconditionally — dropping them corrupts the sheet.
-                # Only REM comment lines are stripped when keep_other_lines
-                # is off.
-                if not (upper.startswith("REM ") and not keep_other_lines):
-                    formatted.append(stripped)
-
-        if discid_line:
-            formatted.insert(0, discid_line)
-
-        new_content = "\n".join(formatted)
-
-        while "\n\n\n" in new_content:
-            new_content = new_content.replace("\n\n\n", "\n\n")
-
-        # Guarantee no trailing blank / whitespace-only lines AND no trailing
-        # newline byte at all (empty cue -> empty file).
-        new_content = new_content.rstrip()
-        if new_content and append_final_newline:
-            new_content += "\n"
+        new_content = canonical_cue_text(
+            original_content, keep_empty_lines, keep_other_lines,
+            file_type, append_final_newline,
+        )
 
         if new_content == raw_content:
             return (filename, False, None, 0, 0)

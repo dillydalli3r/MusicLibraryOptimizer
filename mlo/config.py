@@ -125,6 +125,7 @@ DEFAULT_CONFIG = {
     "first_run_done": False,
     "last_update_check": 0,
     "check_updates_on_start": True,
+    "auto_update_on_start": False,
     "update_check_interval_days": 7,
     "update_close_other_instances": True,
     "confirm_before_update": True,

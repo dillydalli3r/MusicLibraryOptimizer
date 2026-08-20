@@ -1,4 +1,5 @@
 """Safe GitHub update checking and Windows shutdown coordination."""
+import base64
 import ctypes
 import json
 import os
@@ -24,6 +25,48 @@ _HEADERS = {
 _APP_TITLE_PREFIX = "Music Library Optimizer v"
 _INSTANCE_DIR = os.path.join(tempfile.gettempdir(), "MusicLibraryOptimizer", "instances")
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+# DETACHED_PROCESS: the helper must not be attached to the caller's console,
+# otherwise the console host tears it down (CTRL_CLOSE_EVENT) the moment the
+# app exits -- leaving setup never launched.
+_DETACHED_PROCESS = 0x00000008 if os.name == "nt" else 0
+
+
+def _spawn_survivable(cmd_list):
+    """Start a process that keeps running after this app exits.
+
+    ``Win32_Process.Create`` spawns the process as a child of the WMI
+    provider service instead of this app, so it survives console teardown
+    and process-tree cleanup. The bootstrap is run synchronously so the
+    orphan is guaranteed to exist before the caller returns / exits.
+    Falls back to a detached Popen when the bootstrap fails.
+    """
+    cmdline = subprocess.list2cmdline(cmd_list)
+    # Escape single quotes for the PowerShell single-quoted string.
+    cmdline_ps = cmdline.replace("'", "''")
+    ps_code = (
+        "Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+        "-Arguments @{CommandLine='" + cmdline_ps + "'} | Out-Null"
+    )
+    encoded = base64.b64encode(ps_code.encode("utf-16-le")).decode("ascii")
+    bootstrap = [
+        "powershell.exe", "-NoProfile", "-NonInteractive",
+        "-EncodedCommand", encoded,
+    ]
+    try:
+        result = subprocess.run(
+            bootstrap,
+            creationflags=_CREATE_NO_WINDOW | _DETACHED_PROCESS,
+            close_fds=True,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"WMI bootstrap rc={result.returncode}")
+    except Exception:
+        subprocess.Popen(
+            cmd_list,
+            creationflags=_CREATE_NO_WINDOW | _DETACHED_PROCESS,
+            close_fds=True,
+        )
 
 
 def _get_current_version():
@@ -90,8 +133,10 @@ def check_for_updates(silent=False, callback=None):
             else:
                 latest = str(data.get("tag_name", "")).lstrip("vV")
                 current = _get_current_version()
-                has_update = _is_newer(latest, current)
-                download_url = _find_installer(data) if has_update else None
+                download_url = _find_installer(data)
+                # A newer tag with no usable installer asset is not an
+                # updatable release for this app.
+                has_update = _is_newer(latest, current) and bool(download_url)
                 notes = (data.get("body") or "").strip()
                 result = (has_update, latest, download_url, notes, None)
                 if not silent:
@@ -376,7 +421,7 @@ exit 2
         "-Pids", " ".join(str(pid) for pid in pids),
         "-Timeout", str(int(timeout)),
     ]
-    subprocess.Popen(command, creationflags=_CREATE_NO_WINDOW)
+    _spawn_survivable(command)
 
 
 def maybe_auto_check(callback=None):

@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.6
+# Music Library Optimizer v1.0.7
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.6_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.7_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.0.6_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.0.7_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -35,6 +35,50 @@ external folders. Keep the whole folder together to move it anywhere.
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.0.7
+
+- **Fixed "Download & Install" closing the app without updating.** The
+  shutdown helper is now launched through `Win32_Process.Create` so it is a
+  fully detached process that survives the app exiting (a plain child was
+  torn down with the parent's console on some setups). It waits for every
+  app PID, then runs setup and deletes the downloaded installer. A fallback
+  launch path is used if the WMI bootstrap fails.
+- **Auto-install updates on start (new setting).** Settings → Interface →
+  **Auto-Install Updates on Start** (default off) downloads and installs a
+  newer release found at startup when the app is idle; it still honors
+  **Confirm Before Installing Updates**. The previous launch-time check only
+  logged — the auto-check handler was never actually reached (it unpacked a
+  `None` result and was swallowed by the drain-loop guard).
+- **Grader now checks lyrics / cue FORMATTING**, not just presence. It runs
+  the same canonical form the Lyrics and CUE scripts would produce and fails
+  the album when they differ: LRC timestamp precision, metadata lines,
+  blank collapsing, trailing newlines, CUE CRLF/BOM, FILE type and quoting,
+  DISCID/track/index normalization. It also flags **merged timestamps**
+  (`[00:00.00][00:45.53]…`) that break ESLyrics on foobar2000.
+- **Fixed lyrics formatter gluing timestamp-only lines.** An empty timing
+  line `[00:00.00]` followed by `[00:45.53]Stretching, filing` was being
+  merged into `[00:00.00][00:45.53]Stretching, filing` because the
+  space-after-timestamp regex also consumed newlines. It now only strips
+  spaces/tabs, so timestamp-only markers stay on their own line.
+- **Performance**
+  - Targeted grades (right-click → Grade, GUI scans) no longer walk the
+    whole library first; albums are derived from the explicit targets.
+  - Auto Tagging loads each file **once** per album instead of parsing it
+    up to ~6 times (advisory + instrumental passes share one read).
+  - `config.json` is only rewritten when the library folder actually
+    changes, not on every run start.
+  - Postponed/refused updates no longer leave the dialog button stuck on
+    "Downloading…"; the downloaded installer is kept for an instant retry.
+- **Code split for maintainability.** `app.py` (now ~2600 lines) moved its
+  theme/constants/widgets into `mlo/gui.py` and its four dialog windows
+  (Dependencies, Settings, Custom Run, First-run wizard) into
+  `mlo/gui_dialogs.py`.
+- **Other hardening** — scanning errors are surfaced instead of silently
+  swallowed; a release tag with no installer asset is no longer offered as
+  an update; Compact-mode toggling rebuilds the tree; tab-switching no
+  longer un-maximizes the window; the update checker’s helper output is
+  escaped for PowerShell.
 
 ## New in v1.0.6
 

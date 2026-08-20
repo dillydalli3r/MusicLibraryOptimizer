@@ -1,9 +1,11 @@
 """Library grader: per-album tag/lyrics/cover compliance reports."""
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .audio import AudioFile
-from .lyrics import _lrc_for
+from .lyrics import _lrc_for, _canonical_lyrics, format_lyrics_text
+from .cue import canonical_cue_text
 from .paths import AUDIO_EXTS
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, is_audio_file,
@@ -60,7 +62,80 @@ def _grade_lyrics_present(embedded, lrc, lyrics_format):
     return embedded
 
 
-def _grade_album(album_dir, lyrics_format):
+def _lyrics_formatted(text, cfg):
+    """True when the lyrics already match the configured formatting
+    (timestamps, metadata stripping, blank collapse, no trailing blanks).
+
+    Idempotency check against the raw text: running the Lyrics formatter
+    must not change it (so a stray trailing newline, CRLF, or timestamp
+    precision drift is caught too).
+    """
+    if not text or not str(text).strip():
+        return True
+    raw = str(text)
+    try:
+        expected = _canonical_lyrics(format_lyrics_text(
+            raw,
+            precision=int(cfg.get("lrc_timestamp_precision", 2) or 2),
+            strip_metadata=cfg.get("lrc_strip_metadata", True),
+            collapse_blank_lines=cfg.get("lrc_collapse_blank_lines", True),
+        ))
+    except Exception:
+        return True
+    return raw == expected
+
+
+# Two timestamps on the SAME line ("[00:00.00][00:45.53]text") break
+# ESLyrics on foobar2000. Must not span a newline (that is the legitimate
+# "[00:00.00]" empty marker line followed by the next line), so use a
+# space/tab-only separator.
+_MERGED_TS_RE = re.compile(
+    r"\[\d{1,2}:\d{2}(?:\.\d+)?\][ \t]*\[\d{1,2}:\d{2}"
+)
+
+
+def _lyrics_merged_timestamps(text):
+    """True when a line carries two adjacent timestamps."""
+    return bool(_MERGED_TS_RE.search(str(text or "")))
+
+
+def _cue_formatted(path, cfg):
+    """True when a cue sheet is already in canonical form (LF, no BOM,
+    quoted FILE lines with the configured type, no trailing whitespace,
+    normalized DISCID/track/index)."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(4096)
+    except OSError:
+        return False
+    if b"\x00" in raw:
+        return True  # not really a cue; do not penalize
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return False  # UTF-8 BOM would be stripped
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(path, "r", encoding="latin-1", newline="") as f:
+                content = f.read()
+        except OSError:
+            return False
+    except OSError:
+        return False
+    canonical = canonical_cue_text(
+        content,
+        keep_empty_lines=cfg.get("keep_empty_cue_lines", False),
+        keep_other_lines=cfg.get("keep_other_cue_lines", False),
+        file_type=cfg.get("cue_file_type", "WAVE"),
+        append_final_newline=cfg.get("append_final_newline", False),
+    )
+    return canonical == content
+
+
+def _grade_album(album_dir, lyrics_format, cfg=None):
+    if cfg is None:
+        cfg = {}
     all_files = os.listdir(album_dir)
     files = sorted(f for f in all_files if is_audio_file(f))
     audio_paths = [os.path.join(album_dir, f) for f in files]
@@ -226,6 +301,34 @@ def _grade_album(album_dir, lyrics_format):
                 add_issue(f"Missing lyrics ({lyrics_format.upper()})", basename)
                 track["issues"].append("LYRICS")
 
+        # Lyrics FORMATTING compliance (only when lyrics are present):
+        # the stored text must already be in the canonical form the Lyrics
+        # script would produce, and never carry merged timestamps.
+        if embedded or lrc:
+            total_checks += 1
+            lyr_text = str(lyr) if embedded else None
+            lrc_text = None
+            if lrc:
+                try:
+                    with open(_lrc_for(ap), "r", encoding="utf-8",
+                              errors="replace") as _f:
+                        lrc_text = _f.read()
+                except OSError:
+                    lrc_text = None
+            fmt_ok = True
+            if lyr_text and not _lyrics_formatted(lyr_text, cfg):
+                fmt_ok = False
+            if lrc_text and not _lyrics_formatted(lrc_text, cfg):
+                fmt_ok = False
+            if (lyr_text and _lyrics_merged_timestamps(lyr_text)) or \
+               (lrc_text and _lyrics_merged_timestamps(lrc_text)):
+                fmt_ok = False
+            if not fmt_ok:
+                failed_checks += 1
+                add_issue("Lyrics not optimally formatted "
+                          "(run Lyrics script)", basename)
+                track["issues"].append("LYRICS")
+
         tracks.append(track)
 
     # MEDIA consistency.
@@ -328,6 +431,24 @@ def _grade_album(album_dir, lyrics_format):
     if not cover_file:
         failed_checks += 1
         add_issue("Missing cover image", "album")
+
+    # CUE sheet FORMATTING compliance (when a cue exists): every cue must
+    # already be in the canonical form the CUE formatter would produce.
+    if has_cue:
+        cue_files = sorted(
+            os.path.join(album_dir, f) for f in all_files
+            if f.lower().endswith(".cue")
+        )
+        total_checks += 1
+        cue_ok = True
+        for cue_path in cue_files:
+            if not _cue_formatted(cue_path, cfg):
+                cue_ok = False
+                break
+        if not cue_ok:
+            failed_checks += 1
+            add_issue("CUE sheet not optimally formatted "
+                      "(run CUE Sheets script)", "album")
 
     pass_count = max(0, total_checks - failed_checks)
 
@@ -510,11 +631,13 @@ def run_grade_library(config):
         log(c(f"ERROR: folder does not exist: {folder}", Color.RED))
         return stats
 
-    albums = _find_albums(folder)
-
     if config.get("targets") is not None:
+        # Targeted run: derive albums from the explicit targets only — do
+        # NOT walk the whole library first (costly on large trees).
         target_files = _collect_targets(config["targets"], AUDIO_EXTS)
         albums = sorted({os.path.dirname(f) for f in target_files})
+    else:
+        albums = _find_albums(folder)
 
     if not albums:
         log("No albums found.")
@@ -525,7 +648,8 @@ def run_grade_library(config):
     workers = worker_count(config, default=16, maximum=16, items=len(albums))
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(_grade_album, a, lyrics_format): a for a in albums}
+        futures = {ex.submit(_grade_album, a, lyrics_format, config): a
+                   for a in albums}
         pbar = _make_pbar(len(futures), "Grading", unit="album")
 
         for fut in as_completed(futures):

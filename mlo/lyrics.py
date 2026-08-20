@@ -15,7 +15,12 @@ from .ui import print_header, log, c, Color, log_file_result
 TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]")
 
 
-SPACE_AFTER_TS_RE = re.compile(r"(\[\d{2}:\d{2}\.\d{2,3}\])\s+")
+# Remove a SPACE (not a newline) directly after a timestamp. Using \s+ here
+# would also consume the newline of a timestamp-only line, gluing
+# "[00:00.00]" onto the following line as "[00:00.00][00:45.53]..." which
+# ESLyrics on foobar2000 cannot parse.
+SPACE_AFTER_TS_RE = re.compile(r"(\[\d{2}:\d{2}\.\d{2,3}\])[ \t]+")
+
 
 
 LRC_META_RE = re.compile(

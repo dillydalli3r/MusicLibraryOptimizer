@@ -32,109 +32,33 @@ from .ui import print_header, log, c, Color
 
 
 # ----------------------------------------------------------------------
-# ALBUMITUNESADVISORY
-# ----------------------------------------------------------------------
-def album_advisory_from_tracks(files):
-    """Derive the album advisory (0/1/2) from per-track ITUNESADVISORY."""
-    has_safe = False
-    for path in files:
-        try:
-            af = AudioFile(path)
-            v = str(af.get_tag("ITUNESADVISORY") or "").strip()
-        except Exception:
-            continue
-        if v == "1":
-            return 1
-        if v == "2":
-            has_safe = True
-    return 2 if has_safe else 0
-
-
-# ----------------------------------------------------------------------
-# INSTRUMENTAL
+# ALBUMITUNESADVISORY / INSTRUMENTAL (single-pass per album)
 # ----------------------------------------------------------------------
 def _has_lyrics(path):
     """True when the track has lyrics (embedded LYRICS or an .lrc sidecar)."""
     try:
         af = AudioFile(path)
-        if af.get_lyrics() and str(af.get_lyrics()).strip():
+        lyr = af.get_lyrics()
+        if lyr and str(lyr).strip():
             return True
     except Exception:
         pass
     return os.path.exists(os.path.splitext(path)[0] + ".lrc")
 
 
-# ----------------------------------------------------------------------
-# Album helpers
-# ----------------------------------------------------------------------
 def _album_files(album_dir):
     return sorted(
         os.path.join(album_dir, f)
         for f in os.listdir(album_dir) if is_audio_file(f))
 
 
-def _advisory_ok(album_dir, value):
-    for path in _album_files(album_dir):
-        try:
-            af = AudioFile(path)
-            if str(af.get_tag("ALBUMITUNESADVISORY") or "").strip() != str(value):
-                return False
-        except Exception:
-            return False
-    return True
-
-
-def _write_advisory(album_dir, value):
-    modified = 0
-    for path in _album_files(album_dir):
-        try:
-            af = AudioFile(path)
-            if str(af.get_tag("ALBUMITUNESADVISORY") or "").strip() != str(value):
-                if af.set_tag("ALBUMITUNESADVISORY", str(value)):
-                    modified += 1
-        except Exception:
-            continue
-    return modified
-
-
-def _instrumental_ok(album_dir):
-    """True when every track WITH lyrics already has INSTRUMENTAL=0.
-
-    Tracks without lyrics are left alone (they may be non-instrumental but
-    simply lack downloaded lyric files), so they never block a skip.
-    """
-    for path in _album_files(album_dir):
-        if not _has_lyrics(path):
-            continue
-        try:
-            af = AudioFile(path)
-            have = str(af.get_tag("INSTRUMENTAL") or "").strip()
-        except Exception:
-            return False
-        if have != "0":
-            return False
-    return True
-
-
-def _write_instrumental(album_dir):
-    """Set INSTRUMENTAL=0 on every track that HAS lyrics.
-
-    Tracks without lyrics are NOT touched - they could still be
-    non-instrumental, just missing lyric files.
-    """
-    modified = 0
-    for path in _album_files(album_dir):
-        if not _has_lyrics(path):
-            continue
-        try:
-            af = AudioFile(path)
-            have = str(af.get_tag("INSTRUMENTAL") or "").strip()
-        except Exception:
-            continue
-        if have != "0":
-            if af.set_tag("INSTRUMENTAL", "0"):
-                modified += 1
-    return modified
+def _derive_advisory(advisories):
+    """1 if any explicit advisory, else 2 if any safe, else 0."""
+    if any(v == "1" for v in advisories):
+        return 1
+    if any(v == "2" for v in advisories):
+        return 2
+    return 0
 
 
 # ----------------------------------------------------------------------
@@ -174,18 +98,55 @@ def run_auto_tagging(config):
         files = _album_files(album)
         if not files:
             return album, 0, None, None
-        advisory_value = (album_advisory_from_tracks(files)
-                          if do_advisory else None)
+
+        # Single pass: load every file once and cache the values needed,
+        # instead of re-parsing each file for advisory + instrumental.
+        info = []
+        for path in files:
+            try:
+                af = AudioFile(path)
+                lyr = af.get_lyrics()
+                info.append({
+                    "af": af,
+                    "advisory": str(af.get_tag("ITUNESADVISORY") or "").strip(),
+                    "album_advisory": str(
+                        af.get_tag("ALBUMITUNESADVISORY") or "").strip(),
+                    "instrumental": str(af.get_tag("INSTRUMENTAL") or "").strip(),
+                    "has_lyrics": bool(lyr and str(lyr).strip()) or
+                        os.path.exists(os.path.splitext(path)[0] + ".lrc"),
+                })
+            except Exception:
+                continue
+        if not info:
+            return album, 0, None, None
+
         modified = 0
-        if do_advisory and (force or not _advisory_ok(album, advisory_value)):
-            modified += _write_advisory(album, advisory_value)
-        if do_instrumental and (force or not _instrumental_ok(album)):
-            modified += _write_instrumental(album)
         notes = []
-        if advisory_value is not None and modified:
-            notes.append(f"advisory={advisory_value}")
-        if do_instrumental and modified:
-            notes.append("instrumental")
+        advisory_value = None
+
+        if do_advisory:
+            advisory_value = _derive_advisory(
+                d["advisory"] for d in info)
+            if force or any(d["album_advisory"] != str(advisory_value)
+                            for d in info):
+                for d in info:
+                    if d["album_advisory"] != str(advisory_value):
+                        if d["af"].set_tag("ALBUMITUNESADVISORY",
+                                           str(advisory_value)):
+                            modified += 1
+            if modified:
+                notes.append(f"advisory={advisory_value}")
+
+        if do_instrumental:
+            if force or any(d["has_lyrics"] and d["instrumental"] != "0"
+                            for d in info):
+                for d in info:
+                    if d["has_lyrics"] and d["instrumental"] != "0":
+                        if d["af"].set_tag("INSTRUMENTAL", "0"):
+                            modified += 1
+            if modified:
+                notes.append("instrumental")
+
         return album, modified, notes, advisory_value
 
     counts = {"ok": 0, "skip": 0, "fail": 0}
