@@ -15,13 +15,13 @@ try:
     from mutagen.oggvorbis import OggVorbis
     from mutagen.oggopus import OggOpus
     from mutagen.mp3 import MP3
-    from mutagen.id3 import TXXX, USLT, COMM, Encoding
+    from mutagen.id3 import TXXX, USLT, COMM, Encoding, TextFrame, Frames
     from mutagen.mp4 import MP4, MP4FreeForm
     HAS_MUTAGEN = True
 except ImportError:
     HAS_MUTAGEN = False
     FLAC = OggVorbis = OggOpus = MP3 = MP4 = MP4FreeForm = None
-    TXXX = USLT = COMM = Encoding = None
+    TXXX = USLT = COMM = Encoding = TextFrame = Frames = None
 
 
 try:

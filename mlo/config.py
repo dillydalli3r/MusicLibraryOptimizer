@@ -134,12 +134,6 @@ DEFAULT_CONFIG = {
 _BOOL_KEYS = {
     key for key, value in DEFAULT_CONFIG.items() if isinstance(value, bool)
 }
-_BOOL_KEYS.update({
-    "append_final_newline", "lrc_strip_metadata", "lrc_collapse_blank_lines",
-    "jpeg_progressive", "fix_instrumental_from_lyrics", "write_audit_tag",
-    "write_log_grade", "write_replaygain_tags", "write_dynamic_range_tags",
-    "update_close_other_instances", "confirm_before_update",
-})
 _INT_RANGES = {
     "flac_level": (0, 8),
     "jpegxl_effort": (1, 10),

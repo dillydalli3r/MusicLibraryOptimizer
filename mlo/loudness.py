@@ -35,7 +35,7 @@ from .ui import print_header, log, c, Color
 # file's tags (e.g. "05-Spiders"), NOT the filename - so we key by track
 # number and match files via their TRACKNUMBER tag.
 TRACK_ROW_RE = re.compile(
-    r"^\s*DR(\d{1,2})\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\d+)-(.*?)\s*$"
+    r"^\s*DR(\d{1,2})\s+(?:\S+\s+){5}(\d+)-(.*?)\s*$"
 )
 # Album: "Official DR value: DR11"
 OFFICIAL_DR_RE = re.compile(

@@ -1,11 +1,9 @@
 """Unified tag abstraction over FLAC / OGG / Opus / MP3 / MP4 audio files."""
 import os
 
-from mutagen.id3 import TextFrame, Frames
-
 from .deps import (
     FLAC, OggVorbis, OggOpus, MP3, MP4, MP4FreeForm,
-    TXXX, USLT, COMM, Encoding,
+    TXXX, USLT, COMM, Encoding, TextFrame, Frames,
 )
 from .stats import _decode_mp4_value
 
@@ -194,8 +192,12 @@ class AudioFile:
                 try:
                     from mutagen.aac import AAC
                     self.audio = AAC(self.path)
-                except Exception:
+                except ImportError:
                     self.audio = None
+                    self.error = "mutagen.aac is not available"
+                except Exception as e:
+                    self.audio = None
+                    self.error = f"{type(e).__name__}: {e}"
         except Exception as e:
             self.audio = None
             self.error = f"{type(e).__name__}: {e}"
@@ -426,13 +428,21 @@ class AudioFile:
                         TXXX(encoding=Encoding.UTF8, desc=desc, text=[value])
                     )
                 else:
-                    self.audio.tags.delall(frame_type)
                     if frame_type == "COMM":
+                        # Only replace the English/undescribed comment so
+                        # other-language translations are preserved.
+                        for frame in list(self.audio.tags.getall("COMM")):
+                            if frame.lang == "eng" and not frame.desc:
+                                try:
+                                    del self.audio.tags[frame.HashKey]
+                                except Exception:
+                                    pass
                         self.audio.tags.add(
                             COMM(encoding=Encoding.UTF8, lang="eng",
                                  desc="", text=value)
                         )
                     else:
+                        self.audio.tags.delall(frame_type)
                         frame_cls = Frames.get(frame_type)
                         if frame_cls is None:
                             return False
@@ -533,9 +543,19 @@ class AudioFile:
                             except Exception:
                                 pass
                 else:
-                    before = len(self.audio.tags.getall(frame_type))
-                    self.audio.tags.delall(frame_type)
-                    changed = before > 0
+                    if frame_type == "COMM":
+                        # Remove only the English/undescribed comment.
+                        for frame in list(self.audio.tags.getall("COMM")):
+                            if frame.lang == "eng" and not frame.desc:
+                                try:
+                                    del self.audio.tags[frame.HashKey]
+                                    changed = True
+                                except Exception:
+                                    pass
+                    else:
+                        before = len(self.audio.tags.getall(frame_type))
+                        self.audio.tags.delall(frame_type)
+                        changed = before > 0
 
                 if changed:
                     self.audio.save()

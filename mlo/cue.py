@@ -26,12 +26,15 @@ def _process_cue_file(args):
             return (filename, False, "binary file skipped (not a cue)", 0, 0)
 
         try:
-            with open(filename, "r", encoding="utf-8") as f:
+            with open(filename, "r", encoding="utf-8-sig") as f:
                 original_content = f.read()
         except UnicodeDecodeError:
             with open(filename, "r", encoding="latin-1") as f:
                 original_content = f.read()
 
+        # Keep the raw text for the "unchanged" comparison so CRLF-only
+        # files still get normalized to LF.
+        raw_content = original_content
         original_content = original_content.replace("\r\n", "\n").replace("\r", "\n")
         lines = original_content.split("\n")
 
@@ -62,9 +65,17 @@ def _process_cue_file(args):
                     else:
                         discid_line = "REM DISCID"
 
-            elif upper.startswith("FILE"):
+            elif upper == "FILE" or upper.startswith("FILE "):
                 m = re.search(r'"([^"]*)"', stripped)
-                name = m.group(1) if m else stripped
+                if m:
+                    name = m.group(1)
+                else:
+                    parts = stripped.split(None, 2)
+                    if len(parts) >= 2:
+                        name = parts[1].strip().strip("'\"")
+                    else:
+                        formatted.append(stripped)
+                        continue
                 formatted.append(f'FILE "{name}" {file_type}')
 
             elif upper.startswith("TRACK"):
@@ -92,7 +103,12 @@ def _process_cue_file(args):
                     formatted.append(f"    {stripped}")
 
             else:
-                if keep_other_lines:
+                # Keep structural directives (PREGAP, POSTGAP, FLAGS,
+                # PERFORMER, TITLE, CATALOG, ISRC, SONGWRITER, ...)
+                # unconditionally — dropping them corrupts the sheet.
+                # Only REM comment lines are stripped when keep_other_lines
+                # is off.
+                if not (upper.startswith("REM ") and not keep_other_lines):
                     formatted.append(stripped)
 
         if discid_line:
@@ -109,7 +125,7 @@ def _process_cue_file(args):
         if new_content and append_final_newline:
             new_content += "\n"
 
-        if new_content == original_content:
+        if new_content == raw_content:
             return (filename, False, None, 0, 0)
 
         fd, tmp_path = tempfile.mkstemp(
@@ -171,9 +187,17 @@ def run_format_cues(config):
             renamed_any = True
             log(f"cue renamed: {old} -> {new}")
     if renamed_any:
-        cues = _collect_targets(targets, (".cue",))
-        if targets is None:
-            cues = sorted(_walk_files(target, (".cue",)))
+        # Re-collect by walking each original album folder: explicit
+        # targets may have pointed at a now-renamed .cue file.
+        cues = []
+        for album_dir in sorted({os.path.dirname(c) for c in cues}):
+            if os.path.isdir(album_dir):
+                cues.extend(
+                    os.path.join(album_dir, f)
+                    for f in sorted(os.listdir(album_dir))
+                    if f.lower().endswith(".cue")
+                )
+        cues = sorted(set(cues))
 
     if not cues:
         log("No .cue files found.")

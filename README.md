@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.5
+# Music Library Optimizer v1.0.6
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.5_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.6_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.0.5_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.0.6_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -35,6 +35,47 @@ external folders. Keep the whole folder together to move it anywhere.
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.0.6
+
+- **Fixed installer never launching / launching too early** — the in-app
+  "Download & Install" flow now works reliably. The shutdown helper used to
+  receive PIDs in a format PowerShell 5.1 mis-parsed (commas treated as a
+  thousands separator), so the installer silently never ran for a single
+  window. The helper now takes a space-separated list, waits for **every**
+  app PID (including the caller) to exit, launches setup, and deletes the
+  downloaded installer afterwards. The app also waits up to 20 s for other
+  instances to close and asks before forcing the installer through.
+- **Fixed image data loss** — JPEG XL conversion no longer deletes the
+  source before the destination is secured (a failed rename previously lost
+  **both** files), and with "rename to cover" enabled, a folder with
+  front/back/booklet images no longer clobbers them all into a single
+  `cover.*` — only one image per folder takes the cover name (preferring
+  `cover`/`front`/`folder`), the rest keep their own names.
+- **Fixed Dynamic Range grading** — the simple-dr-meter row parser expected
+  one extra column and never matched, so DYNAMIC RANGE / ALBUM DYNAMIC RANGE
+  tags were never written (the grader failed every album on DR). Now parsed
+  and written correctly.
+- **No more permanently wedged app** — closing the Dependencies dialog
+  mid-download no longer leaves the app stuck "busy" forever; the download
+  finishes in the background and the busy flag is released. The update /
+  scan drain loops also survive a single malformed message instead of
+  freezing, and closing the window during work now offers "Close anyway".
+- **CUE formatting no longer corrupts sheets** — structural directives
+  (PREGAP/POSTGAP/FLAGS/PERFORMER/TITLE/CATALOG/ISRC/SONGWRITER) are always
+  kept; only REM comment lines are stripped. CRLF-only files are normalized
+  to LF, a UTF-8 BOM is dropped cleanly, unquoted/single-quoted FILE lines
+  are preserved, and renamed `CD-N.cue` files are still formatted.
+- **Lyrics timestamp carry fix** — `[1:59.999]` at 2-decimal precision now
+  becomes `[02:00.00]` instead of `[01:59.00]`; `[au:]`/`[la:]` metadata
+  tags are stripped with the rest.
+- **Cross-drive safety** — grading/auditing targets on a different drive
+  than the music folder no longer crash on `relpath`.
+- **Other hardening** — guarded mutagen import so the source/one-file build
+  shows the friendly dependency dialog instead of crashing; metaflac
+  failures are now surfaced instead of silently claiming success; mp3
+  COMMENT writes no longer delete other-language translations; dependency
+  downloads verify size and 7-Zip exit codes; temp files use `mkstemp`.
 
 ## New in v1.0.5
 

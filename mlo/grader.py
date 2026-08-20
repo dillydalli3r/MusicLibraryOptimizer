@@ -480,6 +480,14 @@ def format_grade_report(res, lyrics_format, track_file=None):
     return lines
 
 
+def _relpath_guard(path, base):
+    """os.path.relpath that never raises on cross-drive paths (Windows)."""
+    try:
+        return os.path.relpath(path, base)
+    except ValueError:
+        return os.path.basename(path)
+
+
 def run_grade_library(config):
     folder = config["music_folder"]
     lyrics_format = config.get("lyrics_format", "EMBEDDED").upper()
@@ -544,7 +552,7 @@ def run_grade_library(config):
         if pbar:
             pbar.close()
 
-    results.sort(key=lambda r: os.path.relpath(r["path"], folder).lower())
+    results.sort(key=lambda r: _relpath_guard(r["path"], folder).lower())
 
     summary_pass = 0
     summary_total = 0
@@ -564,7 +572,7 @@ def run_grade_library(config):
         for field in result["issues"]:
             issue_counts[field] = issue_counts.get(field, 0) + 1
 
-        rel = os.path.relpath(result["path"], folder)
+        rel = _relpath_guard(result["path"], folder)
 
         grade_color = Color.GREEN if passed else Color.RED
 

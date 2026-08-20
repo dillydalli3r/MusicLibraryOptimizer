@@ -2,7 +2,6 @@
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 
 from .audio import AudioFile
 from .paths import AUDIO_EXTS, DEFAULT_DIGITAL_SOURCE
@@ -20,37 +19,35 @@ SPACE_AFTER_TS_RE = re.compile(r"(\[\d{2}:\d{2}\.\d{2,3}\])\s+")
 
 
 LRC_META_RE = re.compile(
-    r"^\s*\[(?:ar|ti|al|by|offset|length|re|ve):.*\]\s*$",
+    r"^\s*\[(?:ar|ti|al|by|au|la|offset|length|re|ve):.*\]\s*$",
     re.IGNORECASE,
 )
 
 
-def _round_ms(ms_str, precision=2):
-    try:
-        d = Decimal("0." + ms_str).quantize(
-            Decimal("0." + ("0" * max(1, precision))),
-            rounding=ROUND_HALF_UP,
-        )
-        s = format(d, "f")
-        digits = s.split(".", 1)[1] if "." in s else "00"
-        return digits[:precision].ljust(precision, "0")
-    except (InvalidOperation, ValueError):
-        return ms_str[:precision].ljust(precision, "0")
-
-
 def _reformat_ts(m, precision=2):
-    mins = m.group(1).zfill(2)
-    secs = m.group(2).zfill(2)
+    """Reformat a [mm:ss.xxx] timestamp to the requested precision,
+    carrying correctly: [01:59.999] at precision 2 becomes [02:00.00]."""
+    mins = int(m.group(1))
+    secs = int(m.group(2))
     ms = m.group(3)
 
     if ms is None:
-        ms = "0" * precision
-    elif len(ms) > precision:
-        ms = _round_ms(ms, precision)
+        ms_ms = 0
     else:
-        ms = ms.ljust(precision, "0")[:precision]
+        try:
+            ms_ms = int(ms[:3].ljust(3, "0")[:3])
+        except ValueError:
+            ms_ms = 0
 
-    return f"[{mins}:{secs}.{ms}]"
+    total_ms = (mins * 60 + secs) * 1000 + ms_ms
+    unit_ms = 10 ** (3 - precision)
+    # Round-half-up in integer milliseconds (Decimal quantize is a no-op
+    # for positive exponents when built from an int).
+    total_ms = ((total_ms + unit_ms // 2) // unit_ms) * unit_ms
+
+    mm, rem = divmod(total_ms, 60000)
+    ss, cc = divmod(rem, 1000)
+    return f"[{mm:02d}:{ss:02d}.{cc // unit_ms:0{precision}d}]"
 
 
 def format_lyrics_text(text, precision=2, strip_metadata=True,

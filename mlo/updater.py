@@ -215,7 +215,10 @@ def _pid_is_running(pid):
         if os.name == "nt":
             process = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
             if not process:
-                return False
+                # Cannot open the process (e.g. it is elevated and we are
+                # not). Assume it is alive: the wait helper will simply keep
+                # waiting until it actually exits or the timeout is reached.
+                return True
             code = ctypes.c_ulong()
             ctypes.windll.kernel32.GetExitCodeProcess(process, ctypes.byref(code))
             ctypes.windll.kernel32.CloseHandle(process)
@@ -319,10 +322,16 @@ def request_close_instances(pids):
 
 
 def launch_installer_after_shutdown(installer_path, pids, timeout=180):
-    """Launch a hidden helper that waits for every app PID before setup."""
+    """Launch a hidden helper that waits for every app PID before setup.
+
+    All given PIDs (including the caller's own) are waited on: the caller
+    exits right after spawning the helper, so its PID drops off the list
+    almost immediately. The helper also deletes the downloaded installer
+    once setup has finished.
+    """
     if not os.path.isfile(installer_path):
         raise FileNotFoundError(installer_path)
-    pids = sorted({int(pid) for pid in pids if int(pid) != os.getpid()})
+    pids = sorted({int(pid) for pid in pids if int(pid) > 0})
     if os.name != "nt":
         subprocess.Popen([installer_path])
         return
@@ -330,13 +339,24 @@ def launch_installer_after_shutdown(installer_path, pids, timeout=180):
     script = os.path.join(
         tempfile.gettempdir(), f"mlo_update_wait_{uuid.uuid4().hex}.ps1"
     )
+    # Avoid @(pipeline) expressions: under "powershell.exe -File" they parse
+    # unpredictably in PowerShell 5.1 and collapse to a single value, which
+    # would let setup start while app processes are still running.
     script_text = r'''
-param([string]$Installer, [int[]]$Pids, [int]$Timeout)
+param([string]$Installer, [string]$Pids = "", [int]$Timeout)
+$ids = @()
+foreach ($tok in ($Pids -split ' ')) {
+    if ($tok -match '^\d+$') { $ids += [int]$tok }
+}
 $deadline = (Get-Date).AddSeconds($Timeout)
 while ((Get-Date) -lt $deadline) {
-    $alive = @($Pids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    $alive = @()
+    foreach ($procId in $ids) {
+        if (Get-Process -Id $procId -ErrorAction SilentlyContinue) { $alive += $procId }
+    }
     if ($alive.Count -eq 0) {
-        Start-Process -FilePath $Installer
+        Start-Process -FilePath $Installer -Wait
+        Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
         exit 0
     }
@@ -351,7 +371,9 @@ exit 2
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-WindowStyle", "Hidden", "-File", script,
         "-Installer", os.path.abspath(installer_path),
-        "-Pids", ",".join(str(pid) for pid in pids),
+        # Space-separated list: PowerShell 5.1 binds "-Pids a,b" as a
+        # single int (commas are a thousands separator), so pass a string.
+        "-Pids", " ".join(str(pid) for pid in pids),
         "-Timeout", str(int(timeout)),
     ]
     subprocess.Popen(command, creationflags=_CREATE_NO_WINDOW)

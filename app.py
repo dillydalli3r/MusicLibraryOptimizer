@@ -810,8 +810,9 @@ class DependenciesDialog(tk.Toplevel):
         if self.busy:
             if not messagebox.askyesno(
                 "Download in progress",
-                "A download is still running. Close anyway? The remaining "
-                "tools will not be installed.", parent=self,
+                "A download is still running. Close this window anyway? The "
+                "download continues in the background; the app will close "
+                "once it finishes.", parent=self,
             ):
                 return
         self.destroy()
@@ -867,7 +868,8 @@ class DependenciesDialog(tk.Toplevel):
                     self.q.put(("fail", key, str(e)))
             fetchdeps.refresh_tool_cache()
             self.q.put(("busy", False))
-        threading.Thread(target=work, daemon=True).start()
+        self._install_thread = threading.Thread(target=work, daemon=True)
+        self._install_thread.start()
 
     def _row_button_text(self, key):
         row = self.rows[key]
@@ -883,6 +885,14 @@ class DependenciesDialog(tk.Toplevel):
         try:
             while True:
                 kind, *payload = self.q.get_nowait()
+                if not self.winfo_exists():
+                    # Dialog closed mid-download: only relay the busy flag so
+                    # the app never gets stuck thinking work is in progress.
+                    if kind == "busy":
+                        self.app._deps_busy = bool(payload[0])
+                        self.app._set_job_busy("dependency download",
+                                               bool(payload[0]))
+                    continue
                 if kind == "latest":
                     self.latest = payload[0]
                     for key in self.KEYS:
@@ -916,7 +926,13 @@ class DependenciesDialog(tk.Toplevel):
                     self._set_busy(payload[0])
         except queue.Empty:
             pass
+        except Exception:
+            # Never let one bad message kill the poll loop.
+            pass
         if self.winfo_exists():
+            self.after(120, self._poll)
+        elif getattr(self, "_install_thread", None) is not None \
+                and self._install_thread.is_alive():
             self.after(120, self._poll)
 
 
@@ -2572,6 +2588,11 @@ class App(tk.Tk):
                         self.after_idle(lambda p=pending: self._refresh_library(regrade=p))
         except queue.Empty:
             pass
+        except Exception:
+            # A single malformed message must not kill the drain loop.
+            _stream = getattr(self, "stdout_stream", None)
+            if _stream is not None:
+                traceback.print_exc(file=_stream)
         self.after(120, self._drain_library)
 
     def _collect_open(self):
@@ -3618,16 +3639,23 @@ class App(tk.Tk):
                 elif kind == "update_download":
                     win, btn, ok, path, error = payload
                     if not ok:
-                        if btn.winfo_exists():
+                        if btn is not None and btn.winfo_exists():
                             btn.configure(state=tk.NORMAL, text="Download & Install")
-                        messagebox.showerror(
-                            "Update failed", error or "Installer download failed.",
-                            parent=win,
-                        )
+                        if win is not None and win.winfo_exists():
+                            messagebox.showerror(
+                                "Update failed", error or "Installer download failed.",
+                                parent=win,
+                            )
                     else:
                         self._start_update_shutdown(path, dialog=win)
         except queue.Empty:
             pass
+        except Exception:
+            # A single malformed message must not kill the drain loop; the
+            # remaining queued messages are processed on the next tick.
+            _stream = getattr(self, "stdout_stream", None)
+            if _stream is not None:
+                traceback.print_exc(file=_stream)
         self.after(80, self._drain_log)
 
     # ------------------------------------------------------------------
@@ -3817,14 +3845,11 @@ class App(tk.Tk):
         if self._has_active_work():
             messagebox.showinfo(
                 "Update postponed",
-                "The update cannot start while the library, a script, a tag "
-                "edit, or an external tool is still working.",
+                "The update cannot start while the library, a script, or an "
+                "external tool is still working.",
                 parent=self,
             )
-            try:
-                os.remove(installer_path)
-            except OSError:
-                pass
+            self._discard_installer(installer_path)
             return
 
         other_busy = updater.busy_instance_pids(os.getpid())
@@ -3838,18 +3863,46 @@ class App(tk.Tk):
                 f"Finish it before updating.\n\n{reasons}",
                 parent=self,
             )
-            try:
-                os.remove(installer_path)
-            except OSError:
-                pass
+            self._discard_installer(installer_path)
             return
 
-        pids = updater.app_instance_pids()
-        other_pids = pids - {os.getpid()}
-        if self.config.get("update_close_other_instances", True):
+        other_pids = updater.app_instance_pids() - {os.getpid()}
+        if other_pids and self.config.get("update_close_other_instances", True):
             updater.request_close_instances(other_pids)
+            # Wait asynchronously for the other windows to close; if they
+            # refuse, ask the user instead of failing silently in the helper.
+            self._installer_pending = installer_path
+            self._installer_dialog = dialog
+            self._installer_deadline = time.monotonic() + 20
+            self._poll_instances_closing()
+            return
+        self._finish_update_shutdown(installer_path, dialog)
+
+    def _poll_instances_closing(self):
+        if not (updater.app_instance_pids() - {os.getpid()}):
+            self._finish_update_shutdown(self._installer_pending,
+                                         self._installer_dialog)
+            return
+        if time.monotonic() > self._installer_deadline:
+            if not messagebox.askyesno(
+                "Instances still open",
+                "Another Music Library Optimizer window is still open and "
+                "did not close. Start the installer anyway?",
+                parent=self,
+            ):
+                self._discard_installer(self._installer_pending)
+                self._installer_pending = None
+                return
+            self._finish_update_shutdown(self._installer_pending,
+                                         self._installer_dialog)
+            return
+        self.after(500, self._poll_instances_closing)
+
+    def _finish_update_shutdown(self, installer_path, dialog):
+        self._installer_pending = None
         try:
-            updater.launch_installer_after_shutdown(installer_path, pids)
+            updater.launch_installer_after_shutdown(
+                installer_path, updater.app_instance_pids())
         except Exception as e:
             self.log(f"Could not schedule installer: {e}", tag="red")
             messagebox.showerror(
@@ -3863,8 +3916,11 @@ class App(tk.Tk):
             dialog.destroy()
         self.on_destroy()
 
-    def _show_no_update(self):
-        messagebox.showinfo("No Updates", "You are already on the latest version.", parent=self)
+    def _discard_installer(self, installer_path):
+        try:
+            os.remove(installer_path)
+        except OSError:
+            pass
 
     def _run_all(self):
         order = self.config.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
@@ -4052,13 +4108,13 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     def on_destroy(self):
         if not self._shutdown_for_update and self._has_active_work():
-            messagebox.showinfo(
+            if not messagebox.askyesno(
                 "Operation in progress",
-                "Finish the current scan, script, download, or "
-                "external tool before closing the application.",
+                "A scan, script, or download is still working. Close anyway? "
+                "The work will be abandoned.",
                 parent=self,
-            )
-            return
+            ):
+                return
         updater.unregister_instance(self._instance_state_path)
         sys.stdout, sys.stderr = self._real_stdout, self._real_stderr
         self.destroy()

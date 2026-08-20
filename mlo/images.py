@@ -88,29 +88,22 @@ def _strip_jpeg_metadata(input_path, output_path):
 
 def _png_has_alpha(filepath):
     if not HAS_PIL:
-        return False, None
-    img = None
+        return False
     try:
-        img = Image.open(filepath)
-        has_alpha = (
-            img.mode in ("RGBA", "LA")
-            or (img.mode == "P" and "transparency" in img.info)
-        )
-        # Force a full read so PIL closes the underlying file handle;
-        # otherwise later os.remove/os.replace of the same file fails on
-        # Windows with WinError 32 while the caller still holds the image.
-        try:
-            img.load()
-        except Exception:
-            pass
-        return has_alpha, img
-    except Exception:
-        if img is not None:
+        with Image.open(filepath) as img:
+            # Force a full read so PIL releases the underlying file handle;
+            # otherwise later os.remove/os.replace of the same file fails on
+            # Windows with WinError 32 while the caller still holds it.
             try:
-                img.close()
+                img.load()
             except Exception:
                 pass
-        return False, None
+            return (
+                img.mode in ("RGBA", "LA")
+                or (img.mode == "P" and "transparency" in img.info)
+            )
+    except Exception:
+        return False
 
 
 def _flatten_png_alpha(src_path, dst_path):
@@ -217,7 +210,7 @@ def _process_image_to_jxl(args):
 
         elif ext == ".png":
             if remove_alpha and HAS_PIL:
-                has_alpha, _ = _png_has_alpha(src_path)
+                has_alpha = _png_has_alpha(src_path)
                 if has_alpha:
                     stripped_png = src_path + ".no_alpha.png"
                     temp_files.append(stripped_png)
@@ -282,7 +275,7 @@ def _process_image_to_jxl(args):
                 input_for_cjxl = decoded_png
 
                 if remove_alpha and HAS_PIL:
-                    has_alpha, _ = _png_has_alpha(decoded_png)
+                    has_alpha = _png_has_alpha(decoded_png)
                     if has_alpha:
                         flat_png = decoded_png + ".no_alpha.png"
                         temp_files.append(flat_png)
@@ -328,24 +321,19 @@ def _process_image_to_jxl(args):
 
         final_size = os.path.getsize(temp_out_path)
 
+        # Secure the new file at its final path FIRST (atomic overwrite),
+        # then remove the source. If the rename fails, the original is
+        # still intact and the finally block cleans up the temp output.
         try:
-            os.remove(src_path)
-        except OSError as e:
-            return (src_path, "failed", 0, 0, f"Couldn't delete original: {e}")
-
-        if (
-            os.path.exists(final_out_path)
-            and os.path.normpath(final_out_path) != os.path.normpath(temp_out_path)
-        ):
-            try:
-                os.remove(final_out_path)
-            except OSError as e:
-                return (src_path, "failed", 0, 0, f"Couldn't overwrite: {e}")
-
-        try:
-            os.rename(temp_out_path, final_out_path)
+            os.replace(temp_out_path, final_out_path)
         except OSError as e:
             return (src_path, "failed", 0, 0, f"Couldn't rename: {e}")
+
+        if os.path.normpath(src_path) != os.path.normpath(final_out_path):
+            try:
+                os.remove(src_path)
+            except OSError as e:
+                log(f"[cleanup warn] could not remove {src_path}: {e}")
 
         b_rem, b_add = _diff_bytes(original_size, final_size, existing_dest_size)
 
@@ -507,7 +495,7 @@ def _process_png_in_place(args):
     _safe_remove(temp_path)
 
     if remove_alpha and HAS_PIL:
-        has_alpha, _ = _png_has_alpha(filepath)
+        has_alpha = _png_has_alpha(filepath)
         if has_alpha:
             flat_path = filepath + ".no_alpha.png"
 
@@ -833,18 +821,16 @@ def _process_jxl_back_to_original(args):
             else:
                 final_input = input_file
 
+            # Secure the decoded output first, then drop the source JXL.
+            try:
+                os.replace(final_input, out_path)
+            except OSError as e:
+                return (src_path, "failed", 0, 0, f"Couldn't write output: {e}")
+
             try:
                 os.remove(src_path)
             except OSError as e:
-                return (src_path, "failed", 0, 0, f"Couldn't delete JXL: {e}")
-
-            if (
-                os.path.exists(out_path)
-                and os.path.normpath(final_input) != os.path.normpath(out_path)
-            ):
-                os.remove(out_path)
-
-            os.replace(final_input, out_path)
+                log(f"[cleanup warn] could not remove {src_path}: {e}")
 
             if jpegtran_exe:
                 enc_ver = ljt_version
@@ -905,7 +891,7 @@ def _process_jxl_back_to_original(args):
         input_file = decoded_png
 
         if remove_alpha and remove_alpha_pil:
-            has_alpha, _ = _png_has_alpha(decoded_png)
+            has_alpha = _png_has_alpha(decoded_png)
             if has_alpha:
                 flat_png = decoded_png + ".no_alpha.png"
                 temp_files.append(flat_png)
@@ -942,18 +928,16 @@ def _process_jxl_back_to_original(args):
         else:
             final_input = input_file
 
+        # Secure the decoded output first, then drop the source JXL.
+        try:
+            os.replace(final_input, out_path)
+        except OSError as e:
+            return (src_path, "failed", 0, 0, f"Couldn't write output: {e}")
+
         try:
             os.remove(src_path)
         except OSError as e:
-            return (src_path, "failed", 0, 0, f"Couldn't delete JXL: {e}")
-
-        if (
-            os.path.exists(out_path)
-            and os.path.normpath(final_input) != os.path.normpath(out_path)
-        ):
-            os.remove(out_path)
-
-        os.replace(final_input, out_path)
+            log(f"[cleanup warn] could not remove {src_path}: {e}")
 
         try:
             _strip_png_metadata(out_path)
@@ -1065,6 +1049,25 @@ def run_process_images(config):
     est_workers = worker_count(config, default=cpu_count, items=len(files))
     threads_per_file = max(1, cpu_count // max(1, est_workers))
 
+    # With rename_to_cover, at most ONE image per folder may take the cover
+    # name; every other image keeps its own basename. Otherwise front/back/
+    # booklet scans would all write to the same cover.* file and clobber
+    # each other (losing every image but the last).
+    cover_map = {}
+    if rename_to_cover:
+        groups = {}
+        for f in files:
+            groups.setdefault(os.path.dirname(f), []).append(f)
+        for folder, group in groups.items():
+            def _cover_key(f):
+                base = os.path.splitext(os.path.basename(f).lower())[0]
+                return (0 if base in ("cover", "front", "folder") else 1,
+                        os.path.basename(f).lower(), f)
+            cover_map[folder] = sorted(group, key=_cover_key)[0]
+
+    def _renames(f):
+        return rename_to_cover and f == cover_map.get(os.path.dirname(f))
+
     tasks = []
 
     for f in files:
@@ -1083,8 +1086,8 @@ def run_process_images(config):
                         ljt["version"] if ljt else None,
                         ox["oxipng_exe"] if ox else None,
                         ox["version"] if ox else None,
-                        f,
-                        rename_to_cover,
+f,
+                        _renames(f),
                         remove_alpha,
                         HAS_PIL,
                         force,
@@ -1106,7 +1109,7 @@ def run_process_images(config):
                     threads_per_file,
                     effort,
                     force,
-                    rename_to_cover,
+                    _renames(f),
                     remove_alpha,
                     enc,
                 ),
@@ -1123,7 +1126,7 @@ def run_process_images(config):
                             ljt["version"],
                             f,
                             force,
-                            rename_to_cover,
+                            _renames(f),
                             progressive,
                             enc,
                         ),
@@ -1141,7 +1144,7 @@ def run_process_images(config):
                             ox["version"],
                             f,
                             force,
-                            rename_to_cover,
+                            _renames(f),
                             remove_alpha,
                             optimization_level,
                             enc,
@@ -1162,7 +1165,7 @@ def run_process_images(config):
                         threads_per_file,
                         effort,
                         force,
-                        rename_to_cover,
+                        _renames(f),
                         enc,
                     ),
                     f,

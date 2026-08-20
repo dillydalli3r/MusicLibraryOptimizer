@@ -239,6 +239,11 @@ def _download(url, dest_path, progress=None):
             done += len(chunk)
             if progress and total:
                 progress(done, total)
+    if total and done != total:
+        raise RuntimeError(
+            f"incomplete download: {done}/{total} bytes")
+    if done < 4096:
+        raise RuntimeError("downloaded file is unexpectedly small")
 
 
 def _find_7z():
@@ -269,11 +274,13 @@ def _windows_short_path(path):
 
 
 def _extract_with_7z(sevenz, archive_path, dest_dir):
-    run_tool(
+    result = run_tool(
         [sevenz, "x", "-y", f"-o{dest_dir}", archive_path],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         timeout=180, check=False,
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"7-Zip extraction failed (rc={result.returncode})")
 
 
 def _extract_archive(archive_path, dest_dir, log):
@@ -361,7 +368,8 @@ def _remove_older_versions(prefix, keep_dir):
 def _install_simple_dr_meter(log=print, progress=None):
     """Download the simple-dr-meter source archive (no binaries exist)."""
     dest_dir = os.path.join(DEPS_DIR, "simple-dr-meter")
-    tmp_zip = tempfile.mktemp(suffix=".zip")
+    fd, tmp_zip = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
     workdir = tempfile.mkdtemp(prefix="mlo_drmeter_")
     try:
         log("Downloading simple-dr-meter (source archive) …")
@@ -414,7 +422,9 @@ def install_dependency(key, log=print, progress=None):
     prefix = INSTALL_PREFIX[key]
     dest_dir = os.path.join(DEPS_DIR, f"{prefix} v{version}")
 
-    tmp_archived = tempfile.mktemp(suffix=os.path.splitext(asset)[1])
+    tmp_archived_fd, tmp_archived = tempfile.mkstemp(
+        suffix=os.path.splitext(asset)[1])
+    os.close(tmp_archived_fd)
     workdir = tempfile.mkdtemp(prefix="mlo_dep_")
 
     try:

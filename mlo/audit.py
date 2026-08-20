@@ -304,8 +304,12 @@ def run_audit_library(config):
             cli_status = str(item.get("status", "")).strip()
 
             stats["total_scanned"] += 1
-            rel = os.path.relpath(path, folder) if path else item.get(
-                "fileName", "?")
+            try:
+                rel = os.path.relpath(path, folder) if path else item.get(
+                    "fileName", "?")
+            except ValueError:
+                rel = os.path.basename(path) if path else item.get(
+                    "fileName", "?")
 
             # CLI verdict drives the status counts; warnings (clipping
             # flags etc. on an otherwise Valid file) are tracked apart.
@@ -353,7 +357,11 @@ def run_audit_library(config):
             stats["total_scanned"] += 1
             stats["skipped_count"] += 1
             status_counts["Unknown"] += 1
-            log(f"{c('–', Color.GREY)} {os.path.relpath(gone, folder)} "
+            try:
+                rel_gone = os.path.relpath(gone, folder)
+            except ValueError:
+                rel_gone = os.path.basename(gone)
+            log(f"{c('–', Color.GREY)} {rel_gone} "
                 f"{c('(no audit result)', Color.GREY)}")
 
         if pbar is not None:

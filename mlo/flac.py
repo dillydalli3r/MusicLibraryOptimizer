@@ -80,7 +80,7 @@ def _optimize_flac(args):
 
         if not add_seektables and metaflac_exe and not ours:
             try:
-                run_tool(
+                result = run_tool(
                     [
                         metaflac_exe,
                         "--remove",
@@ -92,17 +92,22 @@ def _optimize_flac(args):
                     text=True,
                 )
 
-                final_size = os.path.getsize(filepath)
+                if result.returncode != 0:
+                    err = (result.stderr or "").strip()
+                    log(c(f"[strip warn] {filename}: metaflac failed: {err}",
+                          Color.YELLOW))
+                else:
+                    final_size = os.path.getsize(filepath)
 
-                if final_size != original_size:
-                    b_rem, b_add = _diff_bytes(original_size, final_size)
-                    return (
-                        filename,
-                        True,
-                        "removed seektable (skipped re-encode)",
-                        b_rem,
-                        b_add,
-                    )
+                    if final_size != original_size:
+                        b_rem, b_add = _diff_bytes(original_size, final_size)
+                        return (
+                            filename,
+                            True,
+                            "removed seektable (skipped re-encode)",
+                            b_rem,
+                            b_add,
+                        )
             except Exception:
                 pass
 
@@ -143,7 +148,7 @@ def _optimize_flac(args):
                 blocks = "PICTURE,SEEKTABLE,PADDING,CUESHEET,APPLICATION"
 
             try:
-                run_tool(
+                result = run_tool(
                     [
                         metaflac_exe,
                         "--dont-use-padding",
@@ -155,6 +160,10 @@ def _optimize_flac(args):
                     stderr=subprocess.PIPE,
                     text=True,
                 )
+                if result.returncode != 0:
+                    err = (result.stderr or "").strip()
+                    log(c(f"[strip warn] {filename}: metaflac failed: {err}",
+                          Color.YELLOW))
             except Exception:
                 pass
 

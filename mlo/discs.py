@@ -159,7 +159,8 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None):
             continue
         file_discs = set()
         for m in CUE_FILE_RE.finditer(text):
-            d = known.get(m.group(1).split("\\")[-1].lower())
+            base = m.group(1).replace("/", "\\").split("\\")[-1].lower()
+            d = known.get(base)
             if d is not None:
                 file_discs.add(d)
         if len(file_discs) == 1:
