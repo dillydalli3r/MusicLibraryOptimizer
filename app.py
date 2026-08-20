@@ -574,7 +574,7 @@ class App(tk.Tk):
             command=lambda: self._refresh_library(regrade=True))
         self.toolbar_left.add(self.refresh_btn)
         self.clear_sel_btn = ttk.Button(
-            self.toolbar_left, text="Clear Sel", style="Small.TButton",
+            self.toolbar_left, text="Unselect All", style="Small.TButton",
             command=self._clear_selection)
         self.toolbar_left.add(self.clear_sel_btn)
         self.select_all_btn = ttk.Button(
@@ -1610,6 +1610,13 @@ class App(tk.Tk):
         self.albumartist_var.set("")
         self._rebuild_tree()
 
+    def _checked_audio_files(self):
+        """Checked audio file paths (the current selection), sorted."""
+        return sorted(
+            p for p, on in self._checked.items()
+            if on and p and os.path.isfile(p)
+        )
+
     def _optimize_selected(self):
         targets = [p for p, c in self._checked.items() if c]
         if not targets:
@@ -1907,10 +1914,15 @@ class App(tk.Tk):
             menu.add_command(label="Grade details…",
                              command=lambda: self._show_grade_details(item))
         if edit_dir:
+            # "Open selected tracks" opens every CHECKED audio file (the
+            # selection), falling back to the right-clicked row when nothing
+            # is checked.
+            checked_files = self._checked_audio_files()
+            mp3tag_targets = checked_files or [path if is_track else edit_dir]
             menu.add_command(
                 label="Open selected tracks in Mp3tag",
-                command=lambda: self._open_in_external(
-                    "mp3tag", [path if is_track else edit_dir]))
+                command=lambda t=mp3tag_targets: self._open_in_external(
+                    "mp3tag", t))
         target_dir = path if (path and os.path.isdir(path)) else album_dir
         if target_dir:
             menu.add_separator()
