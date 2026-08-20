@@ -40,8 +40,8 @@ external folders. Keep the whole folder together to move it anywhere.
 
 - **Safe update workflow** — the app now closes all idle instances and
   waits for external encoder processes before launching the installer.
-  Updates are blocked while a script, dependency download, tag edit, or
-  library scan is active.
+  Updates are blocked while a script, dependency download, or library
+  scan is active.
 - **Worker limit** — Settings → Interface → **Worker Limit** caps the
   thread pool size used by every processing pass (0 = automatic), preventing
   disk contention on slower or shared machines.
@@ -52,13 +52,12 @@ external folders. Keep the whole folder together to move it anywhere.
 - **Explicit target scope** — choosing a script from the right-click
   "Run Script…" menu or the sidebar now operates **only** on the selected
   files/folders; it never falls back to a full-library scan.
-- **Per-format tag editor** — right-click any track or album → **Edit
-  tags…** opens a semantic editor that writes the correct ID3 frame,
-  Vorbis comment, or MP4 atom for each container. Grading fields
-  (GENRE, INSTRUMENTAL, AUDIT, LOG_GRADE, Dynamic Range, ReplayGain) and
-  sort fields (DISCNUMBER, TRACKNUMBER, TITLE, ARTIST, ALBUMARTIST,
-  ALBUM) appear first; mixed values across files are shown as "⟨mixed⟩"
-  and highlighted; empty values delete the tag.
+- **Open selected tracks in Mp3tag** — the built-in tag editor was removed
+  and replaced with a right-click **Open selected tracks in Mp3tag** item:
+  a single track opens directly in Mp3tag, an album opens its folder, and
+  the sidebar **Mp3tag** button still opens the checked folders. Mp3tag is
+  auto-detected (registry, common install dirs, PATH) or located manually
+  on first use.
 - **Music-tag write toggles** — Settings → Tags now lets you enable/disable
   AUDIT, LOG_GRADE, ReplayGain, and Dynamic Range tag writes independently.
 - **Setup Guide** — the first-run wizard is now a modal **Setup Guide**

@@ -81,31 +81,6 @@ RUNNERS = {
     8: ("Auto Tagging", run_auto_tagging),
 }
 
-# Tag editor ordering is intentional: the fields most often corrected first
-# are visible immediately, grading fields stay near them, and sort fields are
-# together before the remaining tags found in the file.
-TAG_EDITOR_PRIORITY = [
-    "GENRE", "INSTRUMENTAL",
-    "AUDIT", "LOG_GRADE", "ALBUMITUNESADVISORY", "ITUNESADVISORY",
-    "DYNAMIC RANGE", "ALBUM DYNAMIC RANGE",
-    "REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK",
-    "REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_PEAK",
-    "DISCNUMBER", "TRACKNUMBER", "TITLE", "ARTIST", "ALBUMARTIST",
-    "ALBUM", "MEDIA", "SOURCE", "DATE", "COMPOSER", "COMMENT",
-    "LYRICS", "BPM", "COPYRIGHT",
-]
-COMMON_TAGS = [(key, key) for key in TAG_EDITOR_PRIORITY]
-TAG_EDITOR_MIXED = "<mixed>"
-RAW_TAGS = [
-    ("ID3 TIT2", "TIT2"), ("ID3 TALB", "TALB"), ("ID3 TPE1", "TPE1"),
-    ("ID3 TPE2", "TPE2"), ("ID3 TRCK", "TRCK"), ("ID3 TPOS", "TPOS"),
-    ("ID3 TCON", "TCON"), ("ID3 TDRC", "TDRC"), ("ID3 TCOM", "TCOM"),
-    ("MP4 \u00a9nam", "\u00a9nam"), ("MP4 \u00a9alb", "\u00a9alb"),
-    ("MP4 \u00a9ART", "\u00a9ART"), ("MP4 \u00a9day", "\u00a9day"),
-    ("MP4 \u00a9gen", "\u00a9gen"), ("MP4 \u00a9wrt", "\u00a9wrt"),
-    ("MP4 \u00a9cmt", "\u00a9cmt"), ("MP4 \u00a9lyr", "\u00a9lyr"),
-]
-
 # Library tree columns: id -> (heading, width, visible-by-default).
 # The TAGS heading doubles as the key for its compact layout:
 # G=Genre A=Advisory I=Instrumental L=Lyrics AA=Album Advisory.
@@ -1704,7 +1679,6 @@ class App(tk.Tk):
         self._busy_reasons = set()
         self.running = False
         self._run_thread = None
-        self._tag_edit_busy = False
         self._deps_busy = False
         self._shutdown_for_update = False
         self._update_result = None
@@ -2512,7 +2486,7 @@ class App(tk.Tk):
             name="mlo-library-scan",
         ).start()
         # One persistent drain loop serves every scan and the one-shot
-        # re-grades queued by the tag editor; start it only once.
+        # background re-grades; start it only once.
         if not self._scan_draining:
             self._scan_draining = True
             self._drain_library()
@@ -2596,9 +2570,6 @@ class App(tk.Tk):
                         pending = self._scan_pending
                         self._scan_pending = False
                         self.after_idle(lambda p=pending: self._refresh_library(regrade=p))
-                elif kind == "regrade_done":
-                    self._tag_edit_busy = False
-                    self._set_job_busy("tag edit", False)
         except queue.Empty:
             pass
         self.after(120, self._drain_library)
@@ -3267,7 +3238,7 @@ class App(tk.Tk):
             pass
 
     # ------------------------------------------------------------------
-    # Grade details + tag editing
+    # Grade details
     # ------------------------------------------------------------------
     def _find_album_for_item(self, item):
         """Return (album_dir, cached grade result) for an album or track row."""
@@ -3346,10 +3317,9 @@ class App(tk.Tk):
                              command=lambda: self._show_grade_details(item))
         if edit_dir:
             menu.add_command(
-                label=("Edit file tags…" if is_track
-                       else "Edit folder tags…"),
-                command=lambda: self._open_tag_editor(
-                    edit_dir, path if is_track else None))
+                label="Open selected tracks in Mp3tag",
+                command=lambda: self._open_in_external(
+                    "mp3tag", [path if is_track else edit_dir]))
         target_dir = path if (path and os.path.isdir(path)) else album_dir
         if target_dir:
             menu.add_separator()
@@ -3357,9 +3327,6 @@ class App(tk.Tk):
                 label="Enqueue in foobar2000",
                 command=lambda: self._open_in_external(
                     "foobar2000", [target_dir]))
-            menu.add_command(
-                label="Open in Mp3tag",
-                command=lambda: self._open_in_external("mp3tag", [target_dir]))
             menu.add_command(
                 label="Open in Picard",
                 command=lambda: self._open_in_external("picard", [target_dir]))
@@ -3416,13 +3383,14 @@ class App(tk.Tk):
                 dirs.append(d)
         return sorted(dirs)
 
-    def _open_in_external(self, key, dirs=None):
-        """Launch Mp3tag / Picard with the given (or selected) folders."""
+    def _open_in_external(self, key, targets=None):
+        """Launch Mp3tag / Picard / foobar2000 with the given targets (files
+        or folders), or the folders covered by the checked tree items."""
         spec = EXTERNAL_TOOLS[key]
         label = spec["label"]
-        if dirs is None:
-            dirs = self._selected_album_dirs()
-        if not dirs:
+        if targets is None:
+            targets = self._selected_album_dirs()
+        if not targets:
             self.status_var.set(f"No folders selected — check items in the "
                                 f"library tree first.")
             self.log(f"{label}: nothing selected. Tick one or more albums "
@@ -3451,7 +3419,7 @@ class App(tk.Tk):
             # GUI application: Popen without waiting; CREATE_NO_WINDOW keeps
             # any console-stub launcher from flashing a window.
             subprocess.Popen(
-                [exe] + spec.get("args", []) + dirs,
+                [exe] + spec.get("args", []) + targets,
                 creationflags=0x08000000 if sys.platform == "win32" else 0,
             )
         except Exception as e:
@@ -3459,12 +3427,18 @@ class App(tk.Tk):
             messagebox.showerror(label, f"Could not launch {label}:\n{e}")
             return
 
-        n = len(dirs)
+        n = len(targets)
         verb = "Enqueued" if spec.get("args") else "Opened"
-        self.log(f"{verb} {n} folder{'s' if n != 1 else ''} in {label}.",
-                 tag="green")
-        self.status_var.set(
-            f"{verb} {n} folder{'s' if n != 1 else ''} in {label}.")
+        n_files = sum(1 for t in targets if os.path.isfile(t))
+        n_dirs = n - n_files
+        what = []
+        if n_files:
+            what.append(f"{n_files} file{'s' if n_files != 1 else ''}")
+        if n_dirs:
+            what.append(f"{n_dirs} folder{'s' if n_dirs != 1 else ''}")
+        msg = f"{verb} {' and '.join(what)} in {label}."
+        self.log(msg, tag="green")
+        self.status_var.set(msg)
 
     def _show_grade_details(self, item):
         """Dialog listing exactly which grade checks failed."""
@@ -3519,260 +3493,6 @@ class App(tk.Tk):
         btn.grid(row=2, column=0, sticky="e", pady=(8, 0))
         ttk.Button(btn, text="Close", style="Small.TButton",
                    command=win.destroy).pack()
-
-    def _open_tag_editor(self, edit_dir, track_path=None):
-        """Dialog to edit tags on a track or all tracks in an album folder."""
-        from mlo.stats import is_audio_file
-        from mlo.audio import AudioFile
-
-        if track_path and os.path.isfile(track_path):
-            files = [track_path]
-        elif edit_dir and os.path.isdir(edit_dir):
-            files = sorted(os.path.join(edit_dir, f)
-                           for f in os.listdir(edit_dir) if is_audio_file(f))
-        else:
-            messagebox.showinfo("Edit Tags", "No audio files to edit.")
-            return
-
-        if not files:
-            messagebox.showinfo("Edit Tags", "No audio files to edit.")
-            return
-
-        # Build per-file tag snapshots
-        file_tags = {}
-        for path in files:
-            af = AudioFile(path)
-            if af.audio is not None:
-                file_tags[path] = af.all_tags()
-
-        if not file_tags:
-            messagebox.showerror("Edit Tags", "Could not read any selected files.")
-            return
-
-        # Determine all unique tag keys across files (semantic names from AudioFile)
-        all_keys = set()
-        for tags in file_tags.values():
-            all_keys.update(tags.keys())
-
-        # Order keys: priority list first, then alphabetical remainder
-        priority_order = [k for k in TAG_EDITOR_PRIORITY if k in all_keys]
-        other_keys = sorted(k for k in all_keys if k not in TAG_EDITOR_PRIORITY)
-        ordered_keys = priority_order + other_keys
-
-        is_single = len(files) == 1
-        title = (f"Tag Editor — {os.path.basename(files[0])}"
-                 if is_single else
-                 f"Tag Editor — {os.path.basename(edit_dir)} ({len(files)} files)")
-
-        win = tk.Toplevel(self)
-        win.title(title)
-        win.configure(background=PANEL)
-        win.transient(self)
-        win.grab_set()
-        win.minsize(560, 360)
-
-        outer = ttk.Frame(win, padding=16)
-        outer.pack(fill=tk.BOTH, expand=True)
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(0, weight=1)
-
-        card = ttk.Frame(outer, style="Card.TFrame")
-        card.grid(row=0, column=0, sticky="nswe")
-        card.columnconfigure(0, weight=1)
-        card.rowconfigure(0, weight=1)
-
-        canvas = tk.Canvas(card, background=CARD, highlightthickness=0)
-        vsb = ttk.Scrollbar(card, orient=tk.VERTICAL, command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-        canvas.grid(row=0, column=0, sticky="nswe")
-        vsb.grid(row=0, column=1, sticky="ns")
-
-        rows_frame = ttk.Frame(canvas, style="Card.TFrame")
-        rows_frame.columnconfigure(1, weight=1)
-        window_id = canvas.create_window((0, 0), window=rows_frame, anchor="nw")
-        rows_frame.bind(
-            "<Configure>",
-            lambda e: (canvas.configure(scrollregion=canvas.bbox("all")),
-                       canvas.itemconfigure(window_id, width=e.width)))
-        canvas.bind("<Configure>",
-                    lambda e: canvas.itemconfigure(window_id, width=e.width))
-
-        def close():
-            canvas.unbind_all("<MouseWheel>")
-            win.destroy()
-
-        # Detect mixed values per key across files
-        mixed_values = {}
-        for key in ordered_keys:
-            values = set()
-            for path, tags in file_tags.items():
-                v = tags.get(key)
-                if v is not None:
-                    values.add(str(v).strip())
-            if len(values) > 1:
-                mixed_values[key] = values
-
-        row_meta = {}
-
-        def add_row(key):
-            row = ttk.Frame(rows_frame, style="Card.TFrame")
-            row.grid(row=len(row_meta), column=0, sticky="ew", padx=10, pady=2)
-            row.columnconfigure(1, weight=1)
-
-            # For mixed values, show indicator instead of blank
-            if key in mixed_values:
-                display = TAG_EDITOR_MIXED
-                var = tk.StringVar(value=TAG_EDITOR_MIXED)
-            else:
-                # Use first file's value as representative
-                first_path = next(iter(file_tags))
-                display = file_tags[first_path].get(key, "")
-                var = tk.StringVar(value=display)
-
-            var._row_widget = row
-            var._is_mixed = key in mixed_values
-            row_meta[key] = var
-
-            ttk.Button(
-                row, text="\u00d7", style="Small.TButton", width=2,
-                command=lambda k=key: remove_row(k)
-            ).grid(row=0, column=0, padx=(0, 8))
-            ttk.Label(row, text=key, style="Card.TLabel",
-                      font=_sfont(9)).grid(
-                row=0, column=1, sticky="w", padx=(0, 12))
-            entry = ttk.Entry(row, textvariable=var)
-            entry.grid(row=0, column=2, sticky="ew", padx=(0, 6))
-            if var._is_mixed:
-                entry.configure(foreground=YELLOW)
-                ToolTip(entry, "Mixed values across files — editing will apply to all.")
-            self._relabel_tag_rows(rows_frame)
-
-        def remove_row(key):
-            var = row_meta.pop(key)
-            var._row_widget.destroy()
-            self._relabel_tag_rows(rows_frame)
-
-        for key in ordered_keys:
-            add_row(key)
-
-        canvas.bind_all(
-            "<MouseWheel>",
-            lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
-
-        footer = ttk.Frame(outer)
-        footer.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        footer.columnconfigure(1, weight=1)
-
-        ttk.Button(
-            footer, text="Add tag\u2026", style="Small.TButton",
-            command=lambda: self._add_tag_menu(footer, row_meta, add_row)
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            footer,
-            text=("Empty value removes the tag. Applies to all listed files."
-                  if not is_single else
-                  "Empty value removes the tag."),
-            style="Muted.TLabel", font=_font(8),
-        ).grid(row=0, column=1, sticky="w", padx=(10, 0))
-
-        btns = ttk.Frame(footer)
-        btns.grid(row=0, column=2, sticky="e")
-        ttk.Button(btns, text="Save", style="Accent.TButton",
-                   command=lambda: self._save_tag_editor(
-                       win, files, file_tags, row_meta, close)
-                   ).pack(side=tk.RIGHT)
-        ttk.Button(btns, text="Cancel", style="Small.TButton",
-                   command=close).pack(side=tk.RIGHT, padx=(0, 8))
-
-        win.protocol("WM_DELETE_WINDOW", close)
-        win.bind("<Escape>", lambda e: close())
-
-    def _relabel_tag_rows(self, rows_frame):
-        for i, r in enumerate(rows_frame.winfo_children()):
-            r.grid_configure(row=i)
-
-    def _add_tag_menu(self, parent, row_meta, add_row):
-        """Popup menu of common tags + custom entry to add a new row."""
-        menu = tk.Menu(parent, tearoff=0, bg=PANEL, fg=TEXT,
-                       activebackground=ACCENT_DARK, activeforeground="#ffffff")
-        for label, key in COMMON_TAGS:
-            if key not in row_meta:
-                menu.add_command(label=label, command=lambda k=key: add_row(k))
-        menu.add_separator()
-        for label, key in RAW_TAGS:
-            if key not in row_meta:
-                menu.add_command(label=label, command=lambda k=key: add_row(k))
-        menu.add_separator()
-        menu.add_command(label="Custom tag\u2026",
-                         command=lambda: self._custom_tag(row_meta, add_row))
-        try:
-            menu.tk_popup(parent.winfo_pointerx(), parent.winfo_pointery())
-        finally:
-            menu.grab_release()
-
-    def _custom_tag(self, row_meta, add_row):
-        import tkinter.simpledialog as simpledialog
-        key = simpledialog.askstring("Add tag", "Tag key:")
-        if key and key.strip() and key.strip() not in row_meta:
-            add_row(key.strip())
-
-    def _save_tag_editor(self, win, files, file_tags, row_meta, close):
-        """Write edited tag values (per-file diff) on a worker thread, then
-        re-grade. The dialog closes immediately; progress lands in the
-        console / status bar."""
-        changes = {}
-        for key, var in row_meta.items():
-            val = var.get().strip()
-            if var._is_mixed and val == TAG_EDITOR_MIXED:
-                # User didn't change the mixed indicator — skip this key
-                continue
-            changes[key] = val
-
-        close()
-
-        def work():
-            from mlo.audio import AudioFile
-            modified_files = 0
-            errors = []
-
-            for path in files:
-                af = AudioFile(path)
-                if af.audio is None:
-                    errors.append(f"{os.path.basename(path)}: {af.error}")
-                    continue
-
-                current = af.all_tags()
-                file_changed = False
-                for key, new in changes.items():
-                    cur_str = current.get(key, "")
-                    if cur_str == new:
-                        continue
-                    if new == "":
-                        if cur_str and af.delete_tag(key):
-                            file_changed = True
-                    else:
-                        if af.set_tag(key, new):
-                            file_changed = True
-                        else:
-                            errors.append(
-                                f"{os.path.basename(path)}: {af.error}")
-                if file_changed:
-                    modified_files += 1
-
-            if errors:
-                self.log("Tag edit errors: " + "; ".join(errors), tag="red")
-            if modified_files:
-                album_dir = os.path.dirname(files[0])
-                self.log(f"Edited tags in {modified_files} file(s): "
-                         f"{os.path.basename(album_dir)}", tag="green")
-                self.log_q.put(("status", "Tags updated — re-grading album…"))
-                self._tag_edit_busy = True
-                self._set_job_busy("tag edit", True)
-                self._scan_q.put(("regrade", files))
-            else:
-                self.log_q.put(("status", "No tag changes saved."))
-
-        threading.Thread(target=work, daemon=True).start()
 
     def _regrade_album(self, album_dir):
         """Re-grade a single album in the background and refresh its row."""
@@ -3868,10 +3588,6 @@ class App(tk.Tk):
                 elif kind == "pause":
                     self.continue_btn.pack(side=tk.LEFT, padx=(0, 10))
                     self.status_var.set(f"Paused — Continue to run {payload}")
-                elif kind == "regrade":
-                    # Tag editor finished: re-grade the affected album(s)
-                    files = payload
-                    self._regrade_targets(files)
                 elif kind in ("update_auto", "update_check"):
                     if kind == "update_check":
                         win, btn, result = payload
@@ -3937,7 +3653,6 @@ class App(tk.Tk):
         active = bool(
             self.running
             or getattr(self, "_library_busy", False)
-            or self._tag_edit_busy
             or self._deps_busy
             or (self._run_thread is not None and self._run_thread.is_alive())
         )
@@ -4339,7 +4054,7 @@ class App(tk.Tk):
         if not self._shutdown_for_update and self._has_active_work():
             messagebox.showinfo(
                 "Operation in progress",
-                "Finish the current scan, script, download, tag edit, or "
+                "Finish the current scan, script, download, or "
                 "external tool before closing the application.",
                 parent=self,
             )
