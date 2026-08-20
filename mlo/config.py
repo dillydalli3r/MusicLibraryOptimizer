@@ -58,6 +58,15 @@ DEFAULT_CONFIG = {
 
     # Grading
     "grade_verbose": True,
+    # What file categories are allowed when grading an album folder. A
+    # folder with files of a disallowed category fails grading. 'other' is
+    # opt-in: by default any file that is not music/cover/cue/log/lrc fails.
+    "grade_include_music": True,
+    "grade_include_cover": True,
+    "grade_include_cue": True,
+    "grade_include_log": True,
+    "grade_include_lrc": True,
+    "grade_include_other": False,
 
     # Audio audit (AudioAuditor CLI): full-track detectors (silence, DR,
     # true peak, LUFS, BPM) instead of the fast scan; force re-audits files
@@ -67,6 +76,10 @@ DEFAULT_CONFIG = {
     "audit_thorough": False,
     "force_audit": False,
     "audit_cutoff_allow": 0,
+    # For MEDIA=CD rips, verify tracks against the CRC-32 checksums printed
+    # in the .log and write AUDIT=REAL/FAKE from that (authoritative over
+    # AudioAuditor for those files).
+    "audit_verify_cd_checksums": True,
     "audit_clipping": True,
     "audit_mqa": True,
     "audit_ai": True,

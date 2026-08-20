@@ -329,8 +329,14 @@ class ConfigDialog(tk.Toplevel):
                 "write_log_grade", "write_replaygain_tags",
                 "write_dynamic_range_tags",
             ]),
+            ("Grading", [
+                "grade_include_music", "grade_include_cover",
+                "grade_include_cue", "grade_include_log", "grade_include_lrc",
+                "grade_include_other",
+            ]),
             ("Audio Auditor", [
                 "audit_thorough", "force_audit", "audit_cutoff_allow",
+                "audit_verify_cd_checksums",
                 "audit_clipping", "audit_mqa", "audit_ai",
                 "audit_fake_stereo", "audit_silence", "audit_dynamic_range",
                 "audit_true_peak", "audit_lufs", "audit_bpm",

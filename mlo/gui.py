@@ -78,9 +78,16 @@ CONFIG_FIELDS = [
     ("write_replaygain_tags", "Write ReplayGain Tags", "bool", None),
     ("write_dynamic_range_tags", "Write Dynamic Range Tags", "bool", None),
     ("grade_verbose", "Grade Verbose Output", "bool", None),
+    ("grade_include_music", "Grading: Allow Music Files", "bool", None),
+    ("grade_include_cover", "Grading: Allow Cover Art", "bool", None),
+    ("grade_include_cue", "Grading: Allow .cue Files", "bool", None),
+    ("grade_include_log", "Grading: Allow .log Files", "bool", None),
+    ("grade_include_lrc", "Grading: Allow .lrc Files", "bool", None),
+    ("grade_include_other", "Grading: Allow Other File Types", "bool", None),
     ("audit_thorough", "Thorough Audit (slower)", "bool", None),
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
     ("audit_cutoff_allow", "Audit Cutoff Allowance (Hz, 0=default)", "int", (0, 24000)),
+    ("audit_verify_cd_checksums", "Verify CD Rips vs .log Checksums", "bool", None),
     ("audit_clipping", "Audit Clipping Detection", "bool", None),
     ("audit_mqa", "Audit MQA Detection", "bool", None),
     ("audit_ai", "Audit AI Detection", "bool", None),
@@ -587,6 +594,19 @@ FIELD_DESCRIPTIONS = {
         "Allow simple-dr-meter results to write DYNAMIC RANGE tags.",
     "grade_verbose":
         "Include the per-track tag dump in grading reports.",
+    "grade_include_music":
+        "Allow audio files when grading an album folder.",
+    "grade_include_cover":
+        "Allow cover images (.jpg/.jpeg/.png/.jxl) when grading.",
+    "grade_include_cue":
+        "Allow .cue sheets when grading.",
+    "grade_include_log":
+        "Allow .log rip logs when grading.",
+    "grade_include_lrc":
+        "Allow .lrc lyric sidecars when grading.",
+    "grade_include_other":
+        "Allow every other file type when grading. When off, any file that "
+        "is not music/cover/cue/log/lrc fails the album (extra files).",
     "audit_thorough":
         "Audit Library: enable AudioAuditor's full-track detectors "
         "(silence, dynamic range, true peak, LUFS, BPM). Much slower than "
@@ -595,6 +615,10 @@ FIELD_DESCRIPTIONS = {
         "Audit Library: re-audit files that already carry an AUDIT tag "
         "and re-score rip logs even when LOG_GRADE is present. The "
         "Force ▾ menu in the Library tab sets this per-run.",
+    "audit_verify_cd_checksums":
+        "For MEDIA=CD rips, verify each track against the CRC-32 checksum "
+        "in its .log and write AUDIT=REAL/FAKE from that. The checksum "
+        "result takes precedence over AudioAuditor for those files.",
     "audit_cutoff_allow":
         "AudioAuditor's --cutoff-allow threshold in Hz. Files whose "
         "spectral cutoff is at or above this value are NOT flagged as "

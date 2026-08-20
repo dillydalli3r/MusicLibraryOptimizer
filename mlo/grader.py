@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .audio import AudioFile
 from .lyrics import _lrc_for, _canonical_lyrics, format_lyrics_text
 from .cue import canonical_cue_text
-from .paths import AUDIO_EXTS
+from .paths import AUDIO_EXTS, IMAGE_EXTS
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, is_audio_file,
     _find_albums, _clean_set, _summarize_values, _collect_targets,
@@ -140,6 +140,48 @@ SIDECAR_TYPES = {
     ".jxl": "image", ".jpg": "image", ".jpeg": "image", ".png": "image",
 }
 
+# Category -> config key deciding whether files of that kind are allowed.
+# 'other' is opt-in (extra files fail grading by default).
+CATEGORY_INCLUDE_KEYS = {
+    "music": "grade_include_music",
+    "cover": "grade_include_cover",
+    "cue": "grade_include_cue",
+    "log": "grade_include_log",
+    "lrc": "grade_include_lrc",
+    "other": "grade_include_other",
+}
+
+
+def _classify_file(f):
+    """Category of a filename: music / cover / cue / log / lrc / other."""
+    low = f.lower()
+    if low.endswith(AUDIO_EXTS):
+        return "music"
+    if low.endswith(IMAGE_EXTS):
+        return "cover"
+    if low.endswith(".cue"):
+        return "cue"
+    if low.endswith(".log"):
+        return "log"
+    if low.endswith(".lrc"):
+        return "lrc"
+    return "other"
+
+
+def _category_allowed(cfg, category):
+    """Whether files of a category are allowed under the current grading
+    configuration (other = opt-in)."""
+    key = CATEGORY_INCLUDE_KEYS[category]
+    return bool(cfg.get(key, category != "other"))
+
+
+def _disallowed_files(all_files, cfg):
+    """Files in an album folder whose category is not allowed."""
+    return [
+        f for f in sorted(all_files)
+        if not _category_allowed(cfg, _classify_file(f))
+    ]
+
 
 def _log_file_ok(path):
     """A .log passes when it is non-empty text (a usable rip log)."""
@@ -164,20 +206,18 @@ def _grade_sidecars(album_dir, all_files, cfg):
 
     Returns a list of dicts: {file, type, ok, detail}. These are
     informational rows; they do not change the album's pass/fail (the
-    album-level cue formatting check and the per-track lyrics checks
-    already cover formatting compliance).
+    album-level checks below cover compliance).
     """
     sidecars = []
     for f in sorted(all_files):
-        low = f.lower()
-        ext = os.path.splitext(low)[1]
-        if ext not in SIDECAR_EXTS:
+        category = _classify_file(f)
+        if category == "music":
             continue
         full = os.path.join(album_dir, f)
-        if ext == ".cue":
+        if category == "cue":
             ok = _cue_formatted(full, cfg)
             detail = "formatted" if ok else "needs formatting"
-        elif ext == ".lrc":
+        elif category == "lrc":
             try:
                 with open(full, "r", encoding="utf-8", errors="replace") as fh:
                     lrc_text = fh.read()
@@ -186,14 +226,17 @@ def _grade_sidecars(album_dir, all_files, cfg):
             except OSError:
                 ok = False
             detail = "formatted" if ok else "needs formatting"
-        elif ext == ".log":
+        elif category == "log":
             ok = _log_file_ok(full)
             detail = "present" if ok else "empty"
-        else:
+        elif category == "cover":
             ok = _image_file_ok(full)
             detail = "present" if ok else "empty"
+        else:
+            ok = _category_allowed(cfg, "other")
+            detail = "allowed" if ok else "disallowed type"
         sidecars.append({
-            "file": f, "type": SIDECAR_TYPES.get(ext, "other"),
+            "file": f, "type": category,
             "ok": ok, "detail": detail,
         })
     return sidecars
@@ -515,6 +558,18 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             failed_checks += 1
             add_issue("CUE sheet not optimally formatted "
                       "(run CUE Sheets script)", "album")
+
+    # Strict file-type check: any file whose category is not allowed
+    # (e.g. an unclassified .txt/.pdf/.m3u when 'other' is off) fails the
+    # album. Categories are toggled in Settings -> Grading.
+    disallowed = _disallowed_files(all_files, cfg)
+    total_checks += 1
+    if disallowed:
+        failed_checks += 1
+        shown = ", ".join(disallowed[:6])
+        if len(disallowed) > 6:
+            shown += f" (+{len(disallowed) - 6} more)"
+        add_issue(f"Disallowed file types: {shown}", "album")
 
     pass_count = max(0, total_checks - failed_checks)
 

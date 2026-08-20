@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.8
+# Music Library Optimizer v1.0.9
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (dark theme) + optional console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.8_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.9_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.0.8_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.0.9_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -35,6 +35,38 @@ external folders. Keep the whole folder together to move it anywhere.
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.0.9
+
+- **Fixed updates being blocked by stale instances.** Instance records are
+  now pruned correctly — dead processes were being treated as alive (a
+  "still working" dialog listed many ghost PIDs all stuck on "library
+  scan", so **Download & Install** could never start). Dead-PID detection
+  now checks the actual Windows error code.
+- **Check for Updates on Start actually works.** The on-start check always
+  performs a real GitHub query (no more silent interval skip) and reports
+  the outcome to the console ("Checking for updates…", "Update available",
+  "already on the latest version", or the error).
+- **Force options only apply when Force is on.** Checking items in the
+  Force ▾ dropdown arms them; nothing is forced unless the master Force
+  toggle is on.
+- **Strict file-type grading.** An album folder that contains files other
+  than music, cover art, `.cue`, `.log` and `.lrc` now **fails grading**
+  by default (e.g. stray `.txt`, `.m3u`, `.db`, thumbs.db). What counts is
+  configurable in Settings → **Grading** (Allow Music / Cover / .cue /
+  .log / .lrc / Other).
+- **CD rip checksum verification.** For albums with **MEDIA = CD**, tracks
+  are verified against the CRC-32 checksums printed in the `.log` (EAC
+  Test/Copy CRC, AccurateRip, or XLD CRC32 hash) by decoding each file with
+  ffmpeg and comparing CRCs. A match writes **AUDIT = REAL**, a mismatch
+  writes **AUDIT = FAKE** — the checksum result takes precedence over
+  AudioAuditor for those files (Settings → Audio Auditor → **Verify CD Rips
+  vs .log Checksums**, default on).
+- **Lyrics `[00:00.00]` blank-marker fix confirmed.** Embedded lyrics whose
+  empty timing line was glued onto the next line (a `[00:00.00][00:45.53]
+  Stretching, filing[00:46.86]…` mess that ESLyrics showed as a duplicated
+  first line) are now split back onto separate lines by the Lyrics script.
+- **Cleanup** — removed stale build artifacts; every `mlo` module is used.
 
 ## New in v1.0.8
 

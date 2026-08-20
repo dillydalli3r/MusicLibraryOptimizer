@@ -248,6 +248,53 @@ def run_audit_library(config):
     force = config.get("force_audit", False)
     verbose = config.get("grade_verbose", True)
 
+    # CD rip checksum verification first (MEDIA=CD albums with checksums in
+    # their .log). Checksums are authoritative: matching = REAL, mismatch =
+    # FAKE. Files verified this way are excluded from the AudioAuditor pass.
+    checksum_verified = {}
+    ffmpeg_exe_for_cd = None
+    if config.get("audit_verify_cd_checksums", True) and not force:
+        _tools_ff = detect_all_tools()
+        _ff = (_tools_ff.get("ffmpeg") or {}).get("ffmpeg_exe")
+        if _ff:
+            ffmpeg_exe_for_cd = _ff
+        else:
+            log(c("WARNING: ffmpeg not found - CD checksum verification "
+                  "skipped (AudioAuditor only).", Color.YELLOW))
+    if ffmpeg_exe_for_cd:
+        from .discs import verify_album_checksums
+        from concurrent.futures import as_completed
+        by_album = {}
+        for p in files:
+            by_album.setdefault(os.path.dirname(p), []).append(p)
+        cw = worker_count(config, default=4, maximum=8, items=len(by_album))
+        with ThreadPoolExecutor(max_workers=cw) as ex:
+            futures = {
+                ex.submit(verify_album_checksums, ffmpeg_exe_for_cd, album,
+                          paths, config): album
+                for album, paths in by_album.items()
+            }
+            for fut in as_completed(futures):
+                album = futures[fut]
+                try:
+                    res = fut.result() or {}
+                except Exception:
+                    continue
+                for path, verdict in res.items():
+                    if config.get("write_audit_tag", True):
+                        _write_audit_tag(path, verdict)
+                    checksum_verified[path] = verdict
+        if checksum_verified:
+            n_real = sum(1 for v in checksum_verified.values() if v == "REAL")
+            n_fake = len(checksum_verified) - n_real
+            log(f"CD checksums: verified {len(checksum_verified)} track(s) "
+                f"against .log CRCs ({n_real} REAL, {n_fake} FAKE)")
+            if n_fake:
+                for p, v in sorted(checksum_verified.items()):
+                    if v == "FAKE":
+                        log(f"  {c('✕', Color.RED)} {os.path.basename(p)} "
+                            f"{c('FAKE (CRC mismatch)', Color.RED)}")
+
     # Skip files that already carry a REAL/FAKE verdict (normalizing
     # legacy mixed-case values) unless the audit is forced.
     todo = files
@@ -269,6 +316,8 @@ def run_audit_library(config):
                     stats["modified_count"] += 1
             else:
                 todo.append(path)
+        # CD-checksum-verified files already carry a verdict.
+        todo = [p for p in todo if p not in checksum_verified]
         if skipped:
             log(f"skipping {skipped} file(s) already carrying an AUDIT "
                 f"verdict (force audit overrides)")

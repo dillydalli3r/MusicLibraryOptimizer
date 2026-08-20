@@ -260,10 +260,12 @@ def _pid_is_running(pid):
         if os.name == "nt":
             process = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
             if not process:
-                # Cannot open the process (e.g. it is elevated and we are
-                # not). Assume it is alive: the wait helper will simply keep
-                # waiting until it actually exits or the timeout is reached.
-                return True
+                # ERROR_INVALID_PARAMETER (87) => the process does not exist
+                # (it exited and its record is stale). Any other failure
+                # (e.g. access denied on an elevated process) means the
+                # process exists -> assume it is alive so the helper keeps
+                # waiting for it.
+                return ctypes.windll.kernel32.GetLastError() != 87
             code = ctypes.c_ulong()
             ctypes.windll.kernel32.GetExitCodeProcess(process, ctypes.byref(code))
             ctypes.windll.kernel32.CloseHandle(process)
@@ -424,18 +426,21 @@ exit 2
     _spawn_survivable(command)
 
 
-def maybe_auto_check(callback=None):
-    """Run an update check when the configured interval has passed.
+def maybe_auto_check(callback=None, force=False):
+    """Run an update check, throttled by the configured interval.
 
-    The timestamp is persisted only after GitHub returns a valid release
-    response, so network failures do not suppress the next check for a week.
+    The on-start check passes ``force=True`` so it always runs (that is the
+    whole point of "Check for Updates on Start"); the interval throttle only
+    applies to background/repeated checks. The timestamp is persisted only
+    after GitHub returns a valid release response, so network failures do
+    not suppress the next check.
     """
     from .config import load_config, save_config
 
     config = load_config()
     last = config.get("last_update_check", 0)
     interval = config.get("update_check_interval_days", UPDATE_CHECK_INTERVAL_DAYS)
-    if time.time() - last <= interval * 86400:
+    if not force and time.time() - last <= interval * 86400:
         return
 
     def done(has_update, version, url, notes, error):

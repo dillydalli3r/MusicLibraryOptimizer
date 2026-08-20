@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.8
+# Music Library Optimizer v1.0.9
 
 A Windows desktop app (dark-theme GUI + optional console menu) for optimizing
 music libraries: lossless FLAC re-encoding, JPEG XL image conversion, cue-sheet
@@ -25,11 +25,12 @@ tag/lyrics/cover compliance grading, and fake-lossless audio auditing.
 - **Dynamic Range & ReplayGain** — per-track and album Dynamic Range via
   simple-dr-meter, ReplayGain via rsgain, with optional tag-write toggles.
 - **Auto tagging** — fills advisory/instrumental/media/source fields.
-- **Audit** — fake-lossless detection via AudioAuditor; verdicts written as
+- **Audit** — fake-lossless detection via AudioAuditor, plus **CD checksum
+  verification** against `.log` CRCs for MEDIA=CD rips; verdicts written as
   AUDIT tags.
-- **Grader** — per-album compliance grading (tags, lyrics, cover, DR, logs)
-  with a live library tree, grade details, and column/filter options. Also
-  grades lyrics/cue **formatting** and non-audio files.
+- **Grader** — per-album compliance grading (tags, lyrics, cover, DR, logs,
+  **allowed file types**) with a live library tree, grade details, and
+  column/filter options.
 - **Safe updates** — GitHub update checks, one-click download & install that
   closes idle instances and waits for every process before running setup.
   Optional auto-install on start.
@@ -37,38 +38,39 @@ tag/lyrics/cover compliance grading, and fake-lossless audio auditing.
 - **Setup Guide** — modal first-run wizard with folder validation, presets
   and dependency list; reopenable via the status bar ★ Guide button.
 
-## What's new in v1.0.8
+## What's new in v1.0.9
 
-- **Reworked library checkboxes.** Select All / Ctrl+A now actually ticks
-  every row (the old handler set the internal state but never re-rendered
-  the ☑ glyphs). Folder rows cascade: an album is checked when all of its
-  tracks are, an artist when all albums are, and partially selected folders
-  show a ◐ partial box. Clicking a folder checks or unchecks everything
-  under it; clicking a leaf updates its folder chain. Shift+click ranges
-  and Clear Selection follow the same rules.
-- **Show other files in the library viewer.** The new "Show files" toggle
-  (Library filter bar, and Settings → Interface) displays `.cue`, `.log`,
-  `.lrc`, `.jxl`, `.jpg`/`.jpeg` and `.png` rows under each album, each with
-  its own grade: cues and LRCs are checked against the canonical formatting,
-  logs for being non-empty, and images for being real files. They
-  participate in the checkbox cascade and Select All.
-- **Force menu is now complete.** Added Format lyrics and Format CUE sheets
-  to the Force ▾ menu. `force_lyrics` bypasses the optimize on/off switches
-  and forces a re-format; `force_cue` rewrites every cue unconditionally.
-  Run All always runs all eight scripts across the whole library and honors
-  every Force option.
-- **Fixed embedded lyrics failing to optimize.** The old formatter bug glued
-  lines together into forms like
-  `[00:00.00][00:45.53]Stretching, filing[00:46.86]Against her skin`. The
-  formatter now splits every timestamp boundary back onto its own line, so
-  running the Lyrics script fixes previously mangled embedded lyrics (and
-  resolves the ESLyrics "duplicate first line" display).
+- **Fixed updates being blocked by stale instances.** Dead processes were
+  treated as alive, so ghost instance records (all stuck on "library scan")
+  permanently blocked Download & Install with an "Update postponed" dialog.
+  Dead-PID detection now checks the Windows error code and stale records are
+  pruned, so updates can actually start.
+- **Check for Updates on Start actually works.** The on-start check always
+  queries GitHub (no silent interval skip) and logs the result: "Checking
+  for updates…", "Update available", "already on the latest version", or the
+  error.
+- **Force options only apply when Force is on.** Items ticked in the Force ▾
+  dropdown arm individual options; nothing is forced unless the master Force
+  toggle is on.
+- **Strict file-type grading.** An album folder with files other than music,
+  cover art, `.cue`, `.log` and `.lrc` now fails grading by default. What
+  counts is configurable in Settings → **Grading** (Allow Music / Cover /
+  .cue / .log / .lrc / Other).
+- **CD rip checksum verification.** For MEDIA=CD albums, tracks are verified
+  against the CRC-32 checksums in the `.log` (EAC Test/Copy CRC, AccurateRip,
+  or XLD CRC32 hash) by decoding with ffmpeg. Match → AUDIT=REAL, mismatch →
+  AUDIT=FAKE, taking precedence over AudioAuditor for those files
+  (Settings → Audio Auditor → Verify CD Rips vs .log Checksums).
+- **Lyrics `[00:00.00]` blank-marker fix confirmed.** Empty timing lines that
+  were glued onto the following line are split back onto separate lines,
+  fixing the ESLyrics "duplicate first line" display.
+- **Cleanup** — removed stale build artifacts; every `mlo` module is used.
 
 ## Install
 
-- **Installer:** `MusicLibraryOptimizer_Setup_v1.0.8_x64.exe` — run it and
+- **Installer:** `MusicLibraryOptimizer_Setup_v1.0.9_x64.exe` — run it and
   follow the first-launch wizard to pick your music folder.
-- **Portable:** `MusicLibraryOptimizer_v1.0.8_portable_x64.exe` — run from
+- **Portable:** `MusicLibraryOptimizer_v1.0.9_portable_x64.exe` — run from
   any folder; creates `config.json` and `.dependencies/` next to itself.
 - **From source:** `Music Library Optimizer.bat` or `python app.py`
   (requires `pip install mutagen`; optionally `Pillow` and `tqdm`).

@@ -169,11 +169,14 @@ class App(tk.Tk):
             self.log("WARNING: The app folder is not writable - config.json and "
                      f".dependencies cannot be saved here. ({self._data_dir_error})",
                      tag="yellow")
-        # Auto-check for updates on start (configurable; respects interval).
+        # Auto-check for updates on start (configurable). Always performs a
+        # real check and reports the outcome to the console.
         if self.config.get("check_updates_on_start", True):
+            self.log("Checking for updates…", tag="muted")
             self.after(
                 5000,
                 lambda: updater.maybe_auto_check(
+                    force=True,
                     callback=lambda *result: self.log_q.put(
                         ("update_auto", result)
                     )
@@ -2187,6 +2190,9 @@ class App(tk.Tk):
                     elif has_update:
                         self.log(f"Update available: v{version}", tag="yellow")
                         self._handle_auto_update(version, url, notes)
+                    else:
+                        self.log("Update check: already on the latest "
+                                 "version.", tag="green")
                 elif kind == "update_check":
                     win, btn, result = payload
                     self._update_result = result
@@ -2610,16 +2616,19 @@ class App(tk.Tk):
             self._regrade_after = "all"
         self.log("─" * 74, tag="muted")
 
+        # The Force ▾ dropdown only arms individual options; nothing is
+        # forced unless the master Force toggle is actually on.
+        armed = self.force_var.get()
         t = threading.Thread(
             target=self._worker,
             args=(list(script_ids), title, targets,
-                  self.force_flac_var.get(),
-                  self.force_images_var.get(),
-                  self.force_audit_var.get(),
-                  self.force_dr_var.get(),
-                  self.force_autotag_var.get(),
-                  self.force_lyrics_var.get(),
-                  self.force_cue_var.get()),
+                  self.force_flac_var.get() if armed else False,
+                  self.force_images_var.get() if armed else False,
+                  self.force_audit_var.get() if armed else False,
+                  self.force_dr_var.get() if armed else False,
+                  self.force_autotag_var.get() if armed else False,
+                  self.force_lyrics_var.get() if armed else False,
+                  self.force_cue_var.get() if armed else False),
             daemon=True
         )
         self._run_thread = t

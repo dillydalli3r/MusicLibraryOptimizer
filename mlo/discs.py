@@ -55,6 +55,16 @@ TOC_ROW_RE = re.compile(
     re.MULTILINE,
 )
 
+# Per-track CRC-32 checksums in rip logs (hex, 8 digits):
+#   EAC: "Test CRC 3F2A51A2" / "Copy CRC 3F2A51A2" / "Accurately ripped
+#        (confidence 10)  [3F2A51A2]"
+#   XLD: "CRC32 hash (test run) : 3F2A51A2" / "CRC32 hash : 3F2A51A2"
+COPY_CRC_RE = re.compile(r"^Copy CRC\s+([0-9A-Fa-f]{8})")
+TEST_CRC_RE = re.compile(r"^Test CRC\s+([0-9A-Fa-f]{8})")
+XLD_CRC_RE = re.compile(r"^CRC32 hash(?:\s+\(test run\))?\s*:\s*([0-9A-Fa-f]{8})")
+ACCURATE_CRC_RE = re.compile(r"\[([0-9A-Fa-f]{8})\]")
+
+
 # Duration-match window in seconds and the uniqueness margin required
 # before a TOC match is trusted.
 TOC_TOLERANCE_S = 4.0
@@ -109,6 +119,123 @@ def parse_log_toc_seconds(text):
         mins, secs, frames = int(m.group(1)), int(m.group(2)), int(m.group(3))
         total += mins * 60 + secs + frames / 75.0
     return total
+
+
+def parse_log_checksums(text):
+    """Map track number -> CRC-32 hex (8 chars, uppercase) from a rip log.
+
+    Walks the "Track  N" sections; prefers Copy CRC over Test CRC over the
+    AccurateRip bracket value.
+    """
+    per_track = {}
+    current = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = re.match(r"^Track\s+(\d{1,3})\b", line, re.IGNORECASE)
+        if m:
+            current = int(m.group(1))
+            continue
+        if current is None:
+            continue
+        m = COPY_CRC_RE.match(line)
+        if m:
+            per_track[current] = m.group(1).upper()
+            continue
+        m = TEST_CRC_RE.match(line)
+        if m:
+            per_track.setdefault(current, m.group(1).upper())
+            continue
+        m = XLD_CRC_RE.match(line)
+        if m:
+            per_track.setdefault(current, m.group(1).upper())
+            continue
+        if "accurately" in line.lower():
+            m = ACCURATE_CRC_RE.search(line)
+            if m:
+                per_track.setdefault(current, m.group(1).upper())
+    return per_track
+
+
+def _file_track_number(path):
+    """Track number from the TRACKNUMBER tag, else the 'NN' filename prefix."""
+    try:
+        af = AudioFile(path)
+        raw = str(af.get_tag("TRACKNUMBER") or "").strip()
+        if raw.isdigit():
+            return int(raw)
+    except Exception:
+        pass
+    m = re.match(r"^(\d{1,3})(?:\s*[-._\s])", os.path.basename(path))
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _audio_crc32(ffmpeg_exe, path):
+    """CRC-32 of the file's decoded 16-bit PCM (the value EAC/XLD print in
+    their logs), as 8 uppercase hex digits, or None on failure."""
+    try:
+        proc = run_tool(
+            [ffmpeg_exe, "-v", "error", "-i", path,
+             "-f", "s16le", "-acodec", "pcm_s16le", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=600,
+        )
+        if proc.returncode != 0 or not proc.stdout:
+            return None
+        import zlib
+        return format(zlib.crc32(proc.stdout) & 0xFFFFFFFF, "08X")
+    except Exception:
+        return None
+
+
+def verify_album_checksums(ffmpeg_exe, album_dir, paths, config=None):
+    """Verify MEDIA=CD tracks against the CRC-32 checksums in the rip logs.
+
+    Only for CD rips: a file whose log checksum matches its actual PCM CRC
+    is REAL, a mismatch is FAKE, and files without a log checksum are left
+    alone (AudioAuditor decides those). Returns {path: 'REAL'|'FAKE'}.
+    """
+    if not config or not config.get("audit_verify_cd_checksums", True):
+        return {}
+    if not paths:
+        return {}
+    af = AudioFile(paths[0])
+    if af.audio is None:
+        return {}
+    if str(af.get_tag("MEDIA") or "").strip() != "CD":
+        return {}
+
+    logs = [os.path.join(album_dir, f) for f in sorted(os.listdir(album_dir))
+            if f.lower().endswith(".log")]
+    if not logs:
+        return {}
+    discs = album_discs(album_dir)
+    multi = bool(discs)
+
+    verdicts = {}
+    for p in paths:
+        d = disc_of_filename(os.path.basename(p))
+        if d is None or d < 1:
+            d = 1
+        if multi:
+            log_path = os.path.join(album_dir, f"CD-{d}.log")
+            if not os.path.isfile(log_path):
+                continue
+            per_track = parse_log_checksums(read_log_text(log_path))
+        else:
+            per_track = {}
+            for log_path in logs:
+                per_track.update(parse_log_checksums(read_log_text(log_path)))
+        tn = _file_track_number(p)
+        crc = per_track.get(tn)
+        if not crc:
+            continue
+        actual = _audio_crc32(ffmpeg_exe, p)
+        if actual is None:
+            continue
+        verdicts[p] = "REAL" if actual == crc else "FAKE"
+    return verdicts
 
 
 def _audio_seconds(paths):
