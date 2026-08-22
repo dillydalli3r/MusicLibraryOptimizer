@@ -3243,13 +3243,13 @@ class App(tk.Tk):
             out += f"+{len(clean) - max_n}"
         return out
 
-    def _sum_key(self, res, key):
+    def _sum_key(self, res, key, max_len=10, max_n=3):
         vals = set()
         for tr in res.get("tracks") or []:
             v = (tr.get("values") or {}).get(key)
             if v is not None and str(v).strip():
                 vals.add(str(v).strip())
-        return self._fmt_vals(vals)
+        return self._fmt_vals(vals, max_n=max_n, max_len=max_len)
 
     def _track_tags_txt(self, tr, aa_value=None):
         """TAGS layout: G I A AA L — advisory values (A, AA) adjacent. Full genre, no truncation."""
