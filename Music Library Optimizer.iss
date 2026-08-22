@@ -2,7 +2,7 @@
 ; Compile with: iscc "Music Library Optimizer.iss"
 
 #define AppName "Music Library Optimizer"
-#define AppVersion "1.5.3"
+#define AppVersion "1.5.4"
 #define AppPublisher "dillydalli3r"
 #define AppURL "https://github.com/dillydalli3r/MusicLibraryOptimizer"
 #define AppExeName "Music Library Optimizer.exe"

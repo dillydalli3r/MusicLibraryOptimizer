@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.5.3 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.5.4 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
@@ -190,6 +190,14 @@ CONFIG_FIELDS = [
     ("grade_include_log", "Grading: Allow .log Files", "bool", None),
     ("grade_include_lrc", "Grading: Allow .lrc Files", "bool", None),
     ("grade_include_other", "Grading: Allow Other Files", "bool", None),
+    ("grade_check_tag_spaces", "Check Tags for Leading/Trailing Spaces", "bool", None),
+    ("grade_check_tag_blank_lines", "Check Tags for Blank Lines", "bool", None),
+    ("grade_check_lyrics_spaces", "Check Lyrics for Leading/Trailing Spaces", "bool", None),
+    ("grade_check_lyrics_blank_lines", "Check Lyrics for Blank Lines", "bool", None),
+    ("grade_check_lyrics_zero", "Check Lyrics for [00:00.00] Presence", "bool", None),
+    ("grade_check_cue_spaces", "Check CUE for Leading/Trailing Spaces", "bool", None),
+    ("grade_check_cue_blank_lines", "Check CUE for Blank Lines", "bool", None),
+    ("grade_check_cover_crop", "Check Cover Crop/Size", "bool", None),
     # Audio Audit
     ("audit_thorough", "Thorough Audit (slower)", "bool", None),
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
@@ -749,6 +757,24 @@ FIELD_DESCRIPTIONS = {
     "grade_include_other":
         "Allow every other file type when grading. When off, any file that "
         "is not music/cover/cue/log/lrc fails the album (extra files).",
+    "grade_check_tag_spaces":
+        "When on (default), any tag value with leading or trailing spaces fails grading. "
+        "Disable to allow spaces.",
+    "grade_check_tag_blank_lines":
+        "When on (default), any tag containing blank lines fails grading.",
+    "grade_check_lyrics_spaces":
+        "When on (default), lyrics lines with leading or trailing spaces fail grading.",
+    "grade_check_lyrics_blank_lines":
+        "When on (default), lyrics with blank lines in the middle fail grading.",
+    "grade_check_lyrics_zero":
+        "When on (default), lyrics must start with [00:00.00] if that option is enabled. "
+        "Disable to not require the zero timestamp.",
+    "grade_check_cue_spaces":
+        "When on (default), CUE sheets with leading or trailing spaces fail grading.",
+    "grade_check_cue_blank_lines":
+        "When on (default), CUE sheets with blank lines fail grading.",
+    "grade_check_cover_crop":
+        "When on (default), covers outside the crop threshold or wrong size fail grading.",
     "audit_thorough":
         "Audit Library: enable AudioAuditor's full-track detectors "
         "(silence, dynamic range, true peak, LUFS, BPM). Much slower than "
@@ -1300,6 +1326,12 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("Grading — Cover Enforce", [
                 "cover_enforce_size", "cover_enforce_square",
+            ]),
+            ("Grading — Strict Checks", [
+                "grade_check_tag_spaces", "grade_check_tag_blank_lines",
+                "grade_check_lyrics_spaces", "grade_check_lyrics_blank_lines",
+                "grade_check_lyrics_zero", "grade_check_cue_spaces",
+                "grade_check_cue_blank_lines", "grade_check_cover_crop",
             ]),
             ("Audio Auditor", [
                 "audit_thorough", "audit_cutoff_allow",
@@ -3247,16 +3279,19 @@ class App(tk.Tk):
         ok = res["pass_count"] == res["total_checks"]
         audit = res.get("audit_summary")
         aa_value = (res.get("album_values") or {}).get("ALBUMITUNESADVISORY")
-        # FAILED column: show comma-separated failed checks, empty if PASS
+        # FAILED column: show all failed checks (multiple values), wrap as needed, empty if PASS
         failed_txt = ""
         if not ok:
             failed_keys = []
             for field, where in sorted(res.get("issues", {}).items()):
                 # Show field name; where indicates which tracks/albums
-                failed_keys.append(field)
-            failed_txt = ", ".join(failed_keys[:4])
-            if len(failed_keys) > 4:
-                failed_txt += f" +{len(failed_keys)-4} more"
+                # Include where count for clarity if multiple
+                if len(where) > 1:
+                    failed_keys.append(f"{field}({len(where)})")
+                else:
+                    failed_keys.append(field)
+            # Show all, not just 4 — let the column's stretch handle width, and tooltip shows full
+            failed_txt = ", ".join(failed_keys)
         tree.item(item, values=(
             "PASS" if ok else "FAIL",
             audit or "—",
@@ -3299,9 +3334,7 @@ class App(tk.Tk):
         self._item_paths[item] = path
         self._item_base[item] = base
         self._path_items.setdefault(path, set()).add(item)
-        failed_txt = ", ".join(issues[:3]) if issues else ""
-        if len(issues) > 3:
-            failed_txt += f" +{len(issues)-3} more"
+        failed_txt = ", ".join(issues) if issues else ""
         tree.item(item, values=(
             "PASS" if ok else "FAIL",
             audit or "—",

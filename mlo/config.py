@@ -212,6 +212,17 @@ DEFAULT_CONFIG = {
     "grade_include_log": True,
     "grade_include_lrc": True,
     "grade_include_other": False,
+    # Configurable strict checks for grading (all on by default, per request)
+    # These make trailing/leading spaces, blank lines, cropping and zero timestamp
+    # count as failures for the relevant file types.
+    "grade_check_tag_spaces": True,
+    "grade_check_lyrics_spaces": True,
+    "grade_check_cue_spaces": True,
+    "grade_check_cover_crop": True,
+    "grade_check_lyrics_zero": True,
+    "grade_check_tag_blank_lines": True,
+    "grade_check_lyrics_blank_lines": True,
+    "grade_check_cue_blank_lines": True,
 
     # Audio audit (AudioAuditor CLI): full-track detectors (silence, DR,
     # true peak, LUFS, BPM) instead of the fast scan; force re-audits files
