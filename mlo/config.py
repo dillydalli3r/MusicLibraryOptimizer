@@ -21,7 +21,7 @@ DEFAULT_CONFIG = {
     "add_seektables": False,
     "force_reencode_flac": False,
 
-    # Images
+    # Images — global
     "jpegxl_effort": 10,
     "reencode_images": True,
     "reencode_to_jxl": True,
@@ -31,14 +31,30 @@ DEFAULT_CONFIG = {
     "jpeg_progressive": True,
     "png_optimization_level": 2,
     "force_reencode_images": False,
+    # Cover art — resize / crop (new in v1.2.0)
+    "cover_resize_enabled": False,
+    "cover_target_size": 1000,
+    "cover_crop_enabled": True,
+    "cover_crop_threshold": 0.05,
+    "cover_enforce_size": False,
+    "cover_enforce_square": False,
+    "cover_jpeg_enabled": True,
+    "cover_png_enabled": True,
+    "cover_jxl_enabled": True,
+    "cover_jpeg_target_size": 0,
+    "cover_png_target_size": 0,
+    "cover_jxl_target_size": 0,
 
-    # Lyrics / CUE
+    # Lyrics / CUE — including Enhanced/Extended LRC (new in v1.2.0)
     "optimize_lrc": True,
     "optimize_embedded_lyrics": True,
     "lyrics_format": "EMBEDDED",
     "lrc_timestamp_precision": 2,
     "lrc_strip_metadata": True,
     "lrc_collapse_blank_lines": True,
+    "lrc_enhanced_enabled": True,
+    "lrc_enhanced_word_sync": True,
+    "lrc_extended_enabled": True,
     # Disabled by default to preserve the byte-exact no-final-newline mode.
     "append_final_newline": False,
     "keep_empty_cue_lines": False,
@@ -166,6 +182,10 @@ _INT_RANGES = {
     "audit_cutoff_allow": (0, 24000),
     "worker_limit": (0, 64),
     "update_check_interval_days": (1, 30),
+    "cover_target_size": (0, 4000),
+    "cover_jpeg_target_size": (0, 4000),
+    "cover_png_target_size": (0, 4000),
+    "cover_jxl_target_size": (0, 4000),
 }
 _CHOICES = {
     "lyrics_format": {"EMBEDDED", "LRC", "BOTH"},
@@ -224,6 +244,20 @@ def normalize_config(user=None) -> dict:
         cfg["last_update_check"] = max(0.0, last_check)
     except (TypeError, ValueError):
         cfg["last_update_check"] = 0.0
+
+    try:
+        thr = float(cfg.get("cover_crop_threshold", 0.05))
+        cfg["cover_crop_threshold"] = max(0.0, min(0.5, thr))
+    except (TypeError, ValueError):
+        cfg["cover_crop_threshold"] = 0.05
+
+    for k in ("cover_target_size", "cover_jpeg_target_size",
+              "cover_png_target_size", "cover_jxl_target_size"):
+        try:
+            cfg[k] = int(cfg.get(k, DEFAULT_CONFIG[k]) or 0)
+        except (TypeError, ValueError):
+            cfg[k] = DEFAULT_CONFIG[k]
+        cfg[k] = max(0, min(4000, cfg[k]))
 
     default_tags = DEFAULT_CONFIG["encoder_tags"]
     user_tags = cfg.get("encoder_tags") if isinstance(cfg.get("encoder_tags"), dict) else {}

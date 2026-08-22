@@ -12,6 +12,7 @@ from .stats import (
     _find_albums, _clean_set, _summarize_values, _collect_targets,
     worker_count,
 )
+from .deps import HAS_PIL, Image
 from .ui import print_header, log, c, Color, print_separator, _short_val
 
 PER_TRACK_TAGS = [
@@ -33,6 +34,11 @@ ALBUM_TAGS = [
 
 
 COVER_NAMES = {"cover.jpg", "cover.jpeg", "cover.png", "cover.jxl"}
+
+# Enhanced LRC word-level timestamps: <mm:ss.xx> or <mm:ss.xxx>
+# Mirrors WORD_TS_RE in lyrics.py
+WORD_TS_RE = re.compile(r"<(\d{1,2}):(\d{1,2})(?:\.(\d+))?>")
+TIMESTAMP_RE_GRADE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]")
 
 
 def summarize_audits(values):
@@ -68,21 +74,38 @@ def _lyrics_formatted(text, cfg):
 
     Idempotency check against the raw text: running the Lyrics formatter
     must not change it (so a stray trailing newline, CRLF, or timestamp
-    precision drift is caught too).
+    precision drift is caught too). When enhanced LRC is enabled, word-level
+    <mm:ss.xx> timestamps are also validated for correct precision/formatting.
     """
     if not text or not str(text).strip():
         return True
     raw = str(text)
     try:
-        expected = _canonical_lyrics(format_lyrics_text(
-            raw,
-            precision=int(cfg.get("lrc_timestamp_precision", 2) or 2),
-            strip_metadata=cfg.get("lrc_strip_metadata", True),
-            collapse_blank_lines=cfg.get("lrc_collapse_blank_lines", True),
-        ))
+        expected = _canonical_lyrics(
+            format_lyrics_text(
+                raw,
+                precision=int(cfg.get("lrc_timestamp_precision", 2) or 2),
+                strip_metadata=cfg.get("lrc_strip_metadata", True),
+                collapse_blank_lines=cfg.get("lrc_collapse_blank_lines", True),
+                lrc_enhanced_enabled=bool(cfg.get("lrc_enhanced_enabled", True)),
+                lrc_enhanced_word_sync=bool(cfg.get("lrc_enhanced_word_sync", True)),
+                lrc_extended_enabled=bool(cfg.get("lrc_extended_enabled", True)),
+            ),
+            append_final_newline=cfg.get("append_final_newline", False),
+        )
     except Exception:
         return True
-    return raw == expected
+    if raw != expected:
+        return False
+    # Enhanced LRC validity: word timestamps must be in order and correctly formatted
+    # Only check when enhanced is enabled; otherwise they are plain text.
+    if cfg.get("lrc_enhanced_enabled", True) and cfg.get("lrc_enhanced_word_sync", True):
+        try:
+            if not _lyrics_word_timestamps_valid(raw, cfg):
+                return False
+        except Exception:
+            pass
+    return True
 
 
 # Two timestamps on the SAME line ("[00:00.00][00:45.53]text") break
@@ -94,9 +117,108 @@ _MERGED_TS_RE = re.compile(
 )
 
 
-def _lyrics_merged_timestamps(text):
-    """True when a line carries two adjacent timestamps."""
-    return bool(_MERGED_TS_RE.search(str(text or "")))
+def _lyrics_merged_timestamps(text, cfg=None):
+    """True when a line carries two adjacent line-level timestamps.
+    Word-level <mm:ss.xx> timestamps are NOT considered merged (enhanced LRC).
+    When extended LRC is disabled, merged timestamps are not flagged.
+    """
+    # Respect extended flag: when extended disabled, don't flag merged
+    if cfg is not None and not cfg.get("lrc_extended_enabled", True):
+        return False
+    raw = str(text or "")
+    # Strip word-level timestamps before checking so "<00:12.00>[00:13.00]" or
+    # "[00:12.00] <00:12.34>" is not flagged. Also ensures extended handling
+    # where word timestamps appear inline does not trigger false positive.
+    # Replace with a placeholder word to break adjacency: "[00:12.00] <00:12.34> [00:13.00]"
+    # should NOT be considered merged; removing to "" would leave "[00:12.00]  [00:13.00]" which still matches
+    # _MERGED_TS_RE via space-only separator, so use " word " placeholder.
+    try:
+        cleaned = WORD_TS_RE.sub(" word ", raw)
+    except Exception:
+        cleaned = re.sub(r"<\d{1,2}:\d{1,2}(?:\.\d+)?>", " word ", raw)
+    return bool(_MERGED_TS_RE.search(cleaned))
+
+
+def _lyrics_word_timestamps_valid(text, cfg):
+    """Check enhanced LRC word timestamps are in order and correctly formatted.
+
+    When lrc_enhanced_enabled is False, always True (treated as plain text).
+    When lrc_enhanced_word_sync is False, also skip.
+    Checks:
+    - Each <mm:ss.xx> must be zero-padded and match configured precision
+    - Seconds <60
+    - Word timestamps within a line are monotonically non-decreasing
+    - First word timestamp on a line is >= preceding line timestamp (if any)
+    """
+    if not cfg.get("lrc_enhanced_enabled", True):
+        return True
+    if not cfg.get("lrc_enhanced_word_sync", True):
+        return True
+    if "<" not in str(text or ""):
+        return True
+    precision = 3 if int(cfg.get("lrc_timestamp_precision", 2) or 2) == 3 else 2
+    correct_re = re.compile(r"<\d{2}:\d{2}\.\d{" + str(precision) + r"}>")
+    for line in str(text or "").splitlines():
+        matches = list(WORD_TS_RE.finditer(line))
+        if not matches:
+            continue
+        # Formatting check: each raw word timestamp must be correctly zero-padded
+        for m in matches:
+            raw_ts = m.group(0)
+            if not correct_re.fullmatch(raw_ts):
+                return False
+            try:
+                secs = int(m.group(2))
+                if secs >= 60:
+                    return False
+                mins = int(m.group(1))
+                if mins < 0 or mins > 99:
+                    # Allow 0-99, but still check overall validity; >99 will be caught by formatting
+                    pass
+            except (ValueError, TypeError):
+                return False
+        # Ordering check within the line
+        times = []
+        for m in matches:
+            mins = int(m.group(1))
+            secs = int(m.group(2))
+            ms = m.group(3)
+            try:
+                ms_ms = int(ms[:3].ljust(3, "0")[:3]) if ms else 0
+            except ValueError:
+                ms_ms = 0
+            total_ms = (mins * 60 + secs) * 1000 + ms_ms
+            unit_ms = 10 ** (3 - precision)
+            total_ms = ((total_ms + unit_ms // 2) // unit_ms) * unit_ms
+            times.append(total_ms)
+        for i in range(1, len(times)):
+            if times[i] < times[i-1]:
+                return False
+        # Ensure first word timestamp >= preceding line timestamp on same line
+        line_ts_matches = list(TIMESTAMP_RE_GRADE.finditer(line))
+        if line_ts_matches and matches:
+            first_word_pos = matches[0].start()
+            relevant = [lm for lm in line_ts_matches if lm.start() < first_word_pos]
+            if relevant:
+                last = relevant[-1]
+                lm = int(last.group(1))
+                ls = int(last.group(2))
+                lms = last.group(3)
+                try:
+                    lms_ms = int(lms[:3].ljust(3, "0")[:3]) if lms else 0
+                except ValueError:
+                    lms_ms = 0
+                l_total = (lm * 60 + ls) * 1000 + lms_ms
+                unit = 10 ** (3 - precision)
+                l_total = ((l_total + unit // 2) // unit) * unit
+                if times[0] < l_total:
+                    return False
+    return True
+
+
+# Alias for task description naming
+def _lyrics_enhanced_valid(text, cfg):
+    return _lyrics_word_timestamps_valid(text, cfg)
 
 
 def _cue_formatted(path, cfg):
@@ -175,12 +297,38 @@ def _category_allowed(cfg, category):
     return bool(cfg.get(key, category != "other"))
 
 
-def _disallowed_files(all_files, cfg):
-    """Files in an album folder whose category is not allowed."""
-    return [
-        f for f in sorted(all_files)
-        if not _category_allowed(cfg, _classify_file(f))
-    ]
+# Windows hidden/system names that must never fail a folder.
+HIDDEN_NAMES = {"desktop.ini", "thumbs.db", ".ds_store"}
+
+
+def _skip_grading_file(full):
+    """True when a folder entry should be ignored by grading: subdirectories
+    and hidden/system/OS files (desktop.ini, Thumbs.db, dotfiles)."""
+    if os.path.isdir(full):
+        return True
+    name = os.path.basename(full)
+    if name.lower() in HIDDEN_NAMES or name.startswith("."):
+        return True
+    try:
+        attr = os.stat(full).st_file_attributes
+        if attr is not None and (attr & 0x2 or attr & 0x4):  # HIDDEN | SYSTEM
+            return True
+    except (OSError, AttributeError):
+        pass
+    return False
+
+
+def _disallowed_files(album_dir, all_files, cfg):
+    """Files in an album folder whose category is not allowed (subdirs and
+    hidden/system files are ignored)."""
+    out = []
+    for f in sorted(all_files):
+        full = os.path.join(album_dir, f)
+        if _skip_grading_file(full):
+            continue
+        if not _category_allowed(cfg, _classify_file(f)):
+            out.append(f)
+    return out
 
 
 def _log_file_ok(path):
@@ -193,12 +341,120 @@ def _log_file_ok(path):
     return bool(content and content.strip())
 
 
-def _image_file_ok(path):
-    """An image sidecar passes when it is a real, non-empty file."""
+def _image_file_ok(path, config=None):
+    """An image sidecar passes when it is a real, non-empty file.
+
+    When *config* is provided and cover enforcement is enabled,
+    delegates to _cover_image_ok for dimension/square checks.
+    """
+    if config is not None:
+        # Treat any image as cover for the generic check; _cover_image_ok
+        # will handle the non-enforced case by just checking size >0
+        try:
+            return _cover_image_ok(path, config)
+        except NameError:
+            pass
     try:
         return os.path.getsize(path) > 0
     except OSError:
         return False
+
+
+def _get_cover_target_size(ext, config):
+    """Per-format cover target size for grader (mirrors images helper)."""
+    if config is None:
+        config = {}
+    ext = (ext or "").lower()
+    try:
+        global_size = int(config.get("cover_target_size", 0) or 0)
+    except (TypeError, ValueError):
+        global_size = 0
+    global_size = max(0, min(4000, global_size))
+    per_size = 0
+    try:
+        if ext in (".jpg", ".jpeg"):
+            per_size = int(config.get("cover_jpeg_target_size", 0) or 0)
+        elif ext == ".png":
+            per_size = int(config.get("cover_png_target_size", 0) or 0)
+        elif ext == ".jxl":
+            per_size = int(config.get("cover_jxl_target_size", 0) or 0)
+    except (TypeError, ValueError):
+        per_size = 0
+    if per_size > 0:
+        return max(0, min(4000, per_size))
+    return global_size
+
+
+def _cover_image_ok(path, config):
+    """Validate a cover image against size/square enforcement.
+
+    Checks:
+    * file exists and >0 bytes (always)
+    * if cover_enforce_size and cover_resize_enabled and target_size>0,
+      dimensions must be exactly target_size x target_size (1px tolerance)
+    * if cover_enforce_square, aspect ratio must be within threshold
+      (abs(width/height -1) <= threshold)
+
+    Handles per-format target sizes. When Pillow is unavailable or the
+    file can't be opened, falls back to existence/size check to avoid
+    false failures. Keeps existing behavior when enforcement disabled.
+    """
+    # Basic existence/size check always required
+    try:
+        if not os.path.exists(path):
+            return False
+        if os.path.getsize(path) <= 0:
+            return False
+    except OSError:
+        return False
+    if config is None:
+        config = {}
+    # If no enforcement enabled, just existence/size suffices (preserve
+    # backwards compatibility)
+    enforce_size = bool(config.get("cover_enforce_size", False))
+    enforce_square = bool(config.get("cover_enforce_square", False))
+    resize_enabled = bool(config.get("cover_resize_enabled", False))
+    if not enforce_size and not enforce_square:
+        return True
+    # If enforcement wants size but resize not enabled or target 0, skip size check
+    ext = os.path.splitext(path)[1].lower()
+    target = _get_cover_target_size(ext, config)
+    # Need Pillow to inspect dimensions
+    if not HAS_PIL:
+        return True
+    try:
+        with Image.open(path) as img:
+            try:
+                img.load()
+            except Exception:
+                pass
+            w, h = img.size
+            if w <= 0 or h <= 0:
+                return False
+            # Size enforcement
+            if enforce_size and resize_enabled and target > 0:
+                # Allow 1px tolerance as spec mentions
+                if abs(w - target) > 1 or abs(h - target) > 1:
+                    return False
+            # Square enforcement
+            if enforce_square:
+                try:
+                    thr = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                except (TypeError, ValueError):
+                    thr = 0.05
+                thr = max(0.0, min(0.5, thr))
+                # When square enforcement is on, aspect must be within threshold
+                # The spec mentions cover_enforce_square and (cover_crop_enabled or cover_enforce_square)
+                # So we check regardless of crop_enabled if enforce_square true
+                ratio = w / h if h != 0 else 1.0
+                deviation = abs(ratio - 1.0)
+                if deviation > thr:
+                    return False
+            return True
+    except Exception:
+        # If Pillow can't open (e.g., JXL without plugin), treat as ok to avoid false failure
+        # But ensure size >0 already passed
+        return True
 
 
 def _grade_sidecars(album_dir, all_files, cfg):
@@ -210,10 +466,12 @@ def _grade_sidecars(album_dir, all_files, cfg):
     """
     sidecars = []
     for f in sorted(all_files):
+        full = os.path.join(album_dir, f)
+        if _skip_grading_file(full):
+            continue
         category = _classify_file(f)
         if category == "music":
             continue
-        full = os.path.join(album_dir, f)
         if category == "cue":
             ok = _cue_formatted(full, cfg)
             detail = "formatted" if ok else "needs formatting"
@@ -222,7 +480,11 @@ def _grade_sidecars(album_dir, all_files, cfg):
                 with open(full, "r", encoding="utf-8", errors="replace") as fh:
                     lrc_text = fh.read()
                 ok = _lyrics_formatted(lrc_text, cfg) and \
-                    not _lyrics_merged_timestamps(lrc_text)
+                    not _lyrics_merged_timestamps(lrc_text, cfg)
+                # Enhanced LRC validity: word timestamps must be in order / correctly formatted
+                if ok and cfg.get("lrc_enhanced_enabled", True) and cfg.get("lrc_enhanced_word_sync", True):
+                    if not _lyrics_word_timestamps_valid(lrc_text, cfg):
+                        ok = False
             except OSError:
                 ok = False
             detail = "formatted" if ok else "needs formatting"
@@ -230,8 +492,44 @@ def _grade_sidecars(album_dir, all_files, cfg):
             ok = _log_file_ok(full)
             detail = "present" if ok else "empty"
         elif category == "cover":
-            ok = _image_file_ok(full)
-            detail = "present" if ok else "empty"
+            ok = _cover_image_ok(full, cfg)
+            if ok:
+                detail = "present"
+            else:
+                # Differentiate empty vs dimension mismatch for UI clarity
+                try:
+                    exists = os.path.exists(full) and os.path.getsize(full) > 0
+                except OSError:
+                    exists = False
+                if not exists:
+                    detail = "empty"
+                else:
+                    # Check which enforcement failed for more helpful detail
+                    ext = os.path.splitext(full)[1].lower()
+                    tgt = _get_cover_target_size(ext, cfg)
+                    enforce_size = bool(cfg.get("cover_enforce_size", False)) and bool(cfg.get("cover_resize_enabled", False)) and tgt > 0
+                    enforce_square = bool(cfg.get("cover_enforce_square", False))
+                    # Try to inspect image for specific reason
+                    try:
+                        if HAS_PIL:
+                            with Image.open(full) as _im:
+                                _w, _h = _im.size
+                                if enforce_size and (abs(_w - tgt) > 1 or abs(_h - tgt) > 1):
+                                    detail = f"wrong size {_w}x{_h} (need {tgt}x{tgt})"
+                                elif enforce_square:
+                                    thr = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)
+                                    thr = max(0.0, min(0.5, thr))
+                                    ratio = _w / _h if _h else 1.0
+                                    if abs(ratio - 1.0) > thr:
+                                        detail = f"not square {_w}x{_h}"
+                                    else:
+                                        detail = "needs resize/crop"
+                                else:
+                                    detail = "needs resize/crop"
+                        else:
+                            detail = "needs resize/crop"
+                    except Exception:
+                        detail = "needs resize/crop"
         else:
             ok = _category_allowed(cfg, "other")
             detail = "allowed" if ok else "disallowed type"
@@ -245,7 +543,14 @@ def _grade_sidecars(album_dir, all_files, cfg):
 def _grade_album(album_dir, lyrics_format, cfg=None):
     if cfg is None:
         cfg = {}
-    all_files = os.listdir(album_dir)
+    try:
+        all_files = os.listdir(album_dir)
+    except PermissionError as e:
+        log(f"Permission denied reading album: {album_dir} ({e})", Color.YELLOW)
+        return {"error": True, "path": album_dir, "error_detail": f"Permission denied: {e}"}
+    except OSError as e:
+        log(f"Cannot list album directory: {album_dir} ({e})", Color.YELLOW)
+        return {"error": True, "path": album_dir, "error_detail": str(e)}
     files = sorted(f for f in all_files if is_audio_file(f))
     audio_paths = [os.path.join(album_dir, f) for f in files]
 
@@ -429,9 +734,15 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 fmt_ok = False
             if lrc_text and not _lyrics_formatted(lrc_text, cfg):
                 fmt_ok = False
-            if (lyr_text and _lyrics_merged_timestamps(lyr_text)) or \
-               (lrc_text and _lyrics_merged_timestamps(lrc_text)):
+            if (lyr_text and _lyrics_merged_timestamps(lyr_text, cfg)) or \
+               (lrc_text and _lyrics_merged_timestamps(lrc_text, cfg)):
                 fmt_ok = False
+            # Enhanced LRC word timestamp validity (order / formatting)
+            if cfg.get("lrc_enhanced_enabled", True) and cfg.get("lrc_enhanced_word_sync", True):
+                if lyr_text and not _lyrics_word_timestamps_valid(lyr_text, cfg):
+                    fmt_ok = False
+                if lrc_text and not _lyrics_word_timestamps_valid(lrc_text, cfg):
+                    fmt_ok = False
             if not fmt_ok:
                 failed_checks += 1
                 add_issue("Lyrics not optimally formatted "
@@ -535,11 +846,79 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             failed_checks += 1
             add_issue("Unrecognized MEDIA value", "album-wide")
 
-    # Cover check.
+    # Cover check — also builds a UI-friendly cover_detail string that
+    # surfaces enforcement failures (e.g. "cover.jpg (wrong size 500x500 → 1000x1000)"
+    # or "MISSING (wrong size)") so the library tree's COVER column is
+    # never silently "cover.jpg" when the image would fail grading.
+    cover_detail = cover_file or "MISSING"
+    cover_ok = True
     total_checks += 1
     if not cover_file:
         failed_checks += 1
+        cover_ok = False
         add_issue("Missing cover image", "album")
+        if cfg.get("cover_enforce_size") and cfg.get("cover_resize_enabled"):
+            try:
+                tgt = _get_cover_target_size("", cfg)
+            except Exception:
+                tgt = 0
+            if tgt > 0:
+                cover_detail = f"MISSING (need {tgt}x{tgt})"
+    else:
+        cover_path = os.path.join(album_dir, cover_file)
+        ext_cov = os.path.splitext(cover_file)[1].lower()
+        target_cov = _get_cover_target_size(ext_cov, cfg)
+        size_failed = False
+        square_failed = False
+        size_info = ""
+        # Size enforcement: require exact target_size x target_size (1px tolerance)
+        if cfg.get("cover_enforce_size") and cfg.get("cover_resize_enabled") and target_cov > 0:
+            total_checks += 1
+            if HAS_PIL:
+                try:
+                    with Image.open(cover_path) as _im:
+                        _w, _h = _im.size
+                        if abs(_w - target_cov) > 1 or abs(_h - target_cov) > 1:
+                            failed_checks += 1
+                            size_failed = True
+                            cover_ok = False
+                            size_info = f"{_w}x{_h} → {target_cov}x{target_cov}"
+                            add_issue(f"Cover image wrong size {_w}x{_h} (need {target_cov}x{target_cov})", "album")
+                except Exception:
+                    pass
+        # Square enforcement: aspect within threshold
+        if cfg.get("cover_enforce_square"):
+            total_checks += 1
+            try:
+                thr_cov = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)
+            except (TypeError, ValueError):
+                thr_cov = 0.05
+            thr_cov = max(0.0, min(0.5, thr_cov))
+            if HAS_PIL:
+                try:
+                    with Image.open(cover_path) as _im:
+                        _w2, _h2 = _im.size
+                        ratio = _w2 / _h2 if _h2 else 1.0
+                        if abs(ratio - 1.0) > thr_cov:
+                            failed_checks += 1
+                            square_failed = True
+                            cover_ok = False
+                            add_issue(f"Cover image not square {_w2}x{_h2} (threshold {thr_cov:.0%})", "album")
+                            if not size_info:
+                                size_info = f"{_w2}x{_h2} not square"
+                except Exception:
+                    pass
+        if size_failed or square_failed:
+            if size_failed and square_failed:
+                cover_detail = f"{cover_file} (wrong size, not square {size_info})"
+            elif size_failed:
+                cover_detail = f"{cover_file} (wrong size {size_info})"
+            elif square_failed:
+                cover_detail = f"{cover_file} (not square {size_info})"
+            else:
+                cover_detail = f"{cover_file} (needs resize/crop)"
+        else:
+            cover_detail = cover_file
 
     # CUE sheet FORMATTING compliance (when a cue exists): every cue must
     # already be in the canonical form the CUE formatter would produce.
@@ -562,7 +941,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
     # Strict file-type check: any file whose category is not allowed
     # (e.g. an unclassified .txt/.pdf/.m3u when 'other' is off) fails the
     # album. Categories are toggled in Settings -> Grading.
-    disallowed = _disallowed_files(all_files, cfg)
+    disallowed = _disallowed_files(album_dir, all_files, cfg)
     total_checks += 1
     if disallowed:
         failed_checks += 1
@@ -592,6 +971,8 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         "pass_count": pass_count,
         "total_checks": total_checks,
         "cover_file": cover_file,
+        "cover_detail": cover_detail,
+        "cover_ok": cover_ok,
         "has_log": has_log,
         "has_cue": has_cue,
         "lyrics_present": lyrics_present_count,
@@ -896,4 +1277,3 @@ def run_grade_library(config):
     stats["issue_counts"] = issue_counts
 
     return stats
-

@@ -13,6 +13,7 @@ from .stats import (
 from .ui import print_header, log, c, Color, log_file_result
 
 TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]")
+WORD_TS_RE = re.compile(r"<(\d{1,2}):(\d{1,2})(?:\.(\d+))?>")
 
 
 # Remove a SPACE (not a newline) directly after a timestamp. Using \s+ here
@@ -20,6 +21,8 @@ TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]")
 # "[00:00.00]" onto the following line as "[00:00.00][00:45.53]..." which
 # ESLyrics on foobar2000 cannot parse.
 SPACE_AFTER_TS_RE = re.compile(r"(\[\d{2}:\d{2}\.\d{2,3}\])[ \t]+")
+# Enhanced LRC: space after word-level <mm:ss.xx> timestamps.
+WORD_SPACE_AFTER_TS_RE = re.compile(r"(<\d{2}:\d{2}\.\d{2,3}>)[ \t]+")
 
 
 
@@ -95,30 +98,72 @@ def _reformat_ts(m, precision=2):
     return f"[{mm:02d}:{ss:02d}.{cc // unit_ms:0{precision}d}]"
 
 
+def _reformat_word_ts(m, precision=2):
+    """Reformat a <mm:ss.xxx> word timestamp (Enhanced LRC)."""
+    mins = int(m.group(1))
+    secs = int(m.group(2))
+    ms = m.group(3)
+    if ms is None:
+        ms_ms = 0
+    else:
+        try:
+            ms_ms = int(ms[:3].ljust(3, "0")[:3])
+        except ValueError:
+            ms_ms = 0
+    total_ms = (mins * 60 + secs) * 1000 + ms_ms
+    unit_ms = 10 ** (3 - precision)
+    total_ms = ((total_ms + unit_ms // 2) // unit_ms) * unit_ms
+    mm, rem = divmod(total_ms, 60000)
+    ss, cc = divmod(rem, 1000)
+    return f"<{mm:02d}:{ss:02d}.{cc // unit_ms:0{precision}d}>"
+
+
 def format_lyrics_text(text, precision=2, strip_metadata=True,
-                       collapse_blank_lines=True):
+                       collapse_blank_lines=True,
+                       lrc_enhanced_enabled=True,
+                       lrc_enhanced_word_sync=True,
+                       lrc_extended_enabled=True,
+                       cfg=None):
     """
     Cleans lyrics:
     - POSIX newlines
-    - normalized timestamps
+    - normalized timestamps ([mm:ss.xx] and Enhanced <mm:ss.xx>)
     - no space directly after timestamps
-    - one line per timestamp: stacked timestamps are split up
-    - a [00:00.00] stacked in front of other stamps is dropped (it is
-      a start-of-file marker that labels no text)
+    - one line per timestamp: stacked timestamps are split up (unless Extended)
+    - a [00:00.00] stacked in front of other stamps is dropped
     - timestamp-only lines lend their stamps to the next untimed line
-    - no LRC metadata lines
+    - no LRC metadata lines (unless Enhanced word-sync lines)
     - no duplicate blank lines
 
     The result is idempotent: cleaning already-clean lyrics is a no-op.
+    lrc_enhanced_* and lrc_extended_enabled gate Enhanced/Extended features;
+    cfg dict overrides when supplied.
     """
     if not text:
         return text
+    # cfg overrides when supplied (used by grader + _format_for_storage)
+    if cfg is not None:
+        lrc_enhanced_enabled = cfg.get("lrc_enhanced_enabled", lrc_enhanced_enabled)
+        lrc_enhanced_word_sync = cfg.get("lrc_enhanced_word_sync", lrc_enhanced_word_sync)
+        lrc_extended_enabled = cfg.get("lrc_extended_enabled", lrc_extended_enabled)
+        # precision/strip/collapse may also be in cfg when called via grader
+        try:
+            precision = int(cfg.get("lrc_timestamp_precision", precision))
+        except Exception:
+            pass
+        strip_metadata = cfg.get("lrc_strip_metadata", strip_metadata)
+        collapse_blank_lines = cfg.get("lrc_collapse_blank_lines", collapse_blank_lines)
 
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     precision = 3 if int(precision) == 3 else 2
     text = TIMESTAMP_RE.sub(
         lambda match: _reformat_ts(match, precision), text
     )
+    if lrc_enhanced_enabled and lrc_enhanced_word_sync:
+        text = WORD_TS_RE.sub(
+            lambda m: _reformat_word_ts(m, precision), text
+        )
+        text = WORD_SPACE_AFTER_TS_RE.sub(r"\1", text)
     text = SPACE_AFTER_TS_RE.sub(r"\1", text)
 
     zero_ts = f"[00:00.{'0' * precision}]"
@@ -134,10 +179,15 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
             continue
 
         if strip_metadata and LRC_META_RE.match(s):
-            continue
+            # Enhanced lines with word timestamps are not metadata
+            if not (lrc_enhanced_enabled and WORD_TS_RE.search(s)):
+                continue
 
-        # Split merged "[a][b]text" lines (ESLyrics can't parse them).
-        parts = _split_merged_ts(s)
+        # Split merged "[a][b]text" lines — respect Extended flag
+        if lrc_extended_enabled:
+            parts = [s]
+        else:
+            parts = _split_merged_ts(s)
 
         # A [00:00.00] stacked directly in front of other timestamps is
         # a start-of-file marker that labels no text of its own.
@@ -238,6 +288,10 @@ def _format_for_storage(text, cfg, optimize=True):
             precision=cfg.get("lrc_timestamp_precision", 2),
             strip_metadata=cfg.get("lrc_strip_metadata", True),
             collapse_blank_lines=cfg.get("lrc_collapse_blank_lines", True),
+            lrc_enhanced_enabled=cfg.get("lrc_enhanced_enabled", True),
+            lrc_enhanced_word_sync=cfg.get("lrc_enhanced_word_sync", True),
+            lrc_extended_enabled=cfg.get("lrc_extended_enabled", True),
+            cfg=cfg,
         )
     return _canonical_lyrics(
         source,

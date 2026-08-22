@@ -117,6 +117,218 @@ def _flatten_png_alpha(src_path, dst_path):
         return False
 
 
+def _get_cover_target_size(ext, config):
+    """Return per-format cover target size (0 = use global).
+
+    If the per-format override is >0 it wins, otherwise the global
+    cover_target_size is used. Values are clamped to 0-4000.
+    """
+    if config is None:
+        config = {}
+    ext = (ext or "").lower()
+    try:
+        global_size = int(config.get("cover_target_size", 0) or 0)
+    except (TypeError, ValueError):
+        global_size = 0
+    global_size = max(0, min(4000, global_size))
+    per_size = 0
+    try:
+        if ext in (".jpg", ".jpeg"):
+            per_size = int(config.get("cover_jpeg_target_size", 0) or 0)
+        elif ext == ".png":
+            per_size = int(config.get("cover_png_target_size", 0) or 0)
+        elif ext == ".jxl":
+            per_size = int(config.get("cover_jxl_target_size", 0) or 0)
+    except (TypeError, ValueError):
+        per_size = 0
+    if per_size > 0:
+        return max(0, min(4000, per_size))
+    return global_size
+
+
+def _should_resize_cover(src_path, config):
+    """Whether cover resize should be attempted for *src_path*.
+
+    Checks global cover_resize_enabled, per-format enabled and
+    target_size >0. Requires Pillow.
+    """
+    if not config or not config.get("cover_resize_enabled"):
+        return False
+    if not HAS_PIL:
+        return False
+    ext = os.path.splitext(src_path)[1].lower() if src_path else ""
+    if ext in (".jpg", ".jpeg"):
+        if not config.get("cover_jpeg_enabled", True):
+            return False
+    elif ext == ".png":
+        if not config.get("cover_png_enabled", True):
+            return False
+    elif ext == ".jxl":
+        if not config.get("cover_jxl_enabled", True):
+            return False
+    target = _get_cover_target_size(ext, config)
+    return target > 0
+
+
+def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_threshold, config=None):
+    """Resize and/or center-crop a cover image via Pillow.
+
+    * If *crop_enabled* and aspect deviation > *crop_threshold*, center-crop
+      the longer side to a square.
+    * Then if *target_size* >0 (and resize is enabled in *config*) and the
+      (possibly cropped) image is not already *target_size* x *target_size*,
+      resize with LANCZOS to that square.
+
+    Returns True when a new file was written to *dst_path*, False when no
+    changes were needed or on error. Errors are handled gracefully.
+    """
+    if not HAS_PIL:
+        return False
+    if not src_path or not dst_path:
+        return False
+    try:
+        try:
+            thr = float(crop_threshold) if crop_threshold is not None else 0.05
+        except (TypeError, ValueError):
+            thr = 0.05
+        thr = max(0.0, min(0.5, thr))
+        try:
+            tsize = int(target_size) if target_size else 0
+        except (TypeError, ValueError):
+            tsize = 0
+        tsize = max(0, min(4000, tsize))
+        # Respect global toggle inside helper as well
+        resize_enabled = tsize > 0
+        if config is not None and not config.get("cover_resize_enabled", False):
+            resize_enabled = False
+            # still allow crop even when resize disabled
+        try:
+            with Image.open(src_path) as img:
+                try:
+                    img.load()
+                except Exception:
+                    pass
+                w, h = img.size
+                if w <= 0 or h <= 0:
+                    return False
+                need_crop = False
+                if crop_enabled and thr >= 0:
+                    try:
+                        ratio = w / h if h != 0 else 1.0
+                    except Exception:
+                        ratio = 1.0
+                    deviation = abs(ratio - 1.0)
+                    if deviation > thr:
+                        need_crop = True
+                need_resize = False
+                if resize_enabled and tsize > 0:
+                    if not need_crop:
+                        if w != tsize or h != tsize:
+                            need_resize = True
+                    else:
+                        sq = min(w, h)
+                        if sq != tsize:
+                            need_resize = True
+                        # if square already target, still need crop but not resize
+                if not need_crop and not need_resize:
+                    return False
+                img_to_save = img
+                if need_crop:
+                    if w > h:
+                        left = (w - h) // 2
+                        top = 0
+                        right = left + h
+                        bottom = h
+                    else:
+                        left = 0
+                        top = (h - w) // 2
+                        right = w
+                        bottom = top + w
+                    try:
+                        img_to_save = img.crop((left, top, right, bottom))
+                    except Exception:
+                        return False
+                    w, h = img_to_save.size
+                if need_resize:
+                    try:
+                        try:
+                            resample = Image.Resampling.LANCZOS
+                        except AttributeError:
+                            resample = Image.LANCZOS
+                        img_to_save = img_to_save.resize((tsize, tsize), resample)
+                    except Exception:
+                        try:
+                            img_to_save = img_to_save.resize((tsize, tsize), Image.LANCZOS)
+                        except Exception:
+                            return False
+                    w, h = img_to_save.size
+                ext_dst = os.path.splitext(dst_path)[1].lower()
+                save_kwargs = {}
+                dst_dir = os.path.dirname(dst_path)
+                if dst_dir and not os.path.exists(dst_dir):
+                    try:
+                        os.makedirs(dst_dir, exist_ok=True)
+                    except OSError:
+                        pass
+                try:
+                    if ext_dst in (".jpg", ".jpeg"):
+                        if img_to_save.mode in ("RGBA", "LA", "P"):
+                            if img_to_save.mode == "P":
+                                try:
+                                    img_to_save = img_to_save.convert("RGBA")
+                                except Exception:
+                                    pass
+                            if img_to_save.mode in ("RGBA", "LA"):
+                                try:
+                                    bg = Image.new("RGB", img_to_save.size, (255, 255, 255))
+                                    if img_to_save.mode == "LA":
+                                        img_to_save = img_to_save.convert("RGBA")
+                                    bg.paste(img_to_save, mask=img_to_save.split()[-1])
+                                    img_to_save = bg
+                                except Exception:
+                                    img_to_save = img_to_save.convert("RGB")
+                            else:
+                                img_to_save = img_to_save.convert("RGB")
+                        elif img_to_save.mode != "RGB":
+                            try:
+                                img_to_save = img_to_save.convert("RGB")
+                            except Exception:
+                                pass
+                        save_kwargs["format"] = "JPEG"
+                        save_kwargs["quality"] = 95
+                        save_kwargs["optimize"] = True
+                        try:
+                            save_kwargs["subsampling"] = 0
+                        except Exception:
+                            pass
+                    elif ext_dst == ".png":
+                        save_kwargs["format"] = "PNG"
+                        save_kwargs["optimize"] = True
+                    elif ext_dst == ".jxl":
+                        # Pillow JXL plugin may not be available; fallback to PNG
+                        try:
+                            save_kwargs["format"] = "JPEGXL"
+                        except Exception:
+                            save_kwargs["format"] = "PNG"
+                            save_kwargs["optimize"] = True
+                    else:
+                        save_kwargs["format"] = "PNG"
+                        save_kwargs["optimize"] = True
+                    img_to_save.save(dst_path, **save_kwargs)
+                    if img_to_save is not img:
+                        try:
+                            img_to_save.close()
+                        except Exception:
+                            pass
+                    return True
+                except Exception:
+                    return False
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
 def _rename_to_cover(filepath, new_ext=None):
     out_dir = os.path.dirname(filepath)
     ext = new_ext if new_ext else os.path.splitext(filepath)[1]
@@ -136,18 +348,35 @@ def _rename_to_cover(filepath, new_ext=None):
 
 
 def _process_image_to_jxl(args):
-    (
-        cjxl_path,
-        djxl_path,
-        jxl_version,
-        src_path,
-        threads_to_use,
-        effort,
-        force,
-        rename_to_cover,
-        remove_alpha,
-        enc,
-    ) = args
+    # Support optional config for cover resize/crop (backwards compatible)
+    if isinstance(args, (list, tuple)) and len(args) == 11:
+        (
+            cjxl_path,
+            djxl_path,
+            jxl_version,
+            src_path,
+            threads_to_use,
+            effort,
+            force,
+            rename_to_cover,
+            remove_alpha,
+            enc,
+            config,
+        ) = args
+    else:
+        (
+            cjxl_path,
+            djxl_path,
+            jxl_version,
+            src_path,
+            threads_to_use,
+            effort,
+            force,
+            rename_to_cover,
+            remove_alpha,
+            enc,
+        ) = args
+        config = None
     enabled = enc.get("jxl") or {}
 
     src_path = os.path.normpath(src_path)
@@ -176,19 +405,51 @@ def _process_image_to_jxl(args):
         existing_dest_size = _existing_size(final_out_path, src_path)
 
         if ext == ".jxl" and not force:
-            q, v = _read_jxl_tags(src_path)
-            if not _identity_missing(enabled, q, v):
+            # If cover resize/crop would modify this JXL, don't skip
+            _cover_needs = False
+            if config is not None and HAS_PIL:
                 try:
-                    if int(q) >= int(effort) and not _version_is_older(v, jxl_version):
-                        return (
-                            src_path,
-                            "unchanged",
-                            0,
-                            0,
-                            f"skipped (q={q}, v={v})",
-                        )
-                except (ValueError, TypeError):
+                    per_en = True
+                    if ext in (".jpg", ".jpeg"):
+                        per_en = bool(config.get("cover_jpeg_enabled", True))
+                    elif ext == ".png":
+                        per_en = bool(config.get("cover_png_enabled", True))
+                    elif ext == ".jxl":
+                        per_en = bool(config.get("cover_jxl_enabled", True))
+                    if per_en:
+                        re_en = bool(config.get("cover_resize_enabled", False))
+                        cr_en = bool(config.get("cover_crop_enabled", False))
+                        tgt = _get_cover_target_size(ext, config) if re_en else 0
+                        if (re_en and tgt > 0) or cr_en:
+                            # Need to inspect actual dimensions to decide if update needed
+                            try:
+                                with Image.open(src_path) as _im:
+                                    _w, _h = _im.size
+                                    if cr_en:
+                                        _ratio = _w / _h if _h else 1.0
+                                        if abs(_ratio - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
+                                            _cover_needs = True
+                                    if re_en and tgt > 0 and (_w != tgt or _h != tgt):
+                                        _cover_needs = True
+                            except Exception:
+                                # If we can't inspect, assume needs re-encode when enabled
+                                _cover_needs = True
+                except Exception:
                     pass
+            if not _cover_needs:
+                q, v = _read_jxl_tags(src_path)
+                if not _identity_missing(enabled, q, v):
+                    try:
+                        if int(q) >= int(effort) and not _version_is_older(v, jxl_version):
+                            return (
+                                src_path,
+                                "unchanged",
+                                0,
+                                0,
+                                f"skipped (q={q}, v={v})",
+                            )
+                    except (ValueError, TypeError):
+                        pass
 
         _safe_remove(temp_out_path)
 
@@ -283,6 +544,49 @@ def _process_image_to_jxl(args):
                         if _flatten_png_alpha(decoded_png, flat_png):
                             input_for_cjxl = flat_png
 
+        # Cover resize / crop (before cjxl) — uses temp copy to keep original safe
+        if config is not None and HAS_PIL:
+            try:
+                # Determine if cover handling should be attempted
+                # Use input_for_cjxl extension for target, but also respect src ext
+                ext_for_cover = os.path.splitext(input_for_cjxl)[1].lower()
+                if not ext_for_cover:
+                    ext_for_cover = ext
+                per_enabled = True
+                if ext_for_cover in (".jpg", ".jpeg"):
+                    per_enabled = bool(config.get("cover_jpeg_enabled", True))
+                elif ext_for_cover == ".png":
+                    per_enabled = bool(config.get("cover_png_enabled", True))
+                elif ext_for_cover == ".jxl":
+                    per_enabled = bool(config.get("cover_jxl_enabled", True))
+                if per_enabled:
+                    resize_enabled_cfg = bool(config.get("cover_resize_enabled", False))
+                    crop_enabled_cfg = bool(config.get("cover_crop_enabled", False))
+                    crop_thr_cfg = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                    target_for_cover = _get_cover_target_size(ext_for_cover, config) if resize_enabled_cfg else 0
+                    # Also handle fallback to src ext target if input is decoded temp with different ext
+                    if target_for_cover == 0 and resize_enabled_cfg and ext_for_cover != ext:
+                        alt_target = _get_cover_target_size(ext, config)
+                        if alt_target > 0:
+                            target_for_cover = alt_target
+                    if (resize_enabled_cfg and target_for_cover > 0) or crop_enabled_cfg:
+                        # Use a dedicated temp to avoid clobbering input_for_cjxl
+                        resized_cover_tmp = input_for_cjxl + ".cover_resized.tmp" + ext_for_cover
+                        _safe_remove(resized_cover_tmp)
+                        did_resize = _resize_and_crop_image(
+                            input_for_cjxl, resized_cover_tmp,
+                            target_for_cover if resize_enabled_cfg else 0,
+                            crop_enabled_cfg, crop_thr_cfg, config
+                        )
+                        if did_resize and os.path.exists(resized_cover_tmp) and os.path.getsize(resized_cover_tmp) > 0:
+                            temp_files.append(resized_cover_tmp)
+                            input_for_cjxl = resized_cover_tmp
+                            log(f"[cover] resized/cropped {os.path.basename(src_path)} -> {target_for_cover}x{target_for_cover}" if resize_enabled_cfg and target_for_cover else f"[cover] cropped {os.path.basename(src_path)}")
+                        else:
+                            _safe_remove(resized_cover_tmp)
+            except Exception as e:
+                log(f"[cover warn] {src_path}: {e}")
+
         cmd = [
             cjxl_path,
             input_for_cjxl,
@@ -352,12 +656,19 @@ def _process_image_to_jxl(args):
 
 
 def _process_jpeg_in_place(args):
-    (jpegtran_exe, ljt_version, filepath, force, rename_to_cover,
-     progressive, enc) = args
+    if isinstance(args, (list, tuple)) and len(args) == 8:
+        (jpegtran_exe, ljt_version, filepath, force, rename_to_cover,
+         progressive, enc, config) = args
+    else:
+        (jpegtran_exe, ljt_version, filepath, force, rename_to_cover,
+         progressive, enc) = args
+        config = None
     enabled = enc.get("jpeg") or {}
 
     filename = os.path.basename(filepath)
     temp_path = filepath + ".opttmp.jpg"
+    _cover_resized_tmp = None
+    _input_for_jpegtran = filepath
 
     try:
         original_size = os.path.getsize(filepath)
@@ -369,7 +680,37 @@ def _process_jpeg_in_place(args):
         cover_path = os.path.join(os.path.dirname(filepath), "cover.jpg")
         existing_dest_size = _existing_size(cover_path, filepath)
 
-    if not force:
+    # Cover-aware skip: don't skip if cover resize/crop needed
+    _cover_needs = False
+    if not force and config is not None and HAS_PIL:
+        try:
+            ext_cov = os.path.splitext(filepath)[1].lower()
+            per_en = True
+            if ext_cov in (".jpg", ".jpeg"):
+                per_en = bool(config.get("cover_jpeg_enabled", True))
+            elif ext_cov == ".png":
+                per_en = bool(config.get("cover_png_enabled", True))
+            elif ext_cov == ".jxl":
+                per_en = bool(config.get("cover_jxl_enabled", True))
+            if per_en:
+                re_en = bool(config.get("cover_resize_enabled", False))
+                cr_en = bool(config.get("cover_crop_enabled", False))
+                tgt_cov = _get_cover_target_size(ext_cov, config) if re_en else 0
+                if (re_en and tgt_cov > 0) or cr_en:
+                    try:
+                        with Image.open(filepath) as _im:
+                            _w, _h = _im.size
+                            if cr_en:
+                                _ratio = _w / _h if _h else 1.0
+                                if abs(_ratio - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
+                                    _cover_needs = True
+                            if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
+                                _cover_needs = True
+                    except Exception:
+                        _cover_needs = True
+        except Exception:
+            pass
+    if not force and not _cover_needs:
         q, v = _read_jpeg_xmp_tags(filepath)
         if not _identity_missing(enabled, q, v):
             try:
@@ -386,6 +727,42 @@ def _process_jpeg_in_place(args):
 
     _safe_remove(temp_path)
 
+    # Cover resize / crop via Pillow before jpegtran (temp copy to keep original safe)
+    _cover_resized_tmp = None
+    _input_for_jpegtran = filepath
+    if config is not None and HAS_PIL:
+        try:
+            ext_cov = os.path.splitext(filepath)[1].lower()
+            per_en = True
+            if ext_cov in (".jpg", ".jpeg"):
+                per_en = bool(config.get("cover_jpeg_enabled", True))
+            elif ext_cov == ".png":
+                per_en = bool(config.get("cover_png_enabled", True))
+            elif ext_cov == ".jxl":
+                per_en = bool(config.get("cover_jxl_enabled", True))
+            if per_en:
+                re_en = bool(config.get("cover_resize_enabled", False))
+                cr_en = bool(config.get("cover_crop_enabled", False))
+                thr_cov = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                tgt_cov = _get_cover_target_size(ext_cov, config) if re_en else 0
+                if (re_en and tgt_cov > 0) or cr_en:
+                    _cover_resized_tmp = filepath + ".cover_resized.tmp.jpg"
+                    _safe_remove(_cover_resized_tmp)
+                    did = _resize_and_crop_image(filepath, _cover_resized_tmp, tgt_cov if re_en else 0, cr_en, thr_cov, config)
+                    if did and os.path.exists(_cover_resized_tmp) and os.path.getsize(_cover_resized_tmp) > 0:
+                        _input_for_jpegtran = _cover_resized_tmp
+                        log(f"[cover] resized/cropped {os.path.basename(filepath)} -> {tgt_cov}x{tgt_cov}" if re_en and tgt_cov else f"[cover] cropped {os.path.basename(filepath)}")
+                    else:
+                        _safe_remove(_cover_resized_tmp)
+                        _cover_resized_tmp = None
+                        _input_for_jpegtran = filepath
+        except Exception as e:
+            log(f"[cover warn] {filepath}: {e}")
+            if _cover_resized_tmp:
+                _safe_remove(_cover_resized_tmp)
+                _cover_resized_tmp = None
+            _input_for_jpegtran = filepath
+
     cmd = [
         jpegtran_exe,
         "-copy", "none",
@@ -393,7 +770,7 @@ def _process_jpeg_in_place(args):
     ]
     if progressive:
         cmd.append("-progressive")
-    cmd.extend(["-outfile", temp_path, filepath])
+    cmd.extend(["-outfile", temp_path, _input_for_jpegtran])
 
     try:
         result = run_tool(
@@ -446,23 +823,43 @@ def _process_jpeg_in_place(args):
                 os.remove(temp_path)
             except OSError:
                 pass
+        try:
+            _safe_remove(_cover_resized_tmp)
+        except Exception:
+            pass
 
 
 def _process_png_in_place(args):
-    (
-        oxipng_exe,
-        oxipng_version,
-        filepath,
-        force,
-        rename_to_cover,
-        remove_alpha,
-        optimization_level,
-        enc,
-    ) = args
+    if isinstance(args, (list, tuple)) and len(args) == 9:
+        (
+            oxipng_exe,
+            oxipng_version,
+            filepath,
+            force,
+            rename_to_cover,
+            remove_alpha,
+            optimization_level,
+            enc,
+            config,
+        ) = args
+    else:
+        (
+            oxipng_exe,
+            oxipng_version,
+            filepath,
+            force,
+            rename_to_cover,
+            remove_alpha,
+            optimization_level,
+            enc,
+        ) = args
+        config = None
     enabled = enc.get("png") or {}
 
     filename = os.path.basename(filepath)
     temp_path = filepath + ".opttmp.png"
+    _cover_resized_tmp = None
+    _input_for_oxipng = filepath
 
     try:
         original_size = os.path.getsize(filepath)
@@ -474,7 +871,37 @@ def _process_png_in_place(args):
         cover_path = os.path.join(os.path.dirname(filepath), "cover.png")
         existing_dest_size = _existing_size(cover_path, filepath)
 
-    if not force:
+    # Cover-aware skip check
+    _cover_needs = False
+    if not force and config is not None and HAS_PIL:
+        try:
+            ext_cov = os.path.splitext(filepath)[1].lower()
+            per_en = True
+            if ext_cov in (".jpg", ".jpeg"):
+                per_en = bool(config.get("cover_jpeg_enabled", True))
+            elif ext_cov == ".png":
+                per_en = bool(config.get("cover_png_enabled", True))
+            elif ext_cov == ".jxl":
+                per_en = bool(config.get("cover_jxl_enabled", True))
+            if per_en:
+                re_en = bool(config.get("cover_resize_enabled", False))
+                cr_en = bool(config.get("cover_crop_enabled", False))
+                tgt_cov = _get_cover_target_size(ext_cov, config) if re_en else 0
+                if (re_en and tgt_cov > 0) or cr_en:
+                    try:
+                        with Image.open(filepath) as _im:
+                            _w, _h = _im.size
+                            if cr_en:
+                                _ratio = _w / _h if _h else 1.0
+                                if abs(_ratio - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
+                                    _cover_needs = True
+                            if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
+                                _cover_needs = True
+                    except Exception:
+                        _cover_needs = True
+        except Exception:
+            pass
+    if not force and not _cover_needs:
         tags = _read_png_text(filepath)
         q = tags.get("ENCODER_QUALITY")
         v = tags.get("ENCODER_VERSION")
@@ -507,13 +934,51 @@ def _process_png_in_place(args):
             except Exception:
                 _safe_remove(flat_path)
 
+    # Cover resize / crop before oxipng (temp copy)
+    if config is not None and HAS_PIL:
+        try:
+            ext_cov = os.path.splitext(filepath)[1].lower()
+            per_en = True
+            if ext_cov in (".jpg", ".jpeg"):
+                per_en = bool(config.get("cover_jpeg_enabled", True))
+            elif ext_cov == ".png":
+                per_en = bool(config.get("cover_png_enabled", True))
+            elif ext_cov == ".jxl":
+                per_en = bool(config.get("cover_jxl_enabled", True))
+            if per_en:
+                re_en = bool(config.get("cover_resize_enabled", False))
+                cr_en = bool(config.get("cover_crop_enabled", False))
+                thr_cov = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                tgt_cov = _get_cover_target_size(ext_cov, config) if re_en else 0
+                if (re_en and tgt_cov > 0) or cr_en:
+                    _cover_resized_tmp = filepath + ".cover_resized.tmp.png"
+                    _safe_remove(_cover_resized_tmp)
+                    did = _resize_and_crop_image(filepath, _cover_resized_tmp, tgt_cov if re_en else 0, cr_en, thr_cov, config)
+                    if did and os.path.exists(_cover_resized_tmp) and os.path.getsize(_cover_resized_tmp) > 0:
+                        _input_for_oxipng = _cover_resized_tmp
+                        log(f"[cover] resized/cropped {os.path.basename(filepath)} -> {tgt_cov}x{tgt_cov}" if re_en and tgt_cov else f"[cover] cropped {os.path.basename(filepath)}")
+                    else:
+                        _safe_remove(_cover_resized_tmp)
+                        _cover_resized_tmp = None
+                        _input_for_oxipng = filepath
+                else:
+                    _input_for_oxipng = filepath
+        except Exception as e:
+            log(f"[cover warn] {filepath}: {e}")
+            if _cover_resized_tmp:
+                _safe_remove(_cover_resized_tmp)
+                _cover_resized_tmp = None
+            _input_for_oxipng = filepath
+    else:
+        _input_for_oxipng = filepath
+
     cmd = [
         oxipng_exe,
         "-o", str(optimization_level),
         "--strip", "safe",
         "--force",
         "--output", temp_path,
-        filepath,
+        _input_for_oxipng,
     ]
 
     try:
@@ -526,10 +991,16 @@ def _process_png_in_place(args):
 
         if result.returncode != 0:
             err = (result.stderr or "").strip()
+            # If cover resize was applied, ensure temp is cleaned
+            if _cover_resized_tmp:
+                _safe_remove(_cover_resized_tmp)
             return (filename, "failed", 0, 0, f"oxipng failed: {err}")
 
         if not os.path.exists(temp_path):
-            shutil.copy2(filepath, temp_path)
+            try:
+                shutil.copy2(_input_for_oxipng, temp_path)
+            except Exception:
+                shutil.copy2(filepath, temp_path)
 
         os.replace(temp_path, filepath)
         temp_path = None
@@ -570,20 +1041,39 @@ def _process_png_in_place(args):
                 os.remove(temp_path)
             except OSError:
                 pass
+        try:
+            _safe_remove(_cover_resized_tmp)
+        except Exception:
+            pass
 
 
 def _process_jxl_in_place(args):
-    (
-        cjxl_path,
-        djxl_path,
-        jxl_version,
-        src_path,
-        threads_to_use,
-        effort,
-        force,
-        rename_to_cover,
-        enc,
-    ) = args
+    if isinstance(args, (list, tuple)) and len(args) == 10:
+        (
+            cjxl_path,
+            djxl_path,
+            jxl_version,
+            src_path,
+            threads_to_use,
+            effort,
+            force,
+            rename_to_cover,
+            enc,
+            config,
+        ) = args
+    else:
+        (
+            cjxl_path,
+            djxl_path,
+            jxl_version,
+            src_path,
+            threads_to_use,
+            effort,
+            force,
+            rename_to_cover,
+            enc,
+        ) = args
+        config = None
     enabled = enc.get("jxl") or {}
 
     filename = os.path.basename(src_path)
@@ -601,7 +1091,37 @@ def _process_jxl_in_place(args):
             cover_path = os.path.join(os.path.dirname(src_path), "cover.jxl")
             existing_dest_size = _existing_size(cover_path, src_path)
 
-        if not force:
+        # Cover-aware skip
+        _cover_needs = False
+        if not force and config is not None and HAS_PIL:
+            try:
+                ext_cov = os.path.splitext(src_path)[1].lower()
+                per_en = True
+                if ext_cov in (".jpg", ".jpeg"):
+                    per_en = bool(config.get("cover_jpeg_enabled", True))
+                elif ext_cov == ".png":
+                    per_en = bool(config.get("cover_png_enabled", True))
+                elif ext_cov == ".jxl":
+                    per_en = bool(config.get("cover_jxl_enabled", True))
+                if per_en:
+                    re_en = bool(config.get("cover_resize_enabled", False))
+                    cr_en = bool(config.get("cover_crop_enabled", False))
+                    tgt_cov = _get_cover_target_size(ext_cov, config) if re_en else 0
+                    if (re_en and tgt_cov > 0) or cr_en:
+                        try:
+                            with Image.open(src_path) as _im:
+                                _w, _h = _im.size
+                                if cr_en:
+                                    _ratio = _w / _h if _h else 1.0
+                                    if abs(_ratio - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
+                                        _cover_needs = True
+                                if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
+                                    _cover_needs = True
+                        except Exception:
+                            _cover_needs = True
+            except Exception:
+                pass
+        if not force and not _cover_needs:
             q, v = _read_jxl_tags(src_path)
             if not _identity_missing(enabled, q, v):
                 try:
@@ -672,6 +1192,49 @@ def _process_jxl_in_place(args):
 
             input_for_cjxl = decoded_png
 
+        # Cover resize / crop on the decoded input before re-encoding
+        if config is not None and HAS_PIL and input_for_cjxl:
+            try:
+                ext_for_cover = os.path.splitext(input_for_cjxl)[1].lower()
+                if not ext_for_cover:
+                    ext_for_cover = os.path.splitext(src_path)[1].lower()
+                per_en = True
+                if ext_for_cover in (".jpg", ".jpeg"):
+                    per_en = bool(config.get("cover_jpeg_enabled", True))
+                elif ext_for_cover == ".png":
+                    per_en = bool(config.get("cover_png_enabled", True))
+                elif ext_for_cover == ".jxl":
+                    per_en = bool(config.get("cover_jxl_enabled", True))
+                # Also check src ext per-format as fallback
+                src_ext = os.path.splitext(src_path)[1].lower()
+                src_per_en = True
+                if src_ext in (".jpg", ".jpeg"):
+                    src_per_en = bool(config.get("cover_jpeg_enabled", True))
+                elif src_ext == ".png":
+                    src_per_en = bool(config.get("cover_png_enabled", True))
+                elif src_ext == ".jxl":
+                    src_per_en = bool(config.get("cover_jxl_enabled", True))
+                if per_en or src_per_en:
+                    re_en = bool(config.get("cover_resize_enabled", False))
+                    cr_en = bool(config.get("cover_crop_enabled", False))
+                    thr_cov = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                    tgt_cov = _get_cover_target_size(ext_for_cover, config) if re_en else 0
+                    if tgt_cov == 0 and re_en:
+                        # fallback to src target
+                        tgt_cov = _get_cover_target_size(src_ext, config)
+                    if (re_en and tgt_cov > 0) or cr_en:
+                        resized_tmp = input_for_cjxl + ".cover_resized.tmp" + ext_for_cover
+                        _safe_remove(resized_tmp)
+                        did = _resize_and_crop_image(input_for_cjxl, resized_tmp, tgt_cov if re_en else 0, cr_en, thr_cov, config)
+                        if did and os.path.exists(resized_tmp) and os.path.getsize(resized_tmp) > 0:
+                            temp_files.append(resized_tmp)
+                            input_for_cjxl = resized_tmp
+                            log(f"[cover] resized/cropped {os.path.basename(src_path)} -> {tgt_cov}x{tgt_cov}" if re_en and tgt_cov else f"[cover] cropped {os.path.basename(src_path)}")
+                        else:
+                            _safe_remove(resized_tmp)
+            except Exception as e:
+                log(f"[cover warn] {src_path}: {e}")
+
         cmd = [
             cjxl_path,
             input_for_cjxl,
@@ -732,21 +1295,40 @@ def _process_jxl_in_place(args):
 
 
 def _process_jxl_back_to_original(args):
-    (
-        djxl_path,
-        jpegtran_exe,
-        ljt_version,
-        oxipng_exe,
-        oxipng_version,
-        src_path,
-        rename_to_cover,
-        remove_alpha,
-        remove_alpha_pil,
-        force,
-        progressive,
-        optimization_level,
-        enc,
-    ) = args
+    if isinstance(args, (list, tuple)) and len(args) == 14:
+        (
+            djxl_path,
+            jpegtran_exe,
+            ljt_version,
+            oxipng_exe,
+            oxipng_version,
+            src_path,
+            rename_to_cover,
+            remove_alpha,
+            remove_alpha_pil,
+            force,
+            progressive,
+            optimization_level,
+            enc,
+            config,
+        ) = args
+    else:
+        (
+            djxl_path,
+            jpegtran_exe,
+            ljt_version,
+            oxipng_exe,
+            oxipng_version,
+            src_path,
+            rename_to_cover,
+            remove_alpha,
+            remove_alpha_pil,
+            force,
+            progressive,
+            optimization_level,
+            enc,
+        ) = args
+        config = None
 
     filename = os.path.basename(src_path)
     temp_files = []
@@ -789,6 +1371,40 @@ def _process_jxl_back_to_original(args):
                 input_file = stripped_jpeg
             else:
                 input_file = decoded_jpeg
+
+            # Cover resize / crop before re-encoding JPEG
+            if config is not None and HAS_PIL:
+                try:
+                    out_ext = os.path.splitext(out_path)[1].lower() if out_path else ".jpg"
+                    per_en = True
+                    if out_ext in (".jpg", ".jpeg"):
+                        per_en = bool(config.get("cover_jpeg_enabled", True))
+                    elif out_ext == ".png":
+                        per_en = bool(config.get("cover_png_enabled", True))
+                    elif out_ext == ".jxl":
+                        per_en = bool(config.get("cover_jxl_enabled", True))
+                    # also check src JXL per-format as fallback
+                    src_per_en = bool(config.get("cover_jxl_enabled", True))
+                    if per_en or src_per_en:
+                        re_en = bool(config.get("cover_resize_enabled", False))
+                        cr_en = bool(config.get("cover_crop_enabled", False))
+                        thr_cov = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                        tgt_cov = _get_cover_target_size(out_ext, config) if re_en else 0
+                        if tgt_cov == 0 and re_en:
+                            # fallback to src JXL target if output per-format not set
+                            tgt_cov = _get_cover_target_size(".jxl", config)
+                        if (re_en and tgt_cov > 0) or cr_en:
+                            resized_jpeg = input_file + ".cover_resized.tmp.jpg"
+                            _safe_remove(resized_jpeg)
+                            did = _resize_and_crop_image(input_file, resized_jpeg, tgt_cov if re_en else 0, cr_en, thr_cov, config)
+                            if did and os.path.exists(resized_jpeg) and os.path.getsize(resized_jpeg) > 0:
+                                temp_files.append(resized_jpeg)
+                                input_file = resized_jpeg
+                                log(f"[cover] resized/cropped {os.path.basename(src_path)} -> {tgt_cov}x{tgt_cov}" if re_en and tgt_cov else f"[cover] cropped {os.path.basename(src_path)}")
+                            else:
+                                _safe_remove(resized_jpeg)
+                except Exception as e:
+                    log(f"[cover warn] {src_path}: {e}")
 
             if jpegtran_exe:
                 optimized = src_path + ".optimized.jpg"
@@ -898,6 +1514,38 @@ def _process_jxl_back_to_original(args):
 
                 if _flatten_png_alpha(decoded_png, flat_png):
                     input_file = flat_png
+
+        # Cover resize / crop before re-encoding PNG
+        if config is not None and HAS_PIL:
+            try:
+                out_ext = os.path.splitext(out_path)[1].lower() if out_path else ".png"
+                per_en = True
+                if out_ext in (".jpg", ".jpeg"):
+                    per_en = bool(config.get("cover_jpeg_enabled", True))
+                elif out_ext == ".png":
+                    per_en = bool(config.get("cover_png_enabled", True))
+                elif out_ext == ".jxl":
+                    per_en = bool(config.get("cover_jxl_enabled", True))
+                src_per_en = bool(config.get("cover_jxl_enabled", True))
+                if per_en or src_per_en:
+                    re_en = bool(config.get("cover_resize_enabled", False))
+                    cr_en = bool(config.get("cover_crop_enabled", False))
+                    thr_cov = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                    tgt_cov = _get_cover_target_size(out_ext, config) if re_en else 0
+                    if tgt_cov == 0 and re_en:
+                        tgt_cov = _get_cover_target_size(".jxl", config)
+                    if (re_en and tgt_cov > 0) or cr_en:
+                        resized_png = input_file + ".cover_resized.tmp.png"
+                        _safe_remove(resized_png)
+                        did = _resize_and_crop_image(input_file, resized_png, tgt_cov if re_en else 0, cr_en, thr_cov, config)
+                        if did and os.path.exists(resized_png) and os.path.getsize(resized_png) > 0:
+                            temp_files.append(resized_png)
+                            input_file = resized_png
+                            log(f"[cover] resized/cropped {os.path.basename(src_path)} -> {tgt_cov}x{tgt_cov}" if re_en and tgt_cov else f"[cover] cropped {os.path.basename(src_path)}")
+                        else:
+                            _safe_remove(resized_png)
+            except Exception as e:
+                log(f"[cover warn] {src_path}: {e}")
 
         if oxipng_exe:
             optimized = src_path + ".optimized.png"
@@ -1086,7 +1734,7 @@ def run_process_images(config):
                         ljt["version"] if ljt else None,
                         ox["oxipng_exe"] if ox else None,
                         ox["version"] if ox else None,
-f,
+                        f,
                         _renames(f),
                         remove_alpha,
                         HAS_PIL,
@@ -1094,6 +1742,7 @@ f,
                         progressive,
                         optimization_level,
                         enc,
+                        config,
                     ),
                     f,
                 ))
@@ -1112,6 +1761,7 @@ f,
                     _renames(f),
                     remove_alpha,
                     enc,
+                    config,
                 ),
                 f,
             ))
@@ -1129,6 +1779,7 @@ f,
                             _renames(f),
                             progressive,
                             enc,
+                            config,
                         ),
                         f,
                     ))
@@ -1148,6 +1799,7 @@ f,
                             remove_alpha,
                             optimization_level,
                             enc,
+                            config,
                         ),
                         f,
                     ))
@@ -1167,6 +1819,7 @@ f,
                         force,
                         _renames(f),
                         enc,
+                        config,
                     ),
                     f,
                 ))

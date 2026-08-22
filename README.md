@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.1.0
+# Music Library Optimizer v1.2.0
 
 > ## ⚠️ VIBE CODED
 >
@@ -9,13 +9,15 @@
 > bug reports, and patience are welcome.
 
 A Windows program for optimizing music libraries. It targets FLAC files,
-image files (mainly by converting to JPEG XL), cue sheets, and lyrics —
-optimizing both storage space and formatting. It also grades the library
-for tag/lyrics/cover compliance and audits audio integrity (fake-lossless
-detection via AudioAuditor). Mostly written in Python.
+image files (now with **cover resize / crop to square**), cue sheets, and
+lyrics (including **Enhanced / Extended LRC word-sync**) — optimizing both
+storage space and formatting. It also grades the library for tag/lyrics/cover
+compliance (now with **cover size & squareness enforcement**) and audits audio
+integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
 
 Desktop GUI (PySide6/Qt, themed) + command-line app (`mlo`) +
-optional interactive console menu.
+optional interactive console menu. **v1.2.0 adds cover resize/crop, per-format
+overrides, Enhanced LRC, and a reorganized tabbed Settings dialog.**
 
 ## Quick Start
 
@@ -41,6 +43,35 @@ PATH (the system scope requests admin elevation automatically). See
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.2.0
+
+- **Cover Art — Resize to Target Resolution** — `Settings → Cover Art → Resize & Crop`
+  → `Resize Covers to Target Size` + `Global Target Size (px)` (e.g., `1000 → 1000×1000`).
+  When enabled, every cover is center-cropped (if needed) and resized with Pillow
+  `LANCZOS` before `cjxl` / `jpegtran` / `oxipng`. Per-format overrides
+  `Apply to JPEG / PNG / JXL` + `Target Size (0=global)` let you keep e.g. JPEG at
+  `1000` while leaving PNG untouched. Disabled by default for compatibility.
+- **Auto-Crop Threshold** — `Crop Threshold (0.00–0.50)` — `0.05 = 5%` means
+  `1000×1050` stays, `1000×1100` is center-cropped to `1:1`. Only crops when
+  `|w/h−1| > threshold`.
+- **Cover Grading Enforcement** — `Settings → Grading — Cover Enforce` adds
+  `Enforce Size` (exact `target×target` ±1px) + `Enforce Square` (aspect within
+  threshold). Off by default; when on, albums with wrong covers fail grading with
+  details like `wrong size 500×500 → 1000×1000` or `not square 800×500`.
+- **Enhanced / Extended LRC** — `Settings → Lyrics → Enhanced LRC` adds
+  word-level `<mm:ss.xx>` support (e.g., `"[00:12.34] <00:12.34> Hello <00:12.60> world"`).
+  Timestamps are normalized to the chosen precision (2/3 decimals, carry handled),
+  `Extended` allows multiple `[mm:ss.xx]` on one line for karaoke, and the grader
+  validates word-timestamp order/format.
+- **Reorganized Settings** — both the new Qt `gui/dialogs.py` and legacy `mlo` dialogs
+  are now grouped as `FLAC Encoding / Cover Art — Processing / Resize & Crop / Per-Format /
+  Lyrics / Enhanced LRC / CUE / Tags / Grading / Audio Audit / Interface / Updates` with
+  clear sub-sections and tooltips, keeping ~60 options scannable.
+- **Library Viewer / Updater / Deps polish** — Qt viewer shows cover thumbnails,
+  `Clear Filters`, persistent `Bad only / Show files / Sort`, faster inserts for large
+  libraries; Tk filter overlap fixed; updater retries on `429/5xx` with `Retry-After`,
+  verifies `MZ`+size + speed/ETA; deps installer resumes, SHA256 checks, `7-Zip` hint.
 
 ## New in v1.1.0
 

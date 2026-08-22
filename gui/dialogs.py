@@ -76,6 +76,19 @@ CONFIG_FIELDS = {
     "jpeg_progressive": ("JPEG Progressive Output", "bool", None),
     "png_optimization_level": ("PNG Optimization Level (0-6)", "int", (0, 6)),
     "force_reencode_images": ("Force Re-encode Images", "bool", None),
+    # Cover Art — Resize & Crop (new v1.2.0)
+    "cover_resize_enabled": ("Resize Covers to Target Size", "bool", None),
+    "cover_target_size": ("Global Target Size (px, 0=keep)", "int", (0, 4000)),
+    "cover_crop_enabled": ("Auto-Crop Non-Square Covers", "bool", None),
+    "cover_crop_threshold": ("Crop Threshold (0.00-0.50)", "str", None),
+    "cover_enforce_size": ("Enforce Size in Grading", "bool", None),
+    "cover_enforce_square": ("Enforce Square in Grading", "bool", None),
+    "cover_jpeg_enabled": ("Apply to JPEG Covers", "bool", None),
+    "cover_png_enabled": ("Apply to PNG Covers", "bool", None),
+    "cover_jxl_enabled": ("Apply to JXL Covers", "bool", None),
+    "cover_jpeg_target_size": ("JPEG Target Size (0=global)", "int", (0, 4000)),
+    "cover_png_target_size": ("PNG Target Size (0=global)", "int", (0, 4000)),
+    "cover_jxl_target_size": ("JXL Target Size (0=global)", "int", (0, 4000)),
     # Lyrics / LRC
     "optimize_lrc": ("Optimize LRC Files", "bool", None),
     "optimize_embedded_lyrics": ("Optimize Embedded Lyrics", "bool", None),
@@ -84,6 +97,9 @@ CONFIG_FIELDS = {
                                 ("2", "3")),
     "lrc_strip_metadata": ("Remove LRC Metadata Lines", "bool", None),
     "lrc_collapse_blank_lines": ("Collapse Blank Lyric Lines", "bool", None),
+    "lrc_enhanced_enabled": ("Enable Enhanced LRC (<mm:ss.xx>)", "bool", None),
+    "lrc_enhanced_word_sync": ("Word-Level Timestamps", "bool", None),
+    "lrc_extended_enabled": ("Enable Extended LRC", "bool", None),
     "append_final_newline": ("Append Final Newline", "bool", None),
     # CUE sheets
     "keep_empty_cue_lines": ("Keep Empty CUE Lines", "bool", None),
@@ -182,6 +198,38 @@ FIELD_DESCRIPTIONS = {
         "smaller lossless PNG files.",
     "force_reencode_images":
         "Reprocess images even when their ENCODER marker tags are current.",
+    "cover_resize_enabled":
+        "Resize cover art to a square target resolution. When off (default), "
+        "covers keep original dimensions. Requires Pillow.",
+    "cover_target_size":
+        "Square cover size in pixels (e.g., 1000 → 1000×1000). 0 = keep original. "
+        "Applies to all cover formats unless overridden per-format below.",
+    "cover_crop_enabled":
+        "Auto-crop non-square covers to 1:1 before resizing. Only crops when the "
+        "aspect deviation exceeds the threshold below.",
+    "cover_crop_threshold":
+        "Aspect-ratio deviation that triggers cropping. 0.05 = 5% (e.g., 1000×1050 "
+        "stays, 1000×1100 is cropped). Range 0.00-0.50.",
+    "cover_enforce_size":
+        "Grading: fail albums whose cover is not exactly the target size "
+        "(strict, 1px tolerance). Off by default.",
+    "cover_enforce_square":
+        "Grading: fail albums whose cover is not square within the crop threshold. "
+        "Off by default.",
+    "cover_jpeg_enabled":
+        "Apply resize/crop to JPEG covers (.jpg/.jpeg). When off, JPEG covers are "
+        "left untouched.",
+    "cover_png_enabled":
+        "Apply resize/crop to PNG covers.",
+    "cover_jxl_enabled":
+        "Apply resize/crop to JPEG XL covers (.jxl).",
+    "cover_jpeg_target_size":
+        "JPEG-specific target size (0 = use global). Override global size for JPEG "
+        "covers only.",
+    "cover_png_target_size":
+        "PNG-specific target size (0 = use global).",
+    "cover_jxl_target_size":
+        "JXL-specific target size (0 = use global).",
     "optimize_lrc":
         "Clean and normalize .lrc lyric sidecar files (timestamps, blank "
         "lines, metadata removal).",
@@ -197,6 +245,17 @@ FIELD_DESCRIPTIONS = {
     "lrc_collapse_blank_lines":
         "Collapse repeated blank lyric lines while retaining intentional "
         "single spacing.",
+    "lrc_enhanced_enabled":
+        "Enable Enhanced LRC: word-level timestamps like <00:12.34> inside a "
+        "line (e.g., '[00:12.34] <00:12.34> Hello <00:12.60> world'). Preserved "
+        "and normalized to the chosen timestamp precision.",
+    "lrc_enhanced_word_sync":
+        "When on (default), word-level <mm:ss.xx> timestamps are reformatted "
+        "and kept; when off, they are left as plain text.",
+    "lrc_extended_enabled":
+        "Enable Extended LRC: allows multiple [mm:ss.xx] on one line and "
+        "preserves them for karaoke players that support it. When off, they "
+        "are split onto separate lines.",
     "append_final_newline":
         "Add one final LF byte to formatted .cue, .lrc, and embedded lyric "
         "text. Off by default for the existing byte-minimal format.",
@@ -448,32 +507,48 @@ class SettingsDialog(QDialog):
         lay.addWidget(note)
         lay.addSpacing(4)
 
-        # --- Option groups (two fields per row) ---------------------------
+        # --- Option groups — organized, coherent, with cover + Enhanced LRC (v1.2.0)
         groups = [
-            ("FLAC", [
+            ("FLAC Encoding", [
                 "flac_level", "add_seektables", "force_reencode_flac"]),
-            ("Images", [
+            ("Cover Art — Processing", [
                 "jpegxl_effort", "reencode_images", "reencode_to_jxl",
                 "convert_jxl_back", "rename_to_cover", "remove_alpha",
                 "jpeg_progressive", "png_optimization_level",
                 "force_reencode_images"]),
+            ("Cover Art — Resize & Crop", [
+                "cover_resize_enabled", "cover_target_size",
+                "cover_crop_enabled", "cover_crop_threshold",
+                "cover_enforce_size", "cover_enforce_square"]),
+            ("Cover Art — Per-Format", [
+                "cover_jpeg_enabled", "cover_png_enabled", "cover_jxl_enabled",
+                "cover_jpeg_target_size", "cover_png_target_size",
+                "cover_jxl_target_size"]),
             ("Lyrics", [
                 "optimize_lrc", "optimize_embedded_lyrics", "lyrics_format",
                 "lrc_timestamp_precision", "lrc_strip_metadata",
                 "lrc_collapse_blank_lines", "append_final_newline"]),
+            ("Enhanced LRC", [
+                "lrc_enhanced_enabled", "lrc_enhanced_word_sync",
+                "lrc_extended_enabled"]),
             ("CUE Sheets", [
                 "keep_empty_cue_lines", "keep_other_cue_lines",
                 "cue_file_type"]),
-            ("Tags", [
-                "normalize_media_source", "digital_media_source_value",
+            ("Tags — Media & Source", [
+                "normalize_media_source", "digital_media_source_value"]),
+            ("Tags — Writes", [
                 "fix_instrumental_from_lyrics", "write_audit_tag",
                 "write_log_grade", "write_replaygain_tags",
                 "write_dynamic_range_tags"]),
-            ("Grading", [
+            ("Auto Tagging", [
+                "auto_advisory", "auto_instrumental", "force_auto_tag"]),
+            ("Grading — Allowed Types", [
                 "grade_verbose", "grade_include_music", "grade_include_cover",
                 "grade_include_cue", "grade_include_log", "grade_include_lrc",
                 "grade_include_other"]),
-            ("Audio Audit", [
+            ("Grading — Cover Enforce", [
+                "cover_enforce_size", "cover_enforce_square"]),
+            ("Audio Auditor", [
                 "audit_thorough", "force_audit", "audit_cutoff_allow",
                 "audit_verify_cd_checksums", "audit_clipping", "audit_mqa",
                 "audit_ai", "audit_fake_stereo", "audit_silence",
@@ -482,8 +557,6 @@ class SettingsDialog(QDialog):
             ("DR & ReplayGain", [
                 "dr_replaygain_enabled", "replaygain_skip_existing",
                 "force_dr_replaygain"]),
-            ("Auto Tagging", [
-                "auto_advisory", "auto_instrumental", "force_auto_tag"]),
             ("Interface", [
                 "auto_advance", "worker_limit"]),
             ("Updates", [
