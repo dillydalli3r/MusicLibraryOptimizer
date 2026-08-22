@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.5.5 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.5.6 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
@@ -2980,8 +2980,9 @@ class App(tk.Tk):
             root_albums = []
 
             for album_dir in albums:
-                parent = os.path.dirname(album_dir)
-                if parent == folder:
+                parent = os.path.normpath(os.path.dirname(album_dir))
+                norm_folder = os.path.normpath(folder)
+                if parent == norm_folder:
                     root_albums.append(album_dir)
                 else:
                     artists.setdefault(parent, []).append(album_dir)
@@ -3028,7 +3029,7 @@ class App(tk.Tk):
                     # the folder -> artist map used by the filter.
                     artist = (result or {}).get("album_artist")
                     if artist:
-                        parent = os.path.dirname(album_dir)
+                        parent = os.path.normpath(os.path.dirname(album_dir))
                         if parent and parent not in self._folder_artist:
                             self._folder_artist[parent] = artist
                     self._update_grade(album_dir, result)
@@ -3040,7 +3041,17 @@ class App(tk.Tk):
                         self._rebuild_tree()
         except queue.Empty:
             pass
-        self.after(120, self._drain_library)
+        except Exception as e:
+            # Never kill the drain loop — log and keep polling so a single
+            # bad grade doesn't freeze the library at "Scanning library...".
+            try:
+                import traceback
+                with open(os.path.join(os.path.dirname(__file__), "app_error.log"), "a", encoding="utf-8") as fh:
+                    fh.write(f"_drain_library error: {e}\n{traceback.format_exc()}\n")
+            except Exception:
+                pass
+        finally:
+            self.after(120, self._drain_library)
 
     def _collect_open(self):
         """Return the set of paths of currently expanded tree items."""
@@ -3167,7 +3178,7 @@ class App(tk.Tk):
         """Bad-only filter: hide graded albums that passed."""
         if not self.bad_only_var.get():
             return True
-        res = self._grade_cache.get(album_dir)
+        res = self._grade_cache.get(album_dir) or self._grade_cache.get(os.path.normpath(album_dir))
         if not res or "error" in res:
             return True
         return res["pass_count"] != res["total_checks"]
@@ -3182,7 +3193,7 @@ class App(tk.Tk):
         self._path_items.setdefault(album_dir, set()).add(item)
         res = self._grade_cache.get(album_dir)
         if res is None:
-            tree.item(item, values=("…", "…", "", "", "", "", ""))
+            tree.item(item, values=("…", "…", "", "", "", "", "", ""))
         else:
             self._apply_album_grade(tree, item, album_dir, res)
         return item
@@ -3347,7 +3358,10 @@ class App(tk.Tk):
         ))
 
     def _update_grade(self, album_dir, result):
-        was_cached = album_dir in self._grade_cache
+        # Normalize so mixed / vs \ from _find_albums vs os.path.join doesn't miss
+        album_dir = os.path.normpath(album_dir)
+        was_cached = album_dir in self._grade_cache or any(os.path.normpath(k) == album_dir for k in self._grade_cache)
+        # Keep cache key as normalized
         self._grade_cache[album_dir] = result
         tree = self.library_tree
         items = self._path_items.get(album_dir)

@@ -196,7 +196,10 @@ def _decode_mp4_value(v):
 def _find_albums(root_dir):
     albums = set()
     for file_path in _walk_files(root_dir, AUDIO_EXTS):
-        albums.add(os.path.dirname(file_path))
+        # Normalize so F:/Music/Artists + \System\... mixed separators don't
+        # create mismatched keys between the scanner and the UI's
+        # os.path.dirname comparisons (Windows allows both / and \).
+        albums.add(os.path.normpath(os.path.dirname(file_path)))
     return sorted(albums)
 
 
