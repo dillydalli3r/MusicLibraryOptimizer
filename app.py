@@ -1861,9 +1861,11 @@ class App(tk.Tk):
                   lightcolor=[("selected", BRIGHT), ("!selected", BORDER)],
                   darkcolor=[("selected", BRIGHT), ("!selected", BORDER)],
                   padding=[("selected", (14, 6)), ("!selected", (14, 6))])
-        # White outline should extend to the tab bar itself
-        style.configure("TNotebook", background=BG, borderwidth=0,
-                        tabmargins=(0, 2, 0, 0), bordercolor=BRIGHT)
+        # White outline should extend to the tab bar itself — make the
+        # TNotebook's outer border white and ensure tabs have a continuous outline
+        style.configure("TNotebook", background=BG, borderwidth=1,
+                        tabmargins=(0, 2, 0, 0), bordercolor=BRIGHT, relief="solid")
+        style.configure("TNotebook.client", background=CARD, borderwidth=1, relief="solid", bordercolor=BRIGHT)
 
         style.configure("Treeview", background="#121212", fieldbackground="#121212",
                         foreground=TEXT, borderwidth=0, rowheight=32,
@@ -1872,7 +1874,7 @@ class App(tk.Tk):
                   foreground=[("selected", "#ffffff")])
         style.configure("Treeview.Heading", background=CARD, foreground=MUTED,
                         borderwidth=1, padding=(10, 7), relief="raised",
-                        font=_sfont(8), bordercolor=BORDER)
+                        font=_sfont(8), bordercolor=BRIGHT)
         style.map("Treeview.Heading",
                   background=[("active", "#1f1f1f")])
 
