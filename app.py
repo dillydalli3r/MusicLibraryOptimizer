@@ -2112,26 +2112,20 @@ class App(tk.Tk):
         style.map("TScrollbar", background=[("active", "#3a3a3a")])
 
         style.configure("TNotebook", background=BG, borderwidth=0,
-                        tabmargins=(0, 2, 0, 0))
-        # Both tabs same small size regardless of selection — previously
-        # selected tab had larger padding/border causing the misaligned look
-        # in the screenshot (Library lower than Console). Use identical small
-        # padding for all states and a uniform 1px border.
+                        tabmargins=(0, 0, 0, 0))
+        # Both tabs same size and same border — fixes misaligned white outline
+        # where selected tab appeared 2-3px offset from unselected. Use identical
+        # 1px BORDER for both, only background/foreground differ, and no top margin.
         style.configure("TNotebook.Tab", background="#141414",
                         foreground=MUTED, borderwidth=1,
                         padding=(14, 6), font=_sfont(8))
         style.map("TNotebook.Tab",
                   background=[("selected", CARD), ("!selected", "#141414"), ("active", "#1d1d1d")],
                   foreground=[("selected", BRIGHT), ("!selected", MUTED), ("active", TEXT)],
-                  bordercolor=[("selected", BRIGHT), ("!selected", BORDER)],
-                  lightcolor=[("selected", BRIGHT), ("!selected", BORDER)],
-                  darkcolor=[("selected", BRIGHT), ("!selected", BORDER)],
+                  bordercolor=[("selected", BORDER), ("!selected", BORDER)],
+                  lightcolor=[("selected", BORDER), ("!selected", BORDER)],
+                  darkcolor=[("selected", BORDER), ("!selected", BORDER)],
                   padding=[("selected", (14, 6)), ("!selected", (14, 6))])
-        # White outline should extend to the tab bar itself — make the
-        # TNotebook's outer border white and ensure tabs have a continuous outline
-        # Library viewer: slightly darker heading bar at top, no white outlines
-        style.configure("TNotebook", background=BG, borderwidth=0,
-                        tabmargins=(0, 2, 0, 0))
         style.configure("TNotebook.client", background=CARD, borderwidth=0)
 
         style.configure("Treeview", background="#121212", fieldbackground="#121212",
@@ -2139,7 +2133,7 @@ class App(tk.Tk):
                         font=_font(9), padding=(0, 1), indent=30)
         style.map("Treeview", background=[("selected", ACCENT_DARK)],
                   foreground=[("selected", "#ffffff")])
-        style.configure("Treeview.Heading", background="#1e1e1e", foreground=MUTED,
+        style.configure("Treeview.Heading", background="#0f0f0f", foreground=MUTED,
                         borderwidth=0, padding=(5, 3), relief="flat",
                         font=_sfont(8))
         style.map("Treeview.Heading",
@@ -2162,16 +2156,21 @@ class App(tk.Tk):
         # --- Folder bar ---------------------------------------------------
         folder_bar = ttk.Frame(self, padding=(18, 16, 18, 8))
         folder_bar.pack(fill=tk.X)
-        folder_bar.columnconfigure(1, weight=1)
+        folder_bar.columnconfigure(2, weight=1)
+        # Sidebar toggle — shows/hides RUN SCRIPTS / BATCH / MANAGE
+        self.sidebar_toggle_btn = ttk.Button(folder_bar, text="◀ Hide Menu" if getattr(self, 'sidebar_visible', True) else "▶ Show Menu",
+                                             style="Small.TButton", width=12, command=self._toggle_sidebar)
+        self.sidebar_toggle_btn.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        ToolTip(self.sidebar_toggle_btn, "Toggle the left Run Scripts / Batch / Manage menu")
         ttk.Label(folder_bar, text="LIBRARY FOLDER", style="Section.TLabel").grid(
-            row=0, column=0, sticky="w", padx=(0, 12)
+            row=0, column=1, sticky="w", padx=(0, 12)
         )
         self.folder_var = tk.StringVar(value=self.config.get("music_folder", ""))
         ttk.Entry(folder_bar, textvariable=self.folder_var).grid(
-            row=0, column=1, sticky="ew"
+            row=0, column=2, sticky="ew"
         )
         ttk.Button(folder_bar, text="Browse…", command=self._pick_folder).grid(
-            row=0, column=2, padx=(10, 0)
+            row=0, column=3, padx=(10, 0)
         )
 
         # --- Main area ------------------------------------------------------
@@ -2179,9 +2178,20 @@ class App(tk.Tk):
         main.pack(fill=tk.BOTH, expand=True)
         main.columnconfigure(1, weight=1)
         main.rowconfigure(0, weight=1)
+        self.main_frame = main
 
         sidebar = ttk.Frame(main, style="Side.TFrame", padding=(16, 16))
         sidebar.grid(row=0, column=0, sticky="nswe")
+        self.sidebar = sidebar
+        self.sidebar_visible = bool(self.config.get("sidebar_visible", True))
+        if not self.sidebar_visible:
+            # Start hidden if user previously hid it
+            sidebar.grid_remove()
+            if hasattr(self, 'sidebar_toggle_btn'):
+                self.sidebar_toggle_btn.configure(text="▶ Show Menu")
+        else:
+            if hasattr(self, 'sidebar_toggle_btn'):
+                self.sidebar_toggle_btn.configure(text="◀ Hide Menu")
 
         ttk.Label(sidebar, text="RUN SCRIPTS", style="Section.Side.TLabel").pack(
             anchor="w", pady=(0, 8)
@@ -3324,12 +3334,13 @@ class App(tk.Tk):
         menu.add_command(label="Force options", state=tk.DISABLED)
         menu.add_separator()
         # Order matches RUN SCRIPTS (1,2,3,5,6,7,8) — Grade Library (4) has no Force
+        # Labels must exactly match RUN SCRIPTS names (per user request)
         for var, label in (
             (self.force_lyrics_var, "Format Lyrics"),
-            (self.force_cue_var, "Format CUE sheets"),
-            (self.force_flac_var, "Re-encode FLACs"),
-            (self.force_images_var, "Re-encode images"),
-            (self.force_audit_var, "Audit"),
+            (self.force_cue_var, "Format CUEs"),
+            (self.force_flac_var, "Optimize FLACs"),
+            (self.force_images_var, "Process Images"),
+            (self.force_audit_var, "Audit Library"),
             (self.force_dr_var, "DR & ReplayGain"),
             (self.force_autotag_var, "Auto Tagging"),
         ):
@@ -3972,6 +3983,18 @@ class App(tk.Tk):
             save_config(self.config)
             self.log(f"Library folder set to: {path}")
             self._refresh_library(regrade=True)
+
+    def _toggle_sidebar(self):
+        self.sidebar_visible = not getattr(self, 'sidebar_visible', True)
+        if self.sidebar_visible:
+            self.sidebar.grid()
+            self.sidebar_toggle_btn.configure(text="◀ Hide Menu")
+        else:
+            self.sidebar.grid_remove()
+            self.sidebar_toggle_btn.configure(text="▶ Show Menu")
+        self.config["sidebar_visible"] = self.sidebar_visible
+        save_config(self.config)
+        self.log(f"Sidebar {'shown' if self.sidebar_visible else 'hidden'}")
 
     def _open_config(self):
         if self.running:
