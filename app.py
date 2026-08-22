@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.2 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.3 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.3.2 features: cover resize/crop,
+stable Tkinter engine with all v1.3.3 features: cover resize/crop,
 per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
 customizable pattern, etc.
 
@@ -192,6 +192,7 @@ CONFIG_FIELDS = [
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
     ("audit_cutoff_allow", "Audit Cutoff Allowance (Hz, 0=default)", "int", (0, 24000)),
     ("audit_verify_cd_checksums", "Verify CD Rips vs .log Checksums", "bool", None),
+    ("audit_cd_require_both", "CD: Require Both Log & AudioAuditor = REAL", "bool", None),
     ("audit_clipping", "Audit Clipping Detection", "bool", None),
     ("audit_mqa", "Audit MQA Detection", "bool", None),
     ("audit_ai", "Audit AI Detection", "bool", None),
@@ -758,6 +759,11 @@ FIELD_DESCRIPTIONS = {
         "For MEDIA=CD rips, verify each track against the CRC-32 checksum "
         "in its .log and write AUDIT=REAL/FAKE from that. The checksum "
         "result takes precedence over AudioAuditor for those files.",
+    "audit_cd_require_both":
+        "When on, BOTH the .log CRC and AudioAuditor must be REAL for a "
+        "CD rip to be REAL. If either is FAKE, the final AUDIT is FAKE. "
+        "When off (default), the .log CRC alone decides for CD rips and "
+        "AudioAuditor is not run on them.",
     "audit_clipping":
         "Audit: detect clipped samples (--no-clipping when off). "
         "Loud modern masters often clip at the true-peak ceiling and are "
@@ -1164,7 +1170,8 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("Audio Auditor", [
                 "audit_thorough", "audit_cutoff_allow",
-                "audit_verify_cd_checksums", "audit_clipping", "audit_mqa",
+                "audit_verify_cd_checksums", "audit_cd_require_both",
+                "audit_clipping", "audit_mqa",
                 "audit_ai", "audit_fake_stereo", "audit_silence",
                 "audit_dynamic_range", "audit_true_peak", "audit_lufs",
                 "audit_bpm",
@@ -1366,6 +1373,8 @@ class ConfigDialog(tk.Toplevel):
         for key, _label, kind, extra in CONFIG_FIELDS:
             if key == "run_all_order":
                 continue
+            if key not in self.vars:
+                continue
             var = self.vars[key]
             d = defaults.get(key)
             try:
@@ -1395,6 +1404,8 @@ class ConfigDialog(tk.Toplevel):
     def _save(self):
         for key, label, kind, extra in CONFIG_FIELDS:
             if key == "run_all_order":
+                continue
+            if key not in self.vars:
                 continue
             var = self.vars[key]
             try:
@@ -1463,10 +1474,11 @@ class SetupWizard(tk.Toplevel):
     MUSIC_PRESETS = [
         (
             "Balanced (recommended)",
-            "FLAC 5 (~5% smaller files, noticeably faster than 8) • no "
-            "seektables • image pipeline on • no other music changes.",
+            "FLAC 5 (~5% smaller, noticeably faster than 8) • no seektables • "
+            "image pipeline on • no other music changes. Good for most libraries.",
             {"flac_level": 5, "add_seektables": False, "reencode_images": True,
-             "jpegxl_effort": 7, "png_optimization_level": 4},
+             "jpegxl_effort": 7, "png_optimization_level": 4,
+             "worker_limit": 0, "auto_advance": True},
         ),
         (
             "Most Aggressive — LOSSLESS",
@@ -1474,12 +1486,15 @@ class SetupWizard(tk.Toplevel):
             "image pipeline off (so only music is touched). Slowest encode, "
             "smallest FLAC files, zero quality loss.",
             {"flac_level": 8, "add_seektables": False, "reencode_images": False,
-             "jpegxl_effort": 9, "png_optimization_level": 4},
+             "jpegxl_effort": 9, "png_optimization_level": 4,
+             "worker_limit": 0},
         ),
         (
-            "Lightweight",
-            "Fast & gentle: FLAC 3 • seektables kept • image pipeline off.",
-            {"flac_level": 3, "add_seektables": True, "reencode_images": False},
+            "Lightweight (fast)",
+            "Fast & gentle: FLAC 3 • seektables kept • image pipeline off. "
+            "Use for quick scans or low-power machines.",
+            {"flac_level": 3, "add_seektables": True, "reencode_images": False,
+             "worker_limit": 4},
         ),
     ]
     COVER_PRESETS = [
@@ -1487,7 +1502,7 @@ class SetupWizard(tk.Toplevel):
             "Balanced (recommended)",
             "Re-encode images on • convert to JPEG XL (effort 7) • resize "
             "covers to 1000×1000 with crop threshold 0.05 • progressive JPEG "
-            "• PNG level 2.",
+            "• PNG level 2. Works for most collections.",
             {"reencode_images": True, "reencode_to_jxl": True,
              "jpegxl_effort": 7, "cover_resize_enabled": True,
              "cover_target_size": 1000, "cover_force_exact_size": False,
@@ -1511,12 +1526,107 @@ class SetupWizard(tk.Toplevel):
         (
             "Compatibility (no JXL)",
             "Keeps JPEG/PNG as JPEG/PNG (no JXL) • optimizes in place • "
-            "resizes to 1000 only when forced exact • progressive JPEG.",
+            "resizes to 1000 only when forced exact • progressive JPEG. Best "
+            "for players that don't support JXL.",
             {"reencode_images": True, "reencode_to_jxl": False,
              "convert_jxl_back": False, "cover_resize_enabled": True,
              "cover_target_size": 1000, "cover_force_exact_size": False,
              "cover_crop_enabled": True, "jpeg_progressive": True,
              "png_optimization_level": 2},
+        ),
+    ]
+    LYRICS_PRESETS = [
+        (
+            "Standard — clean & embedded",
+            "Optimize LRC + embedded • format EMBEDDED • 2 decimals • strip "
+            "metadata • collapse blanks. Ideal for foobar2000 + ESLyric.",
+            {"optimize_lrc": True, "optimize_embedded_lyrics": True,
+             "lyrics_format": "EMBEDDED", "lrc_timestamp_precision": 2,
+             "lrc_strip_metadata": True, "lrc_collapse_blank_lines": True,
+             "lrc_enhanced_enabled": False, "lrc_extended_enabled": False,
+             "lrc_add_zero_timestamp": False, "append_final_newline": False},
+        ),
+        (
+            "Enhanced — word-sync + zero",
+            "Enhanced LRC on • word <mm:ss.xx> • extended (multi-ts) • "
+            "add [00:00.00] to first line • 3 decimals • for karaoke/word-sync "
+            "players. Also cleans embedded & LRC.",
+            {"optimize_lrc": True, "optimize_embedded_lyrics": True,
+             "lyrics_format": "BOTH", "lrc_timestamp_precision": 3,
+             "lrc_strip_metadata": True, "lrc_collapse_blank_lines": True,
+             "lrc_enhanced_enabled": True, "lrc_enhanced_word_sync": True,
+             "lrc_extended_enabled": True, "lrc_add_zero_timestamp": True},
+        ),
+        (
+            "LRC Sidecar only",
+            "Keeps lyrics in .lrc files only • 2 decimals • no enhanced. "
+            "Use if your player prefers sidecars.",
+            {"optimize_lrc": True, "optimize_embedded_lyrics": False,
+             "lyrics_format": "LRC", "lrc_timestamp_precision": 2,
+             "lrc_enhanced_enabled": False, "lrc_extended_enabled": False},
+        ),
+    ]
+    CUE_PRESETS = [
+        (
+            "Standard — keep structure",
+            "Keep empty/other CUE lines off • FILE type WAVE • fix FILE "
+            "names on • no trailing newline. Safe for most rips.",
+            {"keep_empty_cue_lines": False, "keep_other_cue_lines": False,
+             "cue_file_type": "WAVE", "cue_fix_filenames": True,
+             "append_final_newline": False},
+        ),
+        (
+            "Strict — exact canonical",
+            "Collapse blanks • strip REM • FILE type WAVE • fix FILE names on • "
+            "no final newline. Produces byte-identical canonical cues.",
+            {"keep_empty_cue_lines": False, "keep_other_cue_lines": False,
+             "cue_file_type": "WAVE", "cue_fix_filenames": True},
+        ),
+    ]
+    CD_PRESETS = [
+        (
+            "CD Archivist (recommended for rips)",
+            "Auto-rename .log/.cue to CD-N (CD-1…CD-11) via pattern CD-{n} • "
+            "fix CUE FILE names • verify .log CRCs (ffmpeg) • require BOTH "
+            "log + AudioAuditor = REAL when dual-check on • write LOG_GRADE.",
+            {"discs_rename_enabled": True, "discs_rename_pattern": "CD-{n}",
+             "cue_fix_filenames": True, "audit_verify_cd_checksums": True,
+             "audit_cd_require_both": False, "write_log_grade": True,
+             "write_audit_tag": True},
+        ),
+        (
+            "Strict — both sources must be REAL",
+            "Same as above plus when dual-check is on, BOTH .log CRC and "
+            "AudioAuditor must be REAL for AUDIT=REAL (conservative).",
+            {"discs_rename_enabled": True, "discs_rename_pattern": "CD-{n}",
+             "cue_fix_filenames": True, "audit_verify_cd_checksums": True,
+             "audit_cd_require_both": True},
+        ),
+        (
+            "Digital Only — no CD handling",
+            "Disable CD-N rename and .log CRC checks • keep CUE fix on • "
+            "Audit via AudioAuditor only.",
+            {"discs_rename_enabled": False, "audit_verify_cd_checksums": False,
+             "audit_cd_require_both": False},
+        ),
+    ]
+    GENERAL_PRESETS = [
+        (
+            "Balanced — activate all checks",
+            "Grading allows music/cover/cue/log/lrc (other off) • audit "
+            "thorough off • auto advisory/instrumental on • normalize MEDIA/SOURCE.",
+            {"grade_include_music": True, "grade_include_cover": True,
+             "grade_include_cue": True, "grade_include_log": True,
+             "grade_include_lrc": True, "grade_include_other": False,
+             "audit_thorough": False, "auto_advisory": True,
+             "auto_instrumental": True, "normalize_media_source": True,
+             "fix_instrumental_from_lyrics": True},
+        ),
+        (
+            "Strict — thorough audit + verbose",
+            "Same as above but audit thorough on • grade verbose on • "
+            "worker limit auto.",
+            {"grade_verbose": True, "audit_thorough": True, "worker_limit": 0},
         ),
     ]
 
@@ -1541,9 +1651,9 @@ class SetupWizard(tk.Toplevel):
         ttk.Label(title_row, text="Welcome — let's set up your library",
                   style="H2.TLabel").pack(anchor="w")
         ttk.Label(outer,
-                  text="Pick a library folder, then optionally apply a preset for Music Files "
-                       "and/or Cover Images. Hover a preset for details. Everything below is "
-                       "previewed before saving. You can always fine-tune in Settings →",
+                  text="Pick a library folder, then optionally apply presets for Music Files, "
+                       "Covers, Lyrics, CUE/CD and grading. Hover for details. Everything is "
+                       "previewed before saving — fine-tune later in Settings →",
                   style="Muted.TLabel", wraplength=760, justify=tk.LEFT).pack(anchor="w", pady=(6, 14))
 
         # Library folder — always first, visually distinct
@@ -1565,7 +1675,7 @@ class SetupWizard(tk.Toplevel):
         self.folder_var.trace_add("write", lambda *_: self._validate_folder())
 
         # Scrollable preset area (keeps dialog usable on small screens)
-        canvas = tk.Canvas(outer, highlightthickness=0, background=PANEL, height=280)
+        canvas = tk.Canvas(outer, highlightthickness=0, background=PANEL, height=360)
         scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
         preset_host = ttk.Frame(canvas, style="Panel.TFrame")
         preset_host.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -1580,10 +1690,22 @@ class SetupWizard(tk.Toplevel):
         # Each preset group: radio-style selection (one per group) + apply
         self._music_var = tk.StringVar(value="")
         self._cover_var = tk.StringVar(value="")
-        self._add_preset_group(preset_host, "②  Music Files — how to handle FLAC & music tags",
+        self._lyrics_var = tk.StringVar(value="")
+        self._cue_var = tk.StringVar(value="")
+        self._cd_var = tk.StringVar(value="")
+        self._general_var = tk.StringVar(value="")
+        self._add_preset_group(preset_host, "②  Music Files — FLAC & music tags",
                                self.MUSIC_PRESETS, self._music_var)
-        self._add_preset_group(preset_host, "③  Cover Images — how to handle artwork",
+        self._add_preset_group(preset_host, "③  Cover Images — artwork",
                                self.COVER_PRESETS, self._cover_var)
+        self._add_preset_group(preset_host, "④  Lyrics — LRC & embedded",
+                               self.LYRICS_PRESETS, self._lyrics_var)
+        self._add_preset_group(preset_host, "⑤  CUE Sheets — FILE & formatting",
+                               self.CUE_PRESETS, self._cue_var)
+        self._add_preset_group(preset_host, "⑥  CD Rips — .log/.cue & audit",
+                               self.CD_PRESETS, self._cd_var)
+        self._add_preset_group(preset_host, "⑦  Grading & Audit — strictness",
+                               self.GENERAL_PRESETS, self._general_var)
 
         # Live summary of pending changes
         summary_card = ttk.Frame(outer, style="Card.TFrame", padding=(12, 8))
@@ -1612,17 +1734,23 @@ class SetupWizard(tk.Toplevel):
                                  command=self._on_preset_pick)
             rb.pack(anchor="w", pady=3)
             ToolTip(rb, tip)
-        ttk.Label(row, text="Select one option above — you can mix a Music preset with a Cover preset.",
+        ttk.Label(row, text="Select one option above — you can mix presets from different sections.",
                   style="Muted.Card.TLabel", font=_font(8), wraplength=700).pack(anchor="w", pady=(6, 0))
 
     def _on_preset_pick(self):
         self._pending.clear()
-        for label, _tip, vals in self.MUSIC_PRESETS:
-            if self._music_var.get() == label:
-                self._pending.update(vals)
-        for label, _tip, vals in self.COVER_PRESETS:
-            if self._cover_var.get() == label:
-                self._pending.update(vals)
+        for var, presets in [
+            (self._music_var, self.MUSIC_PRESETS),
+            (self._cover_var, self.COVER_PRESETS),
+            (self._lyrics_var, self.LYRICS_PRESETS),
+            (self._cue_var, self.CUE_PRESETS),
+            (self._cd_var, self.CD_PRESETS),
+            (self._general_var, self.GENERAL_PRESETS),
+        ]:
+            sel = var.get()
+            for label, _tip, vals in presets:
+                if sel == label:
+                    self._pending.update(vals)
         if not self._pending:
             self.summary_var.set("Library folder only — no preset applied yet.")
         else:
@@ -2001,18 +2129,19 @@ class App(tk.Tk):
                   padding=[("selected", (14, 6)), ("!selected", (14, 6))])
         # White outline should extend to the tab bar itself — make the
         # TNotebook's outer border white and ensure tabs have a continuous outline
-        style.configure("TNotebook", background=BG, borderwidth=1,
-                        tabmargins=(0, 2, 0, 0), bordercolor=BRIGHT, relief="solid")
-        style.configure("TNotebook.client", background=CARD, borderwidth=1, relief="solid", bordercolor=BRIGHT)
+        # Library viewer: slightly darker heading bar at top, no white outlines
+        style.configure("TNotebook", background=BG, borderwidth=0,
+                        tabmargins=(0, 2, 0, 0))
+        style.configure("TNotebook.client", background=CARD, borderwidth=0)
 
         style.configure("Treeview", background="#121212", fieldbackground="#121212",
                         foreground=TEXT, borderwidth=0, rowheight=26,
-                        font=_font(9), padding=(0, 2), indent=30)
+                        font=_font(9), padding=(0, 1), indent=30)
         style.map("Treeview", background=[("selected", ACCENT_DARK)],
                   foreground=[("selected", "#ffffff")])
-        style.configure("Treeview.Heading", background=CARD, foreground=MUTED,
-                        borderwidth=1, padding=(6, 4), relief="raised",
-                        font=_sfont(8), bordercolor=BRIGHT)
+        style.configure("Treeview.Heading", background="#1e1e1e", foreground=MUTED,
+                        borderwidth=0, padding=(5, 3), relief="flat",
+                        font=_sfont(8))
         style.map("Treeview.Heading",
                   background=[("active", "#1f1f1f")])
 
@@ -2097,13 +2226,13 @@ class App(tk.Tk):
         notebook.grid(row=0, column=1, sticky="nswe", padx=16, pady=(8, 8))
 
         # --- Library tab ---------------------------------------------------
-        library_frame = ttk.Frame(notebook, padding=(8, 6))
+        library_frame = ttk.Frame(notebook, padding=(5, 3))
         notebook.add(library_frame, text="Library")
         library_frame.columnconfigure(0, weight=1)
         library_frame.rowconfigure(3, weight=1, minsize=160)
 
         toolbar = ttk.Frame(library_frame)
-        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 2))
         # Make toolbar responsive: left and center can shrink, right stays visible
         toolbar.columnconfigure(0, weight=1)
 
@@ -2193,10 +2322,9 @@ class App(tk.Tk):
         compact_toggle.pack(side=tk.RIGHT, padx=(0, 14))
 
         # Filter row — responsive: entry shrinks but not to zero; buttons keep min width
-        # Reduced padding so bars/sections have less space between them
         filter_frame = ttk.Frame(library_frame, style="Card.TFrame",
-                                 padding=(8, 5))
-        filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+                                 padding=(5, 3))
+        filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 2))
         filter_frame.columnconfigure(1, weight=1, minsize=80)
         filter_frame.columnconfigure(2, minsize=50)
         filter_frame.columnconfigure(3, minsize=90)
@@ -2255,6 +2383,9 @@ class App(tk.Tk):
             tree_box, show="tree headings", selectmode="none"
         )
         self.library_tree.configure(columns=tuple(TREE_COLUMNS))
+        # First column (tree): label as FOLDER / TRACK so empty header is not confusing
+        self.library_tree.heading("#0", text="  FOLDER / TRACK", anchor="w")
+        self.library_tree.column("#0", width=260, minwidth=120, stretch=True, anchor="w")
         for col_id, (heading, width, _default) in TREE_COLUMNS.items():
             self.library_tree.heading(col_id, text=heading, anchor="w")
             # TAGS stretches to fill leftover space; others have minwidth
@@ -3808,14 +3939,52 @@ class App(tk.Tk):
     def _check_updates_on_launch(self):
         if not self.config.get("check_updates_on_start", True):
             return
+        # Respect the configured interval (days) — don't check every launch
+        try:
+            import time
+            last = float(self.config.get("last_update_check", 0) or 0)
+            interval = int(self.config.get("update_check_interval_days", 7) or 7)
+            if time.time() - last < interval * 86400 and not self.config.get("auto_update_on_start", False):
+                return
+        except Exception:
+            pass
         try:
             from mlo.updater import check_for_updates
             def _cb(has_update, version, url, notes, error):
+                # Persist last check time on success
+                try:
+                    if not error:
+                        self.config["last_update_check"] = __import__("time").time()
+                        from mlo.config import save_config
+                        save_config(self.config)
+                except Exception:
+                    pass
                 if error:
                     self.log(f"Update check failed: {error}", tag="yellow")
                 elif has_update:
-                    self.log(f"Update available: v{version} (current v{self.config.get('__version__', '1.2.0')})", tag="yellow")
-                    # Also show in About dialog if user opens it
+                    self.log(f"Update available: v{version} (current v{__import__('mlo').__version__}) — open About → Check for Updates to install.", tag="yellow")
+                    if self.config.get("auto_update_on_start", False) and url:
+                        self.log(f"Auto-downloading v{version}…", tag="yellow")
+                        try:
+                            from mlo.updater import download_and_prepare_installer, launch_installer_after_shutdown, app_instance_pids
+                            def _dl_cb(ok, path, err):
+                                if ok and path:
+                                    self.log(f"Installer ready: {path} — will launch after close.", tag="green")
+                                    # Ask to close other instances if configured
+                                    pids = app_instance_pids()
+                                    if self.config.get("update_close_other_instances", True):
+                                        from mlo.updater import request_close_instances
+                                        request_close_instances(pids - {__import__("os").getpid()})
+                                    if self.config.get("confirm_before_update", True):
+                                        if not __import__("tkinter").messagebox.askyesno("Update Ready", f"v{version} downloaded. Install now? The app will close and the installer will launch.", parent=self):
+                                            return
+                                    launch_installer_after_shutdown(path, pids)
+                                    self.destroy()
+                                else:
+                                    self.log(f"Auto-update download failed: {err}", tag="red")
+                            download_and_prepare_installer(url, callback=_dl_cb)
+                        except Exception as e:
+                            self.log(f"Auto-update error: {e}", tag="yellow")
                 else:
                     self.log("Already on latest version.", tag="green")
             check_for_updates(silent=True, callback=_cb)
@@ -4046,6 +4215,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

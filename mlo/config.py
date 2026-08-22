@@ -103,8 +103,11 @@ DEFAULT_CONFIG = {
     "audit_cutoff_allow": 0,
     # For MEDIA=CD rips, verify tracks against the CRC-32 checksums printed
     # in the .log and write AUDIT=REAL/FAKE from that (authoritative over
-    # AudioAuditor for those files).
+    # AudioAuditor for those files). When audit_cd_require_both is True,
+    # BOTH the .log CRC and AudioAuditor must be REAL for the final AUDIT
+    # to be REAL; if either is FAKE, the result is FAKE.
     "audit_verify_cd_checksums": True,
+    "audit_cd_require_both": False,
     "audit_clipping": True,
     "audit_mqa": True,
     "audit_ai": True,

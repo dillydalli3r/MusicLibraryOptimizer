@@ -124,6 +124,35 @@ def run_auto_tagging(config):
         notes = []
         advisory_value = None
 
+        # Formatting: ensure GENRE has no leading/trailing spaces and
+        # ITUNESADVISORY is exactly 0/1/2 without spaces. This is the
+        # optimization step for those tags.
+        for d in info:
+            # GENRE
+            try:
+                raw_genre = d["af"].get_tag("GENRE")
+                if raw_genre is not None:
+                    stripped = str(raw_genre).strip()
+                    if str(raw_genre) != stripped:
+                        if d["af"].set_tag("GENRE", stripped):
+                            modified += 1
+                            d["af"] = AudioFile(d["af"].path)  # refresh
+            except Exception:
+                pass
+            # ITUNESADVISORY: trim spaces; keep 0/1/2 only (grading will flag others)
+            try:
+                raw_adv = d["af"].get_tag("ITUNESADVISORY")
+                if raw_adv is not None:
+                    stripped = str(raw_adv).strip()
+                    if str(raw_adv) != stripped:
+                        # Only write trimmed if the trimmed value is valid 0/1/2 or empty
+                        # If it's invalid like " 3 ", we still trim to "3" so grading can flag the value, not the spaces
+                        if d["af"].set_tag("ITUNESADVISORY", stripped):
+                            modified += 1
+                            d["advisory"] = stripped
+            except Exception:
+                pass
+
         if do_advisory:
             advisory_value = _derive_advisory(
                 d["advisory"] for d in info)

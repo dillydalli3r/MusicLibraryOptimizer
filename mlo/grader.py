@@ -674,6 +674,19 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 failed_checks += 1
                 add_issue(f"Missing {t}", basename)
                 track["issues"].append(t)
+            elif t == "ITUNESADVISORY":
+                raw = str(val)
+                stripped = raw.strip()
+                if raw != stripped or stripped not in ("0", "1", "2"):
+                    failed_checks += 1
+                    add_issue(f"ITUNESADVISORY must be 0/1/2 without spaces (found {raw!r})", basename)
+                    track["issues"].append(t)
+            elif t == "GENRE":
+                raw = str(val)
+                if raw != raw.strip():
+                    failed_checks += 1
+                    add_issue(f"GENRE has leading/trailing spaces ({raw!r})", basename)
+                    track["issues"].append(t)
 
         # Artist for the library view (first track that has one). Keys are
         # matched case-insensitively: Picard writes lowercase Vorbis

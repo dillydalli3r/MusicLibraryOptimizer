@@ -514,6 +514,17 @@ class AudioFile:
         name = str(name).upper()
         if name == "LYRICS":
             return self.set_lyrics(value)
+        # Normalize GENRE and ITUNESADVISORY per user request: trimmed, and
+        # ITUNESADVISORY strictly 0/1/2. This ensures formatting/optimization
+        # never writes spaced/invalid values.
+        if name == "GENRE":
+            value = str(value).strip()
+        elif name == "ITUNESADVISORY":
+            value = str(value).strip()
+            if value not in ("0", "1", "2"):
+                # Still write the trimmed value, but grading will flag invalid
+                # values (non-0/1/2) as failure; we don't silently coerce.
+                pass
         spec = TAG_MAP.get(name)
         if spec is None:
             return False

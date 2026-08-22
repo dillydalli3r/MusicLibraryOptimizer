@@ -249,12 +249,15 @@ def run_audit_library(config):
     verbose = config.get("grade_verbose", True)
 
     # ------------------------------------------------------------------
-    # CD rip verification — the ONLY integrity source for MEDIA=CD.
-    # Checksums are authoritative: matching = REAL, mismatch = FAKE, and
-    # files that cannot be verified get NO verdict at all (grading fails
-    # them). AudioAuditor is never run on CD rips; it is reserved for
-    # every other release type.
+    # CD rip verification — by default the .log CRC is the ONLY integrity
+    # source for MEDIA=CD. When audit_cd_require_both is True, BOTH the
+    # .log CRC and AudioAuditor must be REAL for the final AUDIT to be REAL;
+    # if either is FAKE the result is FAKE (conservative). Files that cannot
+    # be verified get NO verdict at all (grading fails them). AudioAuditor
+    # is otherwise never run on CD rips; it is reserved for every other
+    # release type.
     # ------------------------------------------------------------------
+    require_both = bool(config.get("audit_cd_require_both", False))
     cd_files = set()
     unverified_cd = {}
     checksum_verified = {}
@@ -298,7 +301,8 @@ def run_audit_library(config):
                     except Exception:
                         continue
                     for path, verdict in res.items():
-                        if config.get("write_audit_tag", True):
+                        # When bothrequired, defer tag write until after AA
+                        if not require_both and config.get("write_audit_tag", True):
                             _write_audit_tag(path, verdict)
                         checksum_verified[path] = verdict
                     unverified_cd.update(unver)
@@ -307,10 +311,15 @@ def run_audit_library(config):
                 n_real = sum(1 for v in checksum_verified.values()
                              if v == "REAL")
                 n_fake = len(checksum_verified) - n_real
-                log(f"CD checksums: {n_real} REAL, {n_fake} FAKE "
-                    f"({len(unverified_cd)} unverified of "
-                    f"{len(cd_files)} CD track(s) - .log CRC is the only "
-                    f"audit source for MEDIA=CD)")
+                if require_both:
+                    log(f"CD checksums: {n_real} REAL, {n_fake} FAKE "
+                        f"({len(unverified_cd)} unverified of "
+                        f"{len(cd_files)} CD track(s) — will be combined with AudioAuditor)")
+                else:
+                    log(f"CD checksums: {n_real} REAL, {n_fake} FAKE "
+                        f"({len(unverified_cd)} unverified of "
+                        f"{len(cd_files)} CD track(s) - .log CRC is the only "
+                        f"audit source for MEDIA=CD)")
                 if n_fake:
                     for p in sorted(checksum_verified):
                         if checksum_verified[p] == "FAKE":
@@ -322,9 +331,31 @@ def run_audit_library(config):
                         log(f"  {c('–', Color.GREY)} {os.path.basename(p)} "
                             f"{c(unverified_cd[p], Color.GREY)}")
 
+    # When require_both is False, CD rips are excluded from AudioAuditor;
+    # when True, they are included and the final verdict is the AND of both
+    # sources (both must be REAL, otherwise FAKE).
+    if require_both:
+        # Defer writing checksum tags; we'll write the combined result below.
+        # Undo any premature writes from the checksum phase — they will be
+        # overwritten with the combined verdict.
+        pass
+    else:
+        # Default: write checksum verdicts now and exclude CD files from AA.
+        if not require_both:
+            for path, verdict in list(checksum_verified.items()):
+                # Already written above when not require_both? For default we
+                # wrote earlier; for both we deferred. Ensure default writes.
+                pass
+        # The actual writes for default were done inside the checksum loop above.
+        # For clarity, ensure any CD file not yet written gets its verdict.
+        if not require_both:
+            for path, verdict in checksum_verified.items():
+                # Tags already written in the loop; no-op here
+                pass
+
     # Skip files that already carry a REAL/FAKE verdict (normalizing
-    # legacy mixed-case values) unless the audit is forced. CD rips are
-    # always excluded from AudioAuditor regardless of verdict state.
+    # legacy mixed-case values) unless the audit is forced.
+    # When require_both, CD files are NOT skipped — they need the second source.
     todo = files
     skipped = 0
     if not force:
@@ -339,6 +370,11 @@ def run_audit_library(config):
         todo = []
         for path, (verdict, changed) in zip(files, results):
             if verdict is not None:
+                # When bothrequired, CD files must be re-checked even if they
+                # already have a tag, because we need to AND the two sources.
+                if require_both and path in cd_files:
+                    todo.append(path)
+                    continue
                 skipped += 1
                 if changed:
                     stats["modified_count"] += 1
@@ -348,11 +384,19 @@ def run_audit_library(config):
             log(f"skipping {skipped} file(s) already carrying an AUDIT "
                 f"verdict (force audit overrides)")
 
-    todo = [p for p in todo
-            if p not in checksum_verified and p not in cd_files]
-    if cd_files:
-        log(f"CD rips ({len(cd_files)} track(s)) are verified via .log "
-            f"checksums only - AudioAuditor not applied to MEDIA=CD.")
+    if not require_both:
+        todo = [p for p in todo
+                if p not in checksum_verified and p not in cd_files]
+        if cd_files:
+            log(f"CD rips ({len(cd_files)} track(s)) are verified via .log "
+                f"checksums only - AudioAuditor not applied to MEDIA=CD.")
+    else:
+        # require_both: keep CD files in todo even if they were checksum-verified
+        # (we need to AND). Unverified CD files stay in todo as well — they'll
+        # be audited and then marked FAKE because the log side is not REAL.
+        if cd_files:
+            log(f"CD rips ({len(cd_files)} track(s)) will be verified via BOTH "
+                f".log checksums AND AudioAuditor (both must be REAL).")
 
     log(f"auditing {len(todo)} file(s) · fast scan "
         f"{'off (--thorough)' if thorough else 'on'}")
@@ -410,8 +454,30 @@ def run_audit_library(config):
                     "Optimized": "Optimized"}.get(cli_status, "Unknown")
             status_counts[skey] += 1
 
+            # When bothrequired, the final AUDIT is the AND of the two sources.
+            # checksum must be REAL and AA must be Valid/REAL; otherwise FAKE.
+            # .log CRC is authoritative, so an unverified log also means FAKE.
+            if require_both and path in cd_files:
+                chk = checksum_verified.get(path)
+                aa_real = (tag_value == "REAL" and severity != "fail")
+                # Normalize AA verdict: _audit_tag_value returns REAL only for Valid
+                if chk != "REAL":
+                    tag_value = "FAKE"
+                    severity = "fail"
+                    reason = f"CD log not REAL ({unverified_cd.get(path, chk or 'no CRC')})"
+                elif not aa_real:
+                    tag_value = "FAKE"
+                    severity = "fail"
+                    # keep AA reason but note log was REAL
+                    reason = f"{reason} (log REAL but AA {cli_status})" if reason else f"AA {cli_status} (log REAL)"
+                else:
+                    tag_value = "REAL"
+                    severity = "ok"
+                    reason = ""
+                # Ensure status counts reflect the AA side already counted;
+                # the final tag is what grading will use.
+
             # Persist the verdict into the file's AUDIT tag.
-            tag_value = _audit_tag_value(severity, cli_status)
             if config.get("write_audit_tag", True):
                 changed, b_rem, b_add, tag_err = _write_audit_tag(
                     path, tag_value)

@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.3.2
+# Music Library Optimizer v1.3.3
 
 > ## ⚠️ VIBE CODED
 >
@@ -15,19 +15,16 @@ storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
 
-Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.2`) + command-line app (`mlo`) +
-optional interactive console menu. **v1.3.2 adds intuitive Setup presets,
-customizable `CD-{n}` autorename, CUE `FILE` correction, CD-only checksum audit,
-cover track/album fail, TAGS `A|AA` adjacent, tighter library viewer, variable
-ascending spectrum icon (PySide6/Qt revamp removed — stable Tkinter is now the GUI).**
+Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.3`) + command-line app (`mlo`) +
+optional interactive console menu. **v1.3.3 adds dual-source CD audit (log + AudioAuditor), strict `ITUNESADVISORY`/`GENRE` trimming, single-disc `CD-1.cue/log` fix with Unicode handling, Select All, darker viewer (no white outlines, `FOLDER / TRACK` header), Guide with 6 preset groups, and reliable Settings save.**
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.2_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.3_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.3.2_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.3.3_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -45,6 +42,15 @@ PATH (the system scope requests admin elevation automatically). See
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.3.3
+
+- **Dual-source CD audit option** — `Settings → Audio Auditor → CD: Require Both Log & AudioAuditor = REAL` (default off). When on, **both** the `.log` CRC and AudioAuditor must be `REAL` for `MEDIA=CD` to be `REAL`; if either is `FAKE` the final `AUDIT` is `FAKE`. When off (default), `.log` CRC alone decides for CD rips and AudioAuditor is not run on them — preserving the lossless `ffmpeg→s16le→zlib.crc32` vs Test/Copy/AccurateRip/XLD path.
+- **Strict `ITUNESADVISORY` & `GENRE` hygiene** — `ITUNESADVISORY` must be exactly `0`/`1`/`2` with no leading/trailing spaces (grading fails `ITUNESADVISORY must be 0/1/2 without spaces`, e.g. `" 1 "` → fail), and `GENRE` must have no leading/trailing spaces. Optimization (`mlo/audio.py:set_tag` + `mlo/autotag.py`) now trims these on write (`GENRE` strip, `ITUNESADVISORY` strip) so formatting never writes spaced values; grading checks raw vs stripped.
+- **Single-disc `.cue` → `CD-1.cue` with `.wav`→`.flac` & Unicode fixes** — `1-01 Suite‐Pee.flac` (`U+2010` `‐`) vs `01 - Suite-Pee.wav` now correctly matched via ASCII dash normalization, stem-insensitive and `D-TT` track-number-aware (`_track_num_of` now returns `TT` for `D-TT`), so `a.cue` (single cue without `D-TT`) trivially becomes `CD-1.cue` and `FILE` lines are conservatively corrected to `.flac`.
+- **Select All** — Library toolbar now `Refresh | Select All | Clear Selection` (`app.py:2156`, `_select_all()` checks every visible `artist/album/track` and cascades); easier batch `Optimize Selected`.
+- **Run Scripts verified 8/8** — `RUN SCRIPTS` sidebar `Format Lyrics/CUEs/FLACs/Grade/Images/Audit/DR & ReplayGain/Auto Tagging` all present and each covers its feature set (`disc rename` + `FILE` fix inside `Format CUEs`/`Audit`).
+- **Viewer polish continued** — heading `FOLDER / TRACK` for the tree column, `Treeview.Heading` now `#1e1e1e` slightly darker than `CARD` with `borderwidth 0` (no white outlines, just darker bar at top), `library_frame`/`filter` padding tightened to `5,3`/`5,3`/`0,2` so bars have minimal space, `8/8` tools still counted.
 
 ## New in v1.3.2
 
@@ -709,7 +715,7 @@ You can also manually check anytime via **About** → **Check for Updates**.
 ## Project layout
 
 ```
-app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.2
+app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.3
                                  (PySide6/Qt `gui/` revamp removed; Tkinter is now primary)
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
 mlo/                            Core package — all processing logic
@@ -717,7 +723,7 @@ mlo/                            Core package — all processing logic
     __main__.py                 python -m mlo entry
     paths.py                    Locations & constants (exe-aware)
     deps.py                     Optional dependency detection (mutagen/Pillow/tqdm)
-    config.py                   config.json load/save & defaults (v1.3.2 keys)
+    config.py                   config.json load/save & defaults (v1.3.3 keys)
     ui.py                       Console output helpers
     stats.py                    Run stats, byte accounting, progress hooks
     report.py                   Result report printing
@@ -747,7 +753,7 @@ tools/                          Dev helpers & tests
 docs/
     archive/                    Historical release notes
         RELEASE_NOTES_v1.1.0.md v1.1.0 detailed notes (archived)
-RELEASE_NOTES.md                v1.3.2 + v1.2.0 + v1.1.0 summary (current)
+RELEASE_NOTES.md                v1.3.3 + v1.2.0 + v1.1.0 summary (current)
 config.json                     Persisted settings (created on first save, ignored)
 config.example.json             Example/default config (tracked)
 app_icon.ico                    Application icon (256px ICO, black #0d0d0d bg)
@@ -786,7 +792,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.3.2_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.2_portable_x64.exe` + `dist/mlo.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.3.3_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.3_portable_x64.exe` + `dist/mlo.exe`
 
 ## Rebuilding the exe (without installer)
 
@@ -810,6 +816,7 @@ The exe reads `config.json` and `.dependencies/` from its own folder.
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
 
 
 
