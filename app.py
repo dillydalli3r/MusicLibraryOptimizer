@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.4 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.5 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.3.4 features: cover resize/crop,
+stable Tkinter engine with all v1.3.5 features: cover resize/crop,
 per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
 customizable pattern, etc.
 
@@ -2063,6 +2063,7 @@ class App(tk.Tk):
                   background=[("pressed", "#262626"), ("active", "#222222"),
                               ("disabled", "#161616")])
         style.configure("Small.TButton", padding=(10, 4), font=_font(9))
+        style.configure("Square.TButton", padding=(6, 6), font=_font(10), anchor="center")
 
         style.configure("TEntry", fieldbackground=FIELD, foreground=TEXT,
                         insertcolor=TEXT, bordercolor=BORDER, lightcolor=BORDER,
@@ -2157,11 +2158,11 @@ class App(tk.Tk):
         folder_bar = ttk.Frame(self, padding=(18, 16, 18, 8))
         folder_bar.pack(fill=tk.X)
         folder_bar.columnconfigure(2, weight=1)
-        # Sidebar toggle — shows/hides RUN SCRIPTS / BATCH / MANAGE
-        self.sidebar_toggle_btn = ttk.Button(folder_bar, text="◀ Hide Menu" if getattr(self, 'sidebar_visible', True) else "▶ Show Menu",
-                                             style="Small.TButton", width=12, command=self._toggle_sidebar)
+        # Sidebar toggle — square sandwich button
+        self.sidebar_toggle_btn = ttk.Button(folder_bar, text="☰",
+                                             style="Square.TButton", width=2, command=self._toggle_sidebar)
         self.sidebar_toggle_btn.grid(row=0, column=0, sticky="w", padx=(0, 10))
-        ToolTip(self.sidebar_toggle_btn, "Toggle the left Run Scripts / Batch / Manage menu")
+        ToolTip(self.sidebar_toggle_btn, "Toggle the left Run Scripts / Batch / Manage menu (☰)")
         ttk.Label(folder_bar, text="LIBRARY FOLDER", style="Section.TLabel").grid(
             row=0, column=1, sticky="w", padx=(0, 12)
         )
@@ -2187,11 +2188,9 @@ class App(tk.Tk):
         if not self.sidebar_visible:
             # Start hidden if user previously hid it
             sidebar.grid_remove()
-            if hasattr(self, 'sidebar_toggle_btn'):
-                self.sidebar_toggle_btn.configure(text="▶ Show Menu")
-        else:
-            if hasattr(self, 'sidebar_toggle_btn'):
-                self.sidebar_toggle_btn.configure(text="◀ Hide Menu")
+        # Keep sandwich icon regardless of state
+        if hasattr(self, 'sidebar_toggle_btn'):
+            self.sidebar_toggle_btn.configure(text="☰")
 
         ttk.Label(sidebar, text="RUN SCRIPTS", style="Section.Side.TLabel").pack(
             anchor="w", pady=(0, 8)
@@ -3988,10 +3987,10 @@ class App(tk.Tk):
         self.sidebar_visible = not getattr(self, 'sidebar_visible', True)
         if self.sidebar_visible:
             self.sidebar.grid()
-            self.sidebar_toggle_btn.configure(text="◀ Hide Menu")
         else:
             self.sidebar.grid_remove()
-            self.sidebar_toggle_btn.configure(text="▶ Show Menu")
+        # Keep square sandwich icon regardless of state
+        self.sidebar_toggle_btn.configure(text="☰")
         self.config["sidebar_visible"] = self.sidebar_visible
         save_config(self.config)
         self.log(f"Sidebar {'shown' if self.sidebar_visible else 'hidden'}")
@@ -4311,6 +4310,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

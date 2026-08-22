@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.3.4
+# Music Library Optimizer v1.3.5
 
 > ## ⚠️ VIBE CODED
 >
@@ -14,17 +14,15 @@ lyrics (including **Enhanced / Extended LRC word-sync**) — optimizing both
 storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
-
-Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.4`) + command-line app (`mlo`) +
-optional interactive console menu. **v1.3.4 adds dual-source CD audit (log + AudioAuditor), strict `ITUNESADVISORY`/`GENRE` trimming, single-disc `CD-1.cue/log` fix with Unicode handling, Select All, darker viewer (no white outlines, `FOLDER / TRACK` header), Guide with 6 preset groups, and reliable Settings save.**
-
+Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.5`) + command-line app (`mlo`) +
+optional interactive console menu. **v1.3.5 adds square sandwich menu (☰) for sidebar, Force menu now exactly matches Run Scripts names/order, and fixes the white outline misalignment on Library/Console tabs (now a slightly darker bar flush at the top, no white).**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.4_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.5_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.3.4_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.3.5_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -43,12 +41,18 @@ PATH (the system scope requests admin elevation automatically). See
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
 
-## New in v1.3.4
+## New in v1.3.5
+
+- **Square sandwich menu (☰)** — Top bar now has a square `☰` button (`Square.TButton`, `width 2`, `padding (6,6)`, centered) that toggles the left `RUN SCRIPTS / BATCH / MANAGE` sidebar; persists to `config.json:sidebar_visible` and always shows `☰` regardless of state (previously `◀ Hide Menu` / `▶ Show Menu` rectangular).
+- **Force menu ↔ Run Scripts consistency** — `Force ▾` dropdown now uses **exact same names and order** as `RUN SCRIPTS` sidebar `1 Format Lyrics, 2 Format CUEs, 3 Optimize FLACs, 5 Process Images, 6 Audit Library, 7 DR & ReplayGain, 8 Auto Tagging` (with comment `Order matches RUN SCRIPTS 1,2,3,5,6,7,8 — Grade Library (4) has no Force`), previously `Re-encode FLACs` vs `Optimize FLACs` etc. mismatched.
+- **White outline fix** — `TNotebook`/`TNotebook.client` now `borderwidth 0` with `tabmargins (0,0,0,0)` and both tabs `1px BORDER` (not `BRIGHT`), `Treeview.Heading` now `#0f0f0f` (slightly darker than `#121212`/`#161616`) with `borderwidth 0` and `padding (5,3)` sitting flush at top, no white rectangle; fixes the 2-3px misaligned look in the screenshot where `Library` appeared offset from `Console`.
+- **Previous v1.3.5 Picard/metadata/shift still included** — see below.
+
+## New in v1.3.5
 
 - **Picard Preserve Tags** — New section **MusicBrainz Picard — Preserve Tags** lists every Vorbis/ID3/MP4 tag this app writes (`AUDIT`, `LOG_GRADE`, `MEDIA`, `SOURCE`, `ITUNESADVISORY`, etc.) so that `Options → Tags → Clear existing tags` in Picard does not delete them. Paste the provided comma-separated list (covers all 8 scripts) or keep *Clear* off — the app’s own `FLAC` cleaning already whitelists exactly those tags.
 - **Full metadata/padding strip** — `FLAC` (`mlo/containers.py: _clean_flac_tags`): all `Vorbis` comments not in `KEEP_VORBIS_KEYS` (27-keep list: `TITLE`/`ALBUM`/`GENRE`/`ITUNESADVISORY`/`AUDIT`/`ENCODER_*` etc.) are removed and padding cleared (`--no-padding`, `PADDING` block) on every Optimize (even when re-encode is skipped). Images: `JPEG` (`_strip_jpeg_metadata` removes `APP0-APP15`/`COM`, then `_insert_jpeg_xmp` keeps only `ENCODER` XMP), `PNG` (`_strip_png_metadata` removes `tEXt`/`iTXt`/`zTXt`/`eXIf`/`tIME` then ` _inject_png_text` keeps only `ENCODER`), `JXL` (`_write_jxl_tags` replaces `xml ` box). `.log` files are never touched.
 - **Shift+Click / Ctrl+Click** — Library viewer now handles `Shift` (range between last and current, via `_get_all_items_in_display_order`/`_toggle_range`) and `Ctrl` (single toggle, `cascade=False` for tracks) for easy multi-folder/track selection; `_last_clicked` tracked, collapsed children excluded from range.
-- **Previous v1.3.3 dual-source CD audit etc. still included** — see below.
 
 ## New in v1.3.3
 
@@ -731,7 +735,7 @@ For FLAC these are Vorbis comments (`UPPERCASE`), for MP3 they are `TXXX:` frame
 ## Project layout
 
 ```
-app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.4
+app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.5
                                  (PySide6/Qt `gui/` revamp removed; Tkinter is now primary)
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
 mlo/                            Core package — all processing logic
@@ -739,7 +743,7 @@ mlo/                            Core package — all processing logic
     __main__.py                 python -m mlo entry
     paths.py                    Locations & constants (exe-aware)
     deps.py                     Optional dependency detection (mutagen/Pillow/tqdm)
-    config.py                   config.json load/save & defaults (v1.3.4 keys)
+    config.py                   config.json load/save & defaults (v1.3.5 keys)
     ui.py                       Console output helpers
     stats.py                    Run stats, byte accounting, progress hooks
     report.py                   Result report printing
@@ -769,7 +773,7 @@ tools/                          Dev helpers & tests
 docs/
     archive/                    Historical release notes
         RELEASE_NOTES_v1.1.0.md v1.1.0 detailed notes (archived)
-RELEASE_NOTES.md                v1.3.4 + v1.2.0 + v1.1.0 summary (current)
+RELEASE_NOTES.md                v1.3.5 + v1.2.0 + v1.1.0 summary (current)
 config.json                     Persisted settings (created on first save, ignored)
 config.example.json             Example/default config (tracked)
 app_icon.ico                    Application icon (256px ICO, black #0d0d0d bg)
@@ -808,7 +812,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.3.4_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.4_portable_x64.exe` + `dist/mlo.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.3.5_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.5_portable_x64.exe` + `dist/mlo.exe`
 
 ## Rebuilding the exe (without installer)
 
@@ -832,6 +836,7 @@ The exe reads `config.json` and `.dependencies/` from its own folder.
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
 
 
 
