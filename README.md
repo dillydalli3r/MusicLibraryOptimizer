@@ -15,9 +15,10 @@ storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
 
-Desktop GUI (Tkinter, dark-themed) + command-line app (`mlo`) +
-optional interactive console menu. **v1.2.0 adds cover resize/crop, per-format
-overrides, Enhanced LRC (now with `[00:00.00]` compat option), and a reorganized
+Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.2.0`) + command-line app (`mlo`) +
+optional interactive console menu. **v1.2.0 adds cover resize/crop (now with
+Force Exact `1000×1000`), per-format overrides, Enhanced LRC (now with
+`[00:00.00]` compat), black spectrum icon (white ascending bars), and a reorganized
 Settings dialog (PySide6/Qt revamp removed — stable Tkinter is now the GUI).**
 
 ## Quick Start
@@ -700,8 +701,9 @@ mlo/                            Core package — all processing logic
     cliapp.py                   Non-interactive CLI + PATH installer
 legacy/                         The v1.0.x Tkinter GUI (kept for reference)
     app_tkinter_v1_0_9.py       legacy GUI snapshot
-assets/                         Application icons
-    icon_256.png / icon_64.png  pre-rendered PNGs
+assets/                         Application icons (black bg, white ascending spectrum)
+    icon_256.png / icon_64.png  pre-rendered PNGs (main)
+    icon_window_256.png         window-only transparent white bars
 tools/                          Dev helpers & tests
     make_icon.py                Icon generator (Pillow)
     make_test_library.py        Synthetic music library builder
@@ -712,7 +714,8 @@ docs/
 RELEASE_NOTES.md                v1.2.0 + v1.1.0 summary (current)
 config.json                     Persisted settings (created on first save, ignored)
 config.example.json             Example/default config (tracked)
-app_icon.ico                    Application icon (256px ICO)
+app_icon.ico                    Application icon (256px ICO, black #0d0d0d bg)
+app_icon_window.ico             Window icon (transparent white bars, for titlebar)
 build_exe.bat                   PyInstaller one-file builder (GUI + CLI)
 mlo.spec                        PyInstaller spec for CLI (mlo.exe)
 Music Library Optimizer.spec    PyInstaller spec for GUI
