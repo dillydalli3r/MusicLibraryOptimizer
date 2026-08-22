@@ -3323,12 +3323,13 @@ class App(tk.Tk):
                        activebackground=ACCENT_DARK, activeforeground="#ffffff")
         menu.add_command(label="Force options", state=tk.DISABLED)
         menu.add_separator()
+        # Order matches RUN SCRIPTS (1,2,3,5,6,7,8) — Grade Library (4) has no Force
         for var, label in (
+            (self.force_lyrics_var, "Format Lyrics"),
+            (self.force_cue_var, "Format CUE sheets"),
             (self.force_flac_var, "Re-encode FLACs"),
             (self.force_images_var, "Re-encode images"),
             (self.force_audit_var, "Audit"),
-            (self.force_lyrics_var, "Format Lyrics"),
-            (self.force_cue_var, "Format CUE sheets"),
             (self.force_dr_var, "DR & ReplayGain"),
             (self.force_autotag_var, "Auto Tagging"),
         ):
