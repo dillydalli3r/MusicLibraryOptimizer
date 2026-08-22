@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer — Desktop Application (v1.1.0)
+Music Library Optimizer — Desktop Application (v1.2.0)
 ======================================================
 PySide6 (Qt) GUI front-end for the `mlo` core package.
 
 Layout
 ------
-    mlo/            organized core package (all processing logic)
-    gui/            PySide6 interface (theme engine, library, dialogs)
+    mlo/            core package — all processing logic (8 scripts, grading, audit)
+    gui/            PySide6 interface (theme engine, library tree, dialogs, workers)
     app.py          this GUI entry point
-    mlo_cli.py      command-line front-end
-    config.json     persisted settings (created on first save)
-    .dependencies/  external encoder toolchain (flac, libjxl,
-                    libjpeg-turbo, oxipng, AudioAuditor)
+    mlo_cli.py      command-line front-end (`mlo` / `python -m mlo`)
+    assets/         application icons (256px, 64px)
+    tools/          dev helpers (icon generator, test library builder, tests)
+    legacy/         v1.0.x Tkinter GUI kept for reference
+    docs/           release notes archive
+    config.json     persisted settings (created on first run, ignored in git)
+    config.example.json  example/default config (tracked)
+    .dependencies/  external encoder toolchain (flac, libjxl, libjpeg-turbo,
+                    oxipng, AudioAuditor, rsgain, ffmpeg, simple-dr-meter)
+    build_exe.bat   one-file PyInstaller builder (GUI + CLI)
+    *.spec          PyInstaller spec files (alternative build)
+    *.iss           Inno Setup installer script
 
 Requires:  pip install PySide6 mutagen
 Optional:  pip install Pillow tqdm

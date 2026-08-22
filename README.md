@@ -21,11 +21,11 @@ overrides, Enhanced LRC, and a reorganized tabbed Settings dialog.**
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.1.0_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.2.0_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.1.0_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.2.0_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -649,9 +649,10 @@ You can also manually check anytime via **About** → **Check for Updates**.
 ## Project layout
 
 ```
-app.py                          GUI entry point (PySide6, themed)
+app.py                          GUI entry point (PySide6, themed) — v1.2.0
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
 gui/                            PySide6 interface
+    __init__.py                 run() entry + theme bootstrap
     theme.py                    Palettes, full-app QSS, accents, DWM title bar
     widgets.py                  Animated toggle switch & small parts
     console.py                  ANSI-colored console view
@@ -659,16 +660,21 @@ gui/                            PySide6 interface
     library.py                  Library scan/grade threads + album tree
     dialogs.py                  Settings / Custom Run / Grade Details / Tag editor
     deps_dialog.py              Toolchain download manager
+    external.py                 External app launchers (Mp3tag/Picard/foobar2000)
     main_window.py              Window assembly (sidebar, top bar, status bar)
 mlo/                            Core package — all processing logic
+    __init__.py                 version + public re-exports (1.2.0)
+    __main__.py                 python -m mlo entry
     paths.py                    Locations & constants (exe-aware)
-    deps.py                     Optional dependency detection
-    config.py                   config.json load/save & defaults
+    deps.py                     Optional dependency detection (mutagen/Pillow/tqdm)
+    config.py                   config.json load/save & defaults (v1.2.0 keys)
     ui.py                       Console output helpers
     stats.py                    Run stats, byte accounting, progress hooks
     report.py                   Result report printing
     tools.py                    .dependencies tool auto-detection
     fetchdeps.py                GitHub release downloader / installer
+    subproc.py                  Safe subprocess wrapper
+    updater.py                  Auto-update checker (GitHub Releases)
     containers.py               FLAC/JXL/JPEG/PNG metadata tag I/O
     audio.py                    Unified multi-format tag abstraction
     lyrics.py / cue.py /        The feature modules
@@ -676,14 +682,33 @@ mlo/                            Core package — all processing logic
     grader.py / discs.py        discs.py: CD-N naming + per-disc LOG_GRADE
     audit.py                    AudioAuditor CLI integration (script 6)
     loudness.py                 DR (simple-dr-meter) + ReplayGain (rsgain)
+    autotag.py                  Advisory / instrumental tagging (script 8)
     cli.py                      Interactive console menu
     cliapp.py                   Non-interactive CLI + PATH installer
 legacy/                         The v1.0.x Tkinter GUI (kept for reference)
-tools/                          Icon generator, test-library builder, tests
-    updater.py                  Auto-update checker (GitHub Releases)
-config.json                     Persisted settings (created on first save)
-app_icon.ico                    Application icon
-.dependencies/                  External toolchain (pinned versions):
+    app_tkinter_v1_0_9.py       legacy GUI snapshot
+assets/                         Application icons
+    icon_256.png / icon_64.png  pre-rendered PNGs
+tools/                          Dev helpers & tests
+    make_icon.py                Icon generator (Pillow)
+    make_test_library.py        Synthetic music library builder
+    test_*.py                   Lyrics / GUI regression tests
+docs/
+    archive/                    Historical release notes
+        RELEASE_NOTES_v1.1.0.md v1.1.0 detailed notes (archived)
+RELEASE_NOTES.md                v1.2.0 + v1.1.0 summary (current)
+config.json                     Persisted settings (created on first save, ignored)
+config.example.json             Example/default config (tracked)
+app_icon.ico                    Application icon (256px ICO)
+build_exe.bat                   PyInstaller one-file builder (GUI + CLI)
+mlo.spec                        PyInstaller spec for CLI (mlo.exe)
+Music Library Optimizer.spec    PyInstaller spec for GUI
+Music Library Optimizer.iss     Inno Setup installer script (→ dist/*.exe)
+Music Library Optimizer.bat     Windows launcher (pythonw app.py)
+.github/workflows/
+    release.yml                 CI: build + release on tag push
+    opencode.yml                /oc PR review workflow
+.dependencies/                  External toolchain (pinned versions, ignored):
     flac v1.5.0/                flac.exe, metaflac.exe
     libjxl v0.12.0/             cjxl.exe, djxl.exe
     libjpeg-turbo v3.2.0/       jpegtran.exe
@@ -709,15 +734,23 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.0.4_x64.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.2.0_x64.exe` + `dist/MusicLibraryOptimizer_v1.2.0_portable_x64.exe` + `dist/mlo.exe`
 
 ## Rebuilding the exe (without installer)
 
 ```bash
+# Or use the helper batch (builds both GUI + CLI):
+build_exe.bat
+
+# Manual PyInstaller (GUI):
 pip install pyinstaller mutagen pillow
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name "Music Library Optimizer" --icon app_icon.ico ^
     --hidden-import mutagen.aac app.py
+# CLI:
+python -m PyInstaller --noconfirm --clean --onefile --console ^
+    --name mlo --icon app_icon.ico ^
+    --hidden-import mutagen.aac mlo_cli.py
 ```
 
 The exe reads `config.json` and `.dependencies/` from its own folder.

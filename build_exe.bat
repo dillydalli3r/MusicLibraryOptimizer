@@ -1,8 +1,10 @@
 @echo off
 rem ============================================================
-rem  Music Library Optimizer v1.1.0 - executable builder
+rem  Music Library Optimizer v1.2.0 - executable builder
 rem  Produces: Music Library Optimizer.exe (GUI) + mlo.exe (CLI)
 rem  Requires: pip install pyinstaller mutagen pillow PySide6
+rem  Output:   dist\Music Library Optimizer.exe + dist\mlo.exe
+rem            (also copied to project root for convenience)
 rem ============================================================
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --icon app_icon.ico --hidden-import mutagen.aac ^

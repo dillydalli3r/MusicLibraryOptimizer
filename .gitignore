@@ -1,20 +1,69 @@
-# Downloaded toolchain (flac, libjxl, libjpeg-turbo, oxipng, AudioAuditor)
+# Downloaded toolchain (flac, libjxl, libjpeg-turbo, oxipng, AudioAuditor, rsgain, ffmpeg, simple-dr-meter)
+# All tool binaries are fetched on demand into .dependencies/ (pinned versions).
 .dependencies/
 
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# PyInstaller build output
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# PyInstaller build output (generated on `build_exe.bat` / `pyinstaller`)
 build/
 dist/
+*.manifest
+*.spec.bak
+
+# Built executables (generated, not tracked)
 Music Library Optimizer.exe
+mlo.exe
 
 # Local configuration (machine-specific paths; defaults live in mlo/config.py)
+# Your personal music_folder and other settings live in config.json —
+# it is created on first run and never committed.
 config.json
+config.local.json
 
-# OS / editor
+# Testing / coverage / type checking
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# OS / editor / temporary
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 .DS_Store
-# CLI executable (built)
-mlo.exe
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+*.log
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Inno Setup compiler output (also under dist/)
+Output/
