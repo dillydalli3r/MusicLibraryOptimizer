@@ -709,11 +709,12 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     add_issue(f"GENRE has leading/trailing spaces ({raw!r})", basename)
                     track["issues"].append(t)
 
-            # Configurable: check all tags for leading/trailing spaces and blank lines
-            # (GENRE/ITUNESADVISORY already checked above, so skip them here to avoid double count)
+            # Configurable: check tags for blank lines (spaces already handled for GENRE above)
+            # Only check per-line trailing/leading spaces for non-GENRE/ITUNESADVISORY when enabled
             if cfg.get("grade_check_tag_spaces", True) and t not in ("GENRE", "ITUNESADVISORY"):
                 raw_all = str(val) if val is not None else ""
-                if raw_all != raw_all.strip():
+                # Per-line check: any line with leading/trailing spaces/tabs (not newlines)
+                if raw_all and any(ln != ln.strip(" \t") for ln in raw_all.splitlines()):
                     failed_checks += 1
                     add_issue(f"{t} has leading/trailing spaces ({raw_all!r})", basename)
                     track["issues"].append(t)
@@ -737,16 +738,19 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     if tag_key in ("ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION", "AUDIT", "LOG_GRADE"):
                         continue
                     raw = str(tag_val) if tag_val is not None else ""
-                    if cfg.get("grade_check_tag_spaces", True) and raw != raw.strip():
+                    # Per-line spaces check (not whole-string strip which flags trailing \n)
+                    if cfg.get("grade_check_tag_spaces", True):
                         total_checks += 1
-                        failed_checks += 1
-                        add_issue(f"{tag_key} has leading/trailing spaces ({raw!r})", basename)
-                        track["issues"].append(tag_key)
-                    if cfg.get("grade_check_tag_blank_lines", True) and "\n" in raw and any(not line.strip() for line in raw.splitlines()[1:-1]):
+                        if raw and any(ln != ln.strip(" \t") for ln in raw.splitlines()):
+                            failed_checks += 1
+                            add_issue(f"{tag_key} has leading/trailing spaces ({raw!r})", basename)
+                            track["issues"].append(tag_key)
+                    if cfg.get("grade_check_tag_blank_lines", True):
                         total_checks += 1
-                        failed_checks += 1
-                        add_issue(f"{tag_key} has blank lines", basename)
-                        track["issues"].append(tag_key)
+                        if "\n" in raw and any(not line.strip() for line in raw.splitlines()[1:-1]):
+                            failed_checks += 1
+                            add_issue(f"{tag_key} has blank lines", basename)
+                            track["issues"].append(tag_key)
             except Exception:
                 pass
 
@@ -907,7 +911,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         if embedded or lrc:
             if not should_write_audio_tag(cfg, "LYRICS", filepath=ap):
                 pass
-            elif not cfg.get("grade_check_lyrics_spaces", True) and not cfg.get("grade_check_lyrics_blank_lines", True) and not cfg.get("grade_check_lyrics_zero", True) and not cfg.get("grade_check_cover_crop", True):
+            elif not cfg.get("grade_check_lyrics_spaces", True) and not cfg.get("grade_check_lyrics_blank_lines", True) and not cfg.get("grade_check_lyrics_zero", True):
                 # All lyrics checks disabled
                 pass
             else:
@@ -943,21 +947,6 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         fmt_ok = False
                     if lrc_text and not _lyrics_word_timestamps_valid(lrc_text, cfg):
                         fmt_ok = False
-                # Additional explicit checks for leading/trailing spaces and blank lines if enabled
-                if cfg.get("grade_check_lyrics_spaces", True):
-                    for txt in (lyr_text, lrc_text):
-                        if txt and (txt != txt.strip("\n") or any(line != line.strip() for line in txt.splitlines() if line.strip())):
-                            # Check each line for leading/trailing spaces
-                            for line in txt.splitlines():
-                                if line and line != line.strip(" \t"):
-                                    fmt_ok = False
-                                    break
-                if cfg.get("grade_check_lyrics_blank_lines", True):
-                    for txt in (lyr_text, lrc_text):
-                        if txt and "\n\n" in txt.replace("\r\n", "\n"):
-                            # Blank line in the middle
-                            fmt_ok = False
-                            break
                 if not fmt_ok:
                     failed_checks += 1
                     add_issue("Lyrics not optimally formatted "
