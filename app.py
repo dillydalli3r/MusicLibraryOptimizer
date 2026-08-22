@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.5 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.6 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.3.5 features: cover resize/crop,
+stable Tkinter engine with all v1.3.6 features: cover resize/crop,
 per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
 customizable pattern, etc.
 
@@ -118,7 +118,7 @@ TREE_COLUMNS = {
     "tracks": ("TRACKS", 58, True),
     "media": ("MEDIA", 100, True),
     "cover": ("COVER", 110, True),
-    "tags": ("TAGS · G I A AA L", 320, True),
+    "tags": ("TAGS · G I A AA L", 420, True),
 }
 
 CONFIG_FIELDS = [
@@ -1923,8 +1923,8 @@ class App(tk.Tk):
         except Exception:
             self.title("Music Library Optimizer")
         self.configure(background=BG)
-        self.geometry("1180x760")
-        self.minsize(980, 620)
+        self.geometry("1280x780")
+        self.minsize(1100, 640)
 
         if not HAS_MUTAGEN:
             self.withdraw()
@@ -2135,7 +2135,8 @@ class App(tk.Tk):
         style.map("Treeview", background=[("selected", ACCENT_DARK)],
                   foreground=[("selected", "#ffffff")])
         style.configure("Treeview.Heading", background="#0f0f0f", foreground=MUTED,
-                        borderwidth=0, padding=(5, 3), relief="flat",
+                        borderwidth=1, padding=(5, 3), relief="raised",
+                        bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER,
                         font=_sfont(8))
         style.map("Treeview.Heading",
                   background=[("active", "#1f1f1f")])
@@ -4310,6 +4311,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
