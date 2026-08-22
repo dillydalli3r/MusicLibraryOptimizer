@@ -1090,13 +1090,13 @@ class ConfigDialog(tk.Toplevel):
         row += 1
 
         # --- Option groups — v1.2.0 organized, enhanced LRC + zero-timestamp
+        # Force options are intentionally NOT in Settings — use the Library's Force ▾ menu
         groups = [
-            ("FLAC Encoding", ["flac_level", "add_seektables", "force_reencode_flac"]),
+            ("FLAC Encoding", ["flac_level", "add_seektables"]),
             ("Cover Art — Processing", [
                 "jpegxl_effort", "reencode_images", "reencode_to_jxl",
                 "convert_jxl_back", "rename_to_cover", "remove_alpha",
                 "jpeg_progressive", "png_optimization_level",
-                "force_reencode_images",
             ]),
             ("Cover Art — Resize & Crop", [
                 "cover_resize_enabled", "cover_target_size",
@@ -1130,7 +1130,7 @@ class ConfigDialog(tk.Toplevel):
                 "write_dynamic_range_tags",
             ]),
             ("Auto Tagging", [
-                "auto_advisory", "auto_instrumental", "force_auto_tag",
+                "auto_advisory", "auto_instrumental",
             ]),
             ("Grading — Allowed Types", [
                 "grade_verbose", "grade_include_music", "grade_include_cover",
@@ -1141,7 +1141,7 @@ class ConfigDialog(tk.Toplevel):
                 "cover_enforce_size", "cover_enforce_square",
             ]),
             ("Audio Auditor", [
-                "audit_thorough", "force_audit", "audit_cutoff_allow",
+                "audit_thorough", "audit_cutoff_allow",
                 "audit_verify_cd_checksums", "audit_clipping", "audit_mqa",
                 "audit_ai", "audit_fake_stereo", "audit_silence",
                 "audit_dynamic_range", "audit_true_peak", "audit_lufs",
@@ -1149,7 +1149,6 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("DR & ReplayGain", [
                 "dr_replaygain_enabled", "replaygain_skip_existing",
-                "force_dr_replaygain",
             ]),
             ("Interface / Performance", [
                 "auto_advance", "worker_limit", "compact_ui",
@@ -1423,6 +1422,172 @@ class ConfigDialog(tk.Toplevel):
 
 
 # ======================================================================
+# Setup Wizard with presets (first-run helper)
+# ======================================================================
+class SetupWizard(tk.Toplevel):
+    """First-run setup helper with presets for Music Files and Cover Images.
+    Includes Most Aggressive (LOSSLESS) and other presets."""
+    PRESETS = {
+        "Music Files — Most Aggressive (LOSSLESS)": {
+            "flac_level": 8,
+            "add_seektables": False,
+            "reencode_images": False,  # focus on music
+        },
+        "Music Files — Balanced": {
+            "flac_level": 5,
+            "add_seektables": False,
+            "reencode_images": True,
+        },
+        "Cover Images — Most Aggressive (LOSSLESS)": {
+            "jpegxl_effort": 9,
+            "reencode_images": True,
+            "reencode_to_jxl": True,
+            "cover_resize_enabled": True,
+            "cover_target_size": 1000,
+            "cover_force_exact_size": True,
+            "cover_crop_enabled": True,
+            "jpeg_progressive": True,
+            "png_optimization_level": 6,
+        },
+        "Cover Images — Balanced": {
+            "jpegxl_effort": 7,
+            "reencode_images": True,
+            "cover_resize_enabled": True,
+            "cover_target_size": 1000,
+            "cover_force_exact_size": False,
+            "cover_crop_enabled": True,
+            "cover_crop_threshold": 0.05,
+        },
+    }
+
+    def __init__(self, parent, config, on_saved):
+        super().__init__(parent)
+        self.config = config
+        self.on_saved = on_saved
+        self.title("Setup Guide — Presets")
+        self.configure(background=PANEL)
+        self.transient(parent)
+        self.grab_set()
+        self.minsize(760, 520)
+        self.geometry("780x560")
+
+        outer = ttk.Frame(self, padding=20)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(outer, text="Setup Guide", style="H2.TLabel").pack(anchor="w")
+        ttk.Label(outer, text="Choose a preset for Music Files or Cover Images, or set your library folder to get started. Most Aggressive (LOSSLESS) uses maximum compression without quality loss.",
+                  style="Muted.TLabel", wraplength=700, justify=tk.LEFT).pack(anchor="w", pady=(6, 16))
+
+        # Library folder at top
+        folder_frame = ttk.Frame(outer, style="Card.TFrame", padding=(12, 10))
+        folder_frame.pack(fill=tk.X, pady=(0, 16))
+        folder_frame.columnconfigure(0, weight=1)
+        ttk.Label(folder_frame, text="Library Folder", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        self.folder_var = tk.StringVar(value=config.get("music_folder", ""))
+        ttk.Entry(folder_frame, textvariable=self.folder_var).grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        ttk.Button(folder_frame, text="Browse…", command=self._browse).grid(row=1, column=1, padx=(8, 0), pady=(6, 0))
+
+        # Presets
+        for title in ["Music Files — Most Aggressive (LOSSLESS)", "Cover Images — Most Aggressive (LOSSLESS)",
+                      "Music Files — Balanced", "Cover Images — Balanced"]:
+            btn = ttk.Button(outer, text=f"Apply: {title}", style="Small.TButton",
+                             command=lambda t=title: self._apply_preset(t))
+            btn.pack(fill=tk.X, pady=4)
+            ToolTip(btn, f"Apply {title} preset to config (not saved until you press Save)")
+
+        # Info
+        ttk.Label(outer, text="Presets change FLAC level, cover resize/crop, and related settings. Review in Settings before saving.",
+                  style="Muted.TLabel", wraplength=700).pack(anchor="w", pady=(12, 0))
+
+        btns = ttk.Frame(outer)
+        btns.pack(fill=tk.X, pady=(16, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btns, text="Save & Close", style="Accent.TButton", command=self._save).pack(side=tk.RIGHT, padx=5)
+        self.after(150, lambda: apply_window_chrome(self))
+
+    def _browse(self):
+        path = filedialog.askdirectory(parent=self, initialdir=self.folder_var.get() or "/")
+        if path:
+            self.folder_var.set(path)
+
+    def _apply_preset(self, title):
+        preset = self.PRESETS.get(title, {})
+        for k, v in preset.items():
+            self.config[k] = v
+        messagebox.showinfo("Preset Applied", f"{title} preset applied to current settings.\nPress Save & Close to keep it.", parent=self)
+
+    def _save(self):
+        folder = self.folder_var.get().strip()
+        if not folder:
+            messagebox.showwarning("Library Folder", "Please set a library folder.", parent=self)
+            return
+        if not os.path.isdir(folder):
+            messagebox.showerror("Folder not found", f"Folder does not exist:\n{folder}", parent=self)
+            return
+        self.config["music_folder"] = folder
+        self.config["first_run_done"] = True
+        if not save_config(self.config):
+            messagebox.showerror("Save failed", "Could not write config.json.", parent=self)
+            return
+        self.on_saved(self.config)
+        self.destroy()
+
+
+class AboutDialog(tk.Toplevel):
+    """About + check for updates."""
+    def __init__(self, parent, config):
+        super().__init__(parent)
+        self.config = config
+        self.title("About — Music Library Optimizer")
+        self.configure(background=PANEL)
+        self.transient(parent)
+        self.grab_set()
+        self.minsize(520, 340)
+        self.geometry("560x420")
+
+        outer = ttk.Frame(self, padding=20)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        try:
+            from mlo import __version__ as ver
+        except Exception:
+            ver = "unknown"
+        ttk.Label(outer, text=f"Music Library Optimizer v{ver}", style="H2.TLabel").pack(anchor="w")
+        ttk.Label(outer, text="A Windows program for optimizing music libraries: FLAC, covers, CUE, lyrics, grading, audit.",
+                  style="Muted.TLabel", wraplength=500, justify=tk.LEFT).pack(anchor="w", pady=(6, 12))
+
+        self.status_var = tk.StringVar(value="")
+        ttk.Label(outer, textvariable=self.status_var, style="Muted.TLabel", wraplength=500).pack(anchor="w", pady=(0, 12))
+
+        btns = ttk.Frame(outer)
+        btns.pack(fill=tk.X, pady=(12, 0))
+        ttk.Button(btns, text="Check for Updates Now", style="Accent.TButton", command=self._check).pack(side=tk.LEFT)
+        ttk.Button(btns, text="Close", command=self.destroy).pack(side=tk.RIGHT)
+
+        # Auto-check if enabled
+        if self.config.get("check_updates_on_start", True):
+            self.after(500, self._check)
+        self.after(150, lambda: apply_window_chrome(self))
+
+    def _check(self):
+        self.status_var.set("Checking for updates…")
+        try:
+            from mlo.updater import check_for_updates
+            def _cb(has_update, version, url, notes, error):
+                def _ui():
+                    if error:
+                        self.status_var.set(f"Update check failed: {error}")
+                    elif has_update:
+                        self.status_var.set(f"Update available: v{version} at {url}\n{notes[:200]}")
+                    else:
+                        self.status_var.set("Already on latest version.")
+                self.after(0, _ui)
+            check_for_updates(silent=False, callback=_cb)
+        except Exception as e:
+            self.status_var.set(f"Update check error: {e}")
+
+
+# ======================================================================
 # Custom run order dialog
 # ======================================================================
 class CustomRunDialog(tk.Toplevel):
@@ -1519,9 +1684,20 @@ class App(tk.Tk):
         self._build_ui()
 
         try:
-            icon_file = os.path.join(SCRIPT_DIR, "app_icon.ico")
+            # Window icon: white-only spectrum on transparent (so titlebar black shows through)
+            # Taskbar/explorer still uses the full black icon, but the window's
+            # titlebar benefits from the transparent version matching BG #0d0d0d
+            window_icon = os.path.join(SCRIPT_DIR, "app_icon_window.ico")
+            fallback_icon = os.path.join(SCRIPT_DIR, "app_icon.ico")
+            icon_file = window_icon if os.path.isfile(window_icon) else fallback_icon
             if os.path.isfile(icon_file):
                 self.iconbitmap(default=icon_file)
+                # Also set taskbar icon explicitly to full black version for explorer
+                try:
+                    self.iconbitmap(default=fallback_icon)
+                    self.iconbitmap(default=icon_file)  # window gets transparent
+                except Exception:
+                    pass
         except tk.TclError:
             pass
 
@@ -1537,6 +1713,12 @@ class App(tk.Tk):
             self.log("WARNING: Pillow not found - PNG alpha removal will be skipped.",
                      tag="yellow")
         self.log(f"Library folder: {self.config.get('music_folder', '')}", tag="muted")
+        # Check for updates on launch if enabled
+        if self.config.get("check_updates_on_start", True):
+            self.after(2000, self._check_updates_on_launch)
+        # Show setup helper on first run
+        if not self.config.get("first_run_done", False):
+            self.after(800, self._open_guide)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -1675,10 +1857,13 @@ class App(tk.Tk):
         style.map("TNotebook.Tab",
                   background=[("selected", CARD), ("!selected", "#141414"), ("active", "#1d1d1d")],
                   foreground=[("selected", BRIGHT), ("!selected", MUTED), ("active", TEXT)],
-                  bordercolor=[("selected", BORDER), ("!selected", BORDER)],
-                  lightcolor=[("selected", BORDER), ("!selected", BORDER)],
-                  darkcolor=[("selected", BORDER), ("!selected", BORDER)],
+                  bordercolor=[("selected", BRIGHT), ("!selected", BORDER)],
+                  lightcolor=[("selected", BRIGHT), ("!selected", BORDER)],
+                  darkcolor=[("selected", BRIGHT), ("!selected", BORDER)],
                   padding=[("selected", (14, 6)), ("!selected", (14, 6))])
+        # White outline should extend to the tab bar itself
+        style.configure("TNotebook", background=BG, borderwidth=0,
+                        tabmargins=(0, 2, 0, 0), bordercolor=BRIGHT)
 
         style.configure("Treeview", background="#121212", fieldbackground="#121212",
                         foreground=TEXT, borderwidth=0, rowheight=32,
@@ -1686,8 +1871,8 @@ class App(tk.Tk):
         style.map("Treeview", background=[("selected", ACCENT_DARK)],
                   foreground=[("selected", "#ffffff")])
         style.configure("Treeview.Heading", background=CARD, foreground=MUTED,
-                        borderwidth=0, padding=(10, 7), relief="flat",
-                        font=_sfont(8))
+                        borderwidth=1, padding=(10, 7), relief="raised",
+                        font=_sfont(8), bordercolor=BORDER)
         style.map("Treeview.Heading",
                   background=[("active", "#1f1f1f")])
 
@@ -1820,10 +2005,10 @@ class App(tk.Tk):
                       "and Run Custom.")
         ToolTip(force_toggle, force_hint)
         ttk.Label(force_box, text="Force", style="Muted.TLabel").pack(
-            side=tk.LEFT, padx=(8, 2))
+            side=tk.LEFT, padx=(12, 6))
         force_menu_btn = ttk.Button(force_box, text="▾", style="Small.TButton",
-                                    width=2, command=self._show_force_menu)
-        force_menu_btn.pack(side=tk.LEFT)
+                                    width=3, command=self._show_force_menu)
+        force_menu_btn.pack(side=tk.LEFT, padx=(2, 0))
         ToolTip(force_menu_btn, "Configure individual force options.")
         ttk.Button(toolbar, text="Refresh", style="Small.TButton",
                    command=lambda: self._refresh_library(regrade=True)).pack(
@@ -1890,7 +2075,7 @@ class App(tk.Tk):
                                   command=self._on_filter_change)
         bad_toggle.pack(side=tk.LEFT)
         ToolTip(bad_toggle, "Hide passing albums — show only failed / ungraded ones.")
-        ttk.Label(bad_box, text="Bad only",
+        ttk.Label(bad_box, text="Fail only",
                   style="Card.TLabel").pack(side=tk.LEFT, padx=(8, 0))
 
         self.sort_var = tk.StringVar()
@@ -2080,16 +2265,21 @@ class App(tk.Tk):
         ttk.Separator(self).pack(fill=tk.X, side=tk.BOTTOM)
         status = ttk.Frame(self, style="Panel.TFrame", padding=(16, 8))
         status.pack(fill=tk.X, side=tk.BOTTOM)
-        status.columnconfigure(1, weight=1)
+        status.columnconfigure(3, weight=1)
 
         self.status_var = tk.StringVar(value="Ready")
+        # Bottom bar: Settings | Guide | About as requested
         ttk.Button(status, text="\u2699  Settings", style="Small.TButton",
                    command=self._open_config).grid(row=0, column=0, sticky="w")
+        ttk.Button(status, text="\U0001f4d6 Guide", style="Small.TButton",
+                   command=self._open_guide).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Button(status, text="\u2139 About", style="Small.TButton",
+                   command=self._open_about).grid(row=0, column=2, sticky="w", padx=(8, 0))
         ttk.Label(status, textvariable=self.status_var,
-                  style="Panel.TLabel").grid(row=0, column=1, sticky="w",
+                  style="Panel.TLabel").grid(row=0, column=3, sticky="w",
                                              padx=(12, 0))
         right = ttk.Frame(status, style="Panel.TFrame")
-        right.grid(row=0, column=2, sticky="e")
+        right.grid(row=0, column=4, sticky="e")
         self.continue_btn = ttk.Button(
             right, text="Continue ▶", style="Accent.TButton",
             command=self._continue
@@ -2500,7 +2690,7 @@ class App(tk.Tk):
         self._item_base[item] = base
         self._path_items.setdefault(path, set()).add(item)
         tree.item(item, values=(
-            "OK" if ok else "FAIL",
+            "PASS" if ok else "FAIL",
             audit or "—",
             str(len(issues)) if issues else "",
             "—",
@@ -3361,8 +3551,11 @@ class App(tk.Tk):
                 elif kind == "prog":
                     done, total, desc = payload
                     if total:
-                        self.progress.configure(maximum=total, value=min(done, total))
-                        self.prog_label_var.set(f"{desc}  {done}/{total}")
+                        # Clamp done to total to avoid stuck full bar when server
+                        # reports wrong Content-Length or progress overflows
+                        disp_done = min(done, total)
+                        self.progress.configure(maximum=total, value=disp_done)
+                        self.prog_label_var.set(f"{desc}  {disp_done}/{total}")
                     else:
                         self.progress.configure(value=0)
                         self.prog_label_var.set("")
@@ -3422,6 +3615,38 @@ class App(tk.Tk):
         fmt_changed = str(cfg.get("lyrics_format", "EMBEDDED")).upper() != old_fmt
         self._refresh_library(regrade=folder_changed or fmt_changed)
 
+    def _open_guide(self):
+        if self.running:
+            messagebox.showinfo("Busy", "Wait for the current operation to finish.")
+            return
+        SetupWizard(self, self.config, self._guide_saved)
+
+    def _guide_saved(self, cfg):
+        self.config = cfg
+        self.folder_var.set(cfg.get("music_folder", ""))
+        self.log("Setup guide saved.", tag="green")
+        self._refresh_library(regrade=True)
+
+    def _open_about(self):
+        AboutDialog(self, self.config)
+
+    def _check_updates_on_launch(self):
+        if not self.config.get("check_updates_on_start", True):
+            return
+        try:
+            from mlo.updater import check_for_updates
+            def _cb(has_update, version, url, notes, error):
+                if error:
+                    self.log(f"Update check failed: {error}", tag="yellow")
+                elif has_update:
+                    self.log(f"Update available: v{version} (current v{self.config.get('__version__', '1.2.0')})", tag="yellow")
+                    # Also show in About dialog if user opens it
+                else:
+                    self.log("Already on latest version.", tag="green")
+            check_for_updates(silent=True, callback=_cb)
+        except Exception as e:
+            self.log(f"Update check error: {e}", tag="yellow")
+
     def _run_all(self):
         order = self.config.get("run_all_order", [1, 2, 3, 5, 4])
         self._run_scripts(order, "RUN ALL SCRIPTS")
@@ -3463,7 +3688,16 @@ class App(tk.Tk):
     def _update_dep_label(self):
         if not hasattr(self, "dep_label"):
             return
-        n = len(tools_mod.detect_all_tools())
+        # Count all 8 tools including simple-dr-meter (which is a Python script
+        # not detected via detect_all_tools' binary check)
+        tools = tools_mod.detect_all_tools()
+        n = len(tools) + (1 if tools_mod.simple_dr_meter_path() else 0)
+        # Fallback: use installed_versions which already counts simpledrmeter
+        try:
+            n2 = len(fetchdeps.installed_versions())
+            n = max(n, n2)
+        except Exception:
+            pass
         total = len(fetchdeps.DISPLAY_NAMES)
         self.dep_label.configure(
             text=f"{n}/{total} tools detected" if n else "No tools detected"

@@ -49,10 +49,11 @@ def sparkle(draw, cx, cy, r, color):
 def build_master():
     big = SIZE * S
 
-    # --- background: solid black rounded square -----------------------
+    # --- background: solid black rounded square matching titlebar BG #0d0d0d
     img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     mask = rounded_mask(big, int(big * 0.225))
-    black = Image.new("RGBA", (big, big), (0, 0, 0, 255))
+    titlebar_bg = (13, 13, 13, 255)  # BG #0d0d0d to match window titlebar (apply_window_chrome)
+    black = Image.new("RGBA", (big, big), titlebar_bg)
     img.paste(black, (0, 0), mask)
 
     # --- spectrum: white vertical bars (audio equalizer) --------------
@@ -91,9 +92,36 @@ def build_master():
     return img.resize((SIZE, SIZE), Image.LANCZOS)
 
 
+def build_window_master():
+    """Window icon: just white spectrum bars on transparent (no black square).
+    Used for the Tk titlebar so the black titlebar shows through."""
+    big = SIZE * S
+    bar_layer = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(bar_layer)
+    heights = [0.32, 0.55, 0.78, 0.95, 0.72, 0.48, 0.30]
+    n = len(heights)
+    total_w = big * 0.70  # slightly wider for window small icon
+    gap = total_w * 0.10 / (n - 1)
+    bar_w = (total_w - gap * (n - 1)) / n
+    bottom = big * 0.78
+    top_base = big * 0.22
+    avail_h = bottom - top_base
+    start_x = (big - total_w) / 2
+    for i, h_norm in enumerate(heights):
+        h = avail_h * h_norm
+        x0 = start_x + i * (bar_w + gap)
+        x1 = x0 + bar_w
+        y0 = bottom - h
+        y1 = bottom
+        r = bar_w * 0.28
+        bd.rounded_rectangle([x0, y0, x1, y1], radius=r, fill=(255, 255, 255, 255))
+    return bar_layer.resize((SIZE, SIZE), Image.LANCZOS)
+
+
 def main():
     os.makedirs(ASSETS, exist_ok=True)
     master = build_master()
+    window_master = build_window_master()
 
     ico_path = os.path.join(ROOT, "app_icon.ico")
     sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64),
@@ -105,9 +133,17 @@ def main():
         os.path.join(ASSETS, "icon_256.png"))
     master.resize((64, 64), Image.LANCZOS).save(
         os.path.join(ASSETS, "icon_64.png"))
+    # Window-only icon: transparent background, just white bars (for titlebar)
+    window_ico = os.path.join(ROOT, "app_icon_window.ico")
+    window_png = os.path.join(ASSETS, "icon_window_256.png")
+    window_frames = [window_master.resize(s, Image.LANCZOS) for s in sizes]
+    window_frames[-1].save(window_ico, format="ICO", sizes=sizes, append_images=window_frames[:-1])
+    window_master.resize((256, 256), Image.LANCZOS).save(window_png)
 
     print(f"wrote {ico_path}")
+    print(f"wrote {window_ico}")
     print(f"wrote {ASSETS}" + os.sep + "icon_256.png / icon_64.png")
+    print(f"wrote {window_png}")
 
 
 if __name__ == "__main__":
