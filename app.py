@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.5.1 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.5.2 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
@@ -119,6 +119,7 @@ TREE_COLUMNS = {
     "media": ("MEDIA", 100, True),
     "cover": ("COVER", 110, True),
     "tags": ("TAGS · G I A AA L", 800, True),
+    "failed": ("FAILED", 300, True),
 }
 
 CONFIG_FIELDS = [
@@ -3214,11 +3215,12 @@ class App(tk.Tk):
         return self._fmt_vals(vals)
 
     def _track_tags_txt(self, tr, aa_value=None):
-        """TAGS layout: G I A AA L — advisory values (A, AA) adjacent."""
+        """TAGS layout: G I A AA L — advisory values (A, AA) adjacent. Full genre, no truncation."""
         v = tr.get("values") or {}
         lyr = 1 if (tr.get("lyrics_embedded") or tr.get("lyrics_lrc")) else 0
+        # Show full genre (no 12-char cut) so Alternative/Avant-Garde etc. is fully visible
         return (
-            f"G:{self._fmt_tag_val(v.get('GENRE'), 12)} "
+            f"G:{self._fmt_tag_val(v.get('GENRE'), 30)} "
             f"I:{self._fmt_tag_val(v.get('INSTRUMENTAL'), 4)} "
             f"A:{self._fmt_tag_val(v.get('ITUNESADVISORY'), 8)} "
             f"AA:{self._fmt_tag_val(aa_value, 8)} "
@@ -3226,7 +3228,7 @@ class App(tk.Tk):
         )
 
     def _album_tags_txt(self, res):
-        """TAGS layout: G I A AA L — advisory values (A, AA) adjacent."""
+        """TAGS layout: G I A AA L — advisory values (A, AA) adjacent. Full values."""
         av = res.get("album_values") or {}
         tracks = res.get("tracks") or []
         lyr = sum(
@@ -3234,8 +3236,9 @@ class App(tk.Tk):
             if tr.get("lyrics_embedded") or tr.get("lyrics_lrc")
         )
         tot = res.get("track_count") or 0
+        # Use larger max_len so genre fully visible and TAGS uses all space
         return (
-            f"G:{self._sum_key(res, 'GENRE')} "
+            f"G:{self._sum_key(res, 'GENRE', max_len=30)} "
             f"I:{self._sum_key(res, 'INSTRUMENTAL')} "
             f"A:{self._sum_key(res, 'ITUNESADVISORY')} "
             f"AA:{self._fmt_tag_val(av.get('ALBUMITUNESADVISORY'), 8)} "
@@ -3244,12 +3247,22 @@ class App(tk.Tk):
 
     def _apply_album_grade(self, tree, item, album_dir, res):
         if "error" in res:
-            tree.item(item, values=("ERR", "ERR", "", "", "", "", ""),
+            tree.item(item, values=("ERR", "ERR", "", "", "", "", "", ""),
                       tags=("fail",))
             return
         ok = res["pass_count"] == res["total_checks"]
         audit = res.get("audit_summary")
         aa_value = (res.get("album_values") or {}).get("ALBUMITUNESADVISORY")
+        # FAILED column: show comma-separated failed checks, empty if PASS
+        failed_txt = ""
+        if not ok:
+            failed_keys = []
+            for field, where in sorted(res.get("issues", {}).items()):
+                # Show field name; where indicates which tracks/albums
+                failed_keys.append(field)
+            failed_txt = ", ".join(failed_keys[:4])
+            if len(failed_keys) > 4:
+                failed_txt += f" +{len(failed_keys)-4} more"
         tree.item(item, values=(
             "PASS" if ok else "FAIL",
             audit or "—",
@@ -3258,6 +3271,7 @@ class App(tk.Tk):
             res["media"],
             res["cover_file"] or "MISSING",
             self._album_tags_txt(res),
+            failed_txt,
         ), tags=(self._row_state(ok, audit),))
         if not self.compact_var.get():
             for child in tree.get_children(item):
@@ -3291,6 +3305,9 @@ class App(tk.Tk):
         self._item_paths[item] = path
         self._item_base[item] = base
         self._path_items.setdefault(path, set()).add(item)
+        failed_txt = ", ".join(issues[:3]) if issues else ""
+        if len(issues) > 3:
+            failed_txt += f" +{len(issues)-3} more"
         tree.item(item, values=(
             "PASS" if ok else "FAIL",
             audit or "—",
@@ -3299,6 +3316,7 @@ class App(tk.Tk):
             tr["values"].get("MEDIA") or "",
             "—",
             self._track_tags_txt(tr, aa_value),
+            failed_txt,
         ))
 
     def _update_grade(self, album_dir, result):
@@ -3364,15 +3382,24 @@ class App(tk.Tk):
             else (next(iter(media_set), "") or "—")
         cover_txt = f"{covers}/{albums}" if albums else "—"
         tags_txt = (
-            f"G:{self._fmt_vals(genre_set)} "
+            f"G:{self._fmt_vals(genre_set, max_len=30)} "
             f"A:{self._fmt_vals(ta_set)} "
             f"I:{self._fmt_vals(inst_set)} "
             f"L:{lyrics}/{track_total} "
             f"AA:{self._fmt_vals(aa_set)}"
         ) if albums else ""
+        # FAILED for aggregates: show most common failed checks
+        failed_agg = ""
+        if albums:
+            # Collect failed fields from aggregated issues (not stored per agg, so show audit/grade summary)
+            # For now, show audit summary if mixed/fail, otherwise empty
+            if audit_txt not in ("REAL", "—"):
+                failed_agg = audit_txt
+            elif grade_txt.startswith("0/"):
+                failed_agg = "gen"
         self.library_tree.item(item, values=(
             grade_txt, audit_txt, checks_txt, tracks or "—", media_txt,
-            cover_txt, tags_txt))
+            cover_txt, tags_txt, failed_agg))
         expected = self._agg_total.get(item, albums)
         if albums and albums >= expected:
             if passed == albums:

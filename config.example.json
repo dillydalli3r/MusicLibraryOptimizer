@@ -166,7 +166,6 @@
   "lrc_extended_enabled": true,
   "lrc_strip_metadata": true,
   "lrc_timestamp_precision": 2,
-  "lrc_zero_timestamp_blank": false,
   "lrc_zero_timestamp_target": "BOTH",
   "lyrics_format": "EMBEDDED",
   "mp3tag_path": "",

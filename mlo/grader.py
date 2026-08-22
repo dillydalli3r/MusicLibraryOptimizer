@@ -247,13 +247,11 @@ def _lyrics_enhanced_valid(text, cfg):
 
 
 def _lyrics_zero_timestamp_ok(text, cfg, is_for_lrc=False):
-    """True when the first lyric line starts with [00:00.00] if the compat flag is on.
+    """True when the first lyric line is exactly [00:00.00] if the compat flag is on.
 
     When lrc_add_zero_timestamp is False or target doesn't allow this type,
     always True. Otherwise the first non-blank, non-metadata lyric line must
-    start with the zero timestamp for the configured precision. In blank mode
-    it must be exactly the bare timestamp, otherwise it may have text after.
-    Empty/whitespace-only lyrics are considered ok.
+    be exactly the bare zero timestamp (always blank, per request).
     """
     if not cfg.get("lrc_add_zero_timestamp", False):
         return True
@@ -266,7 +264,6 @@ def _lyrics_zero_timestamp_ok(text, cfg, is_for_lrc=False):
     except Exception:
         precision = 2
     zero_ts = f"[00:00.{'0' * precision}]"
-    blank_mode = bool(cfg.get("lrc_zero_timestamp_blank", False))
     # Find first non-blank, non-metadata line
     for ln in str(text).splitlines():
         s = ln.strip()
@@ -280,11 +277,8 @@ def _lyrics_zero_timestamp_ok(text, cfg, is_for_lrc=False):
                    low.startswith("[re:") or low.startswith("[ve:"))
         if is_meta and "<" not in s:
             continue
-        # First lyric line found
-        if blank_mode:
-            return s == zero_ts
-        else:
-            return s.startswith(zero_ts)
+        # First lyric line found — must be exactly bare zero
+        return s == zero_ts
     return True  # no lyric lines found — nothing to enforce
 
 

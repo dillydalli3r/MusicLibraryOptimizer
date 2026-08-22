@@ -172,10 +172,8 @@ DEFAULT_CONFIG = {
     "lrc_add_zero_timestamp": True,
     # Where the zero timestamp is added when enabled: EMBEDDED, LRC, or BOTH.
     # Now works for both standard and enhanced LRCs (per request).
+    # When enabled, it always adds a blank "[00:00.00]" as the first line.
     "lrc_zero_timestamp_target": "BOTH",
-    # When True, the zero timestamp is a blank line "[00:00.00]" with no text;
-    # when False (default), it duplicates the first lyric's text for compatibility.
-    "lrc_zero_timestamp_blank": False,
     # Disabled by default to preserve the byte-exact no-final-newline mode.
     "append_final_newline": False,
     "keep_empty_cue_lines": False,

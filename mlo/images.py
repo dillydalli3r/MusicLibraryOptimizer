@@ -223,13 +223,20 @@ def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_t
                     deviation = abs(ratio - 1.0)
                     if deviation > thr:
                         need_crop = True
-                # Force exact size: when resize is wanted, always crop to square
-                # first so the final output is guaranteed to be exactly
-                # target_size x target_size (e.g. 1000x1000) regardless of
-                # original aspect or threshold.
+                # Force exact size: when resize is wanted, ensure we will crop
+                # (if not already) to meet the threshold — but do NOT force
+                # automatically to 1:1; crop just enough to bring deviation
+                # within thr (user request: crop to threshold, not to square).
+                # The threshold already controls how square it must be.
                 force_exact = bool(config.get("cover_force_exact_size", False)) if config else False
                 if force_exact and resize_enabled and tsize > 0 and w != h:
-                    need_crop = True
+                    # Only force crop if still outside threshold (not unconditional to square)
+                    try:
+                        ratio_f = w / h if h else 1.0
+                        if abs(ratio_f - 1.0) > thr:
+                            need_crop = True
+                    except Exception:
+                        need_crop = True
                 # Never upscale: only downscale if larger than target
                 need_resize = False
                 if resize_enabled and tsize > 0:
@@ -248,16 +255,35 @@ def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_t
                     return False
                 img_to_save = img
                 if need_crop:
-                    if w > h:
-                        left = (w - h) // 2
-                        top = 0
-                        right = left + h
-                        bottom = h
-                    else:
-                        left = 0
-                        top = (h - w) // 2
-                        right = w
-                        bottom = top + w
+                    # Crop to threshold, not to square: reduce longer side just enough
+                    # to bring |w/h -1| <= thr. For w>h, new_w = int(h*(1+thr)); for h>w, new_h = int(w*(1+thr)).
+                    try:
+                        if w > h:
+                            target_w = int(h * (1.0 + thr))
+                            target_w = max(h, min(target_w, w))
+                            left = (w - target_w) // 2
+                            top = 0
+                            right = left + target_w
+                            bottom = h
+                        else:
+                            target_h = int(w * (1.0 + thr))
+                            target_h = max(w, min(target_h, h))
+                            left = 0
+                            top = (h - target_h) // 2
+                            right = w
+                            bottom = top + target_h
+                    except Exception:
+                        # Fallback to square on error
+                        if w > h:
+                            left = (w - h) // 2
+                            top = 0
+                            right = left + h
+                            bottom = h
+                        else:
+                            left = 0
+                            top = (h - w) // 2
+                            right = w
+                            bottom = top + w
                     try:
                         img_to_save = img.crop((left, top, right, bottom))
                     except Exception:
