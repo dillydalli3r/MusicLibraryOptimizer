@@ -455,16 +455,20 @@ def _cover_image_ok(path, config):
         return False
     if config is None:
         config = {}
+    ext = os.path.splitext(path)[1].lower()
+    target = _get_cover_target_size(ext, config)
     # If no enforcement enabled, just existence/size suffices (preserve
-    # backwards compatibility)
+    # backwards compatibility) — but force_exact implies both when resize is on
     enforce_size = bool(config.get("cover_enforce_size", False))
     enforce_square = bool(config.get("cover_enforce_square", False))
     resize_enabled = bool(config.get("cover_resize_enabled", False))
+    force_exact = bool(config.get("cover_force_exact_size", False))
+    if force_exact and resize_enabled and target > 0:
+        # Force exact implies both size and square must be enforced
+        enforce_size = True
+        enforce_square = True
     if not enforce_size and not enforce_square:
         return True
-    # If enforcement wants size but resize not enabled or target 0, skip size check
-    ext = os.path.splitext(path)[1].lower()
-    target = _get_cover_target_size(ext, config)
     # Need Pillow to inspect dimensions
     if not HAS_PIL:
         return True
@@ -482,13 +486,16 @@ def _cover_image_ok(path, config):
                 # Allow 1px tolerance as spec mentions
                 if abs(w - target) > 1 or abs(h - target) > 1:
                     return False
-            # Square enforcement
+            # Square enforcement (force_exact => strict)
             if enforce_square:
-                try:
-                    thr = float(config.get("cover_crop_threshold", 0.05) or 0.05)
-                except (TypeError, ValueError):
-                    thr = 0.05
-                thr = max(0.0, min(0.5, thr))
+                if force_exact:
+                    thr = 0.005
+                else:
+                    try:
+                        thr = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                    except (TypeError, ValueError):
+                        thr = 0.05
+                    thr = max(0.0, min(0.5, thr))
                 # When square enforcement is on, aspect must be within threshold
                 # The spec mentions cover_enforce_square and (cover_crop_enabled or cover_enforce_square)
                 # So we check regardless of crop_enabled if enforce_square true
@@ -917,8 +924,16 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         size_failed = False
         square_failed = False
         size_info = ""
+        # Force exact: when cover_force_exact_size is on, it implies both size and square
+        # must be exactly target×target, regardless of the separate enforce toggles.
+        force_exact = bool(cfg.get("cover_force_exact_size", False))
+        enforce_size = bool(cfg.get("cover_enforce_size", False))
+        enforce_square = bool(cfg.get("cover_enforce_square", False))
+        if force_exact and cfg.get("cover_resize_enabled", False) and target_cov > 0:
+            enforce_size = True
+            enforce_square = True
         # Size enforcement: require exact target_size x target_size (1px tolerance)
-        if cfg.get("cover_enforce_size") and cfg.get("cover_resize_enabled") and target_cov > 0:
+        if enforce_size and cfg.get("cover_resize_enabled", False) and target_cov > 0:
             total_checks += 1
             if HAS_PIL:
                 try:
@@ -932,14 +947,17 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                             add_issue(f"Cover image wrong size {_w}x{_h} (need {target_cov}x{target_cov})", "album")
                 except Exception:
                     pass
-        # Square enforcement: aspect within threshold
-        if cfg.get("cover_enforce_square"):
+        # Square enforcement: aspect within threshold (force_exact uses strict 0 threshold)
+        if enforce_square:
             total_checks += 1
-            try:
-                thr_cov = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)
-            except (TypeError, ValueError):
-                thr_cov = 0.05
-            thr_cov = max(0.0, min(0.5, thr_cov))
+            if force_exact:
+                thr_cov = 0.005  # ~0.5% tolerance, effectively require w==h (1px at 1000)
+            else:
+                try:
+                    thr_cov = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)
+                except (TypeError, ValueError):
+                    thr_cov = 0.05
+                thr_cov = max(0.0, min(0.5, thr_cov))
             if HAS_PIL:
                 try:
                     with Image.open(cover_path) as _im:

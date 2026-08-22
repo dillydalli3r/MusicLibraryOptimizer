@@ -36,6 +36,7 @@ DEFAULT_CONFIG = {
     "cover_target_size": 1000,
     "cover_crop_enabled": True,
     "cover_crop_threshold": 0.05,
+    "cover_force_exact_size": False,
     "cover_enforce_size": False,
     "cover_enforce_square": False,
     "cover_jpeg_enabled": True,

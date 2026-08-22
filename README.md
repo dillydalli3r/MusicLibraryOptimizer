@@ -56,6 +56,13 @@ PATH (the system scope requests admin elevation automatically). See
 - **Auto-Crop Threshold** — `Crop Threshold (0.00–0.50)` — `0.05 = 5%` means
   `1000×1050` stays, `1000×1100` is center-cropped to `1:1`. Only crops when
   `|w/h−1| > threshold`.
+- **Force Exact Size (e.g. 1000×1000)** — `Settings → Cover Art → Resize & Crop → Force
+  Exact Size` — when on with Resize enabled, *every* non-square cover is
+  center-cropped to 1:1 *before* resizing, guaranteeing exactly `target×target`
+  output (e.g. `1000×1000`) regardless of original aspect or threshold. Off by
+  default; when on, `1000×1050`, `800×600`, `500×700` etc. all become exactly
+  `1000×1000` (cropped then LANCZOS-resized). Grading with `Enforce Size` + `Enforce
+  Square` will then pass only for exactly-sized covers.
 - **Cover Grading Enforcement** — `Settings → Grading — Cover Enforce` adds
   `Enforce Size` (exact `target×target` ±1px) + `Enforce Square` (aspect within
   threshold). Off by default; when on, albums with wrong covers fail grading with
@@ -519,15 +526,28 @@ stays `REAL` for genuine lossless either way).
 ### Force options
 
 The Library toolbar has a **Force** pill next to a **▾** menu that toggles
-each force option individually (the master pill sets all of them):
+each force option individually (the master pill sets all of them). When a
+Force option is on, the corresponding script *always* reprocesses files and
+*overwrites* the tags it writes to, even if they are already considered
+up-to-date (the ENCODER/AUDIT/DR tags are rewritten with current values):
 
-- **Re-encode FLACs** — re-encode every FLAC regardless of ENCODER markers.
-- **Re-encode images** — reprocess images regardless of ENCODER markers.
+- **Re-encode FLACs** — re-encode every FLAC regardless of ENCODER markers
+  (rewrites `ENCODER_PROGRAM/QUALITY/VERSION` after encoding).
+- **Re-encode images** — reprocess images regardless of ENCODER markers
+  (rewrites JPEG/PNG/JXL ENCODER tags after `jpegtran`/`oxipng`/`cjxl`).
 - **Audit** — re-audit files that already carry an `AUDIT` verdict and
-  re-score rip logs even when `LOG_GRADE` is present.
-- **DR & ReplayGain** — re-calculate DR/ReplayGain even when already tagged.
+  re-score rip logs even when `LOG_GRADE` is present (rewrites `AUDIT`/`LOG_GRADE`).
+- **Format Lyrics** — re-format LRC/embedded lyrics even if already canonical
+  (rewrites `LYRICS`/`.lrc` and fixes `INSTRUMENTAL` if needed).
+- **Format CUE sheets** — rewrite every `.cue` unconditionally (normalizes
+  `FILE` lines, `TRACK`/`INDEX` padding, `DISCID`).
+- **DR & ReplayGain** — re-calculate DR/ReplayGain even when already tagged
+  (rewrites `REPLAYGAIN_*` and `DYNAMIC RANGE`/`ALBUM DYNAMIC RANGE`).
+- **Auto Tagging** — re-derive `ALBUMITUNESADVISORY`/`INSTRUMENTAL` even when
+  already correct.
 
-Applies to **Optimize Selected**, **Run All** and **Run Custom**.
+Applies to **Optimize Selected**, **Run All** and **Run Custom**. The CLI
+`mlo run --force` / `mlo all --force` sets *all* of the above at once.
 
 ### DR & ReplayGain (script 7)
 

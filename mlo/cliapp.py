@@ -373,6 +373,10 @@ def cmd_run(args):
         config["force_reencode_flac"] = True
         config["force_reencode_images"] = True
         config["force_audit"] = True
+        config["force_lyrics"] = True
+        config["force_cue"] = True
+        config["force_dr_replaygain"] = True
+        config["force_auto_tag"] = True
     if args.thorough:
         config["audit_thorough"] = True
 

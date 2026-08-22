@@ -174,7 +174,10 @@ def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_t
     """Resize and/or center-crop a cover image via Pillow.
 
     * If *crop_enabled* and aspect deviation > *crop_threshold*, center-crop
-      the longer side to a square.
+      the longer side to a square. When ``cover_force_exact_size`` is True
+      and a resize target is set, the image is *always* center-cropped to a
+      square before resizing, guaranteeing exactly ``target_size``×``target_size``
+      output (e.g. 1000×1000) regardless of threshold or original aspect.
     * Then if *target_size* >0 (and resize is enabled in *config*) and the
       (possibly cropped) image is not already *target_size* x *target_size*,
       resize with LANCZOS to that square.
@@ -220,6 +223,13 @@ def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_t
                     deviation = abs(ratio - 1.0)
                     if deviation > thr:
                         need_crop = True
+                # Force exact size: when resize is wanted, always crop to square
+                # first so the final output is guaranteed to be exactly
+                # target_size x target_size (e.g. 1000x1000) regardless of
+                # original aspect or threshold.
+                force_exact = bool(config.get("cover_force_exact_size", False)) if config else False
+                if force_exact and resize_enabled and tsize > 0 and w != h:
+                    need_crop = True
                 need_resize = False
                 if resize_enabled and tsize > 0:
                     if not need_crop:
@@ -230,6 +240,9 @@ def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_t
                         if sq != tsize:
                             need_resize = True
                         # if square already target, still need crop but not resize
+                    # Force exact also needs resize if square side != target even when
+                    # no crop was otherwise needed but the image is not square — the
+                    # crop above already set need_crop, so the square branch applies.
                 if not need_crop and not need_resize:
                     return False
                 img_to_save = img
@@ -425,10 +438,13 @@ def _process_image_to_jxl(args):
                             try:
                                 with Image.open(src_path) as _im:
                                     _w, _h = _im.size
+                                    force_exact = bool(config.get("cover_force_exact_size", False))
                                     if cr_en:
                                         _ratio = _w / _h if _h else 1.0
                                         if abs(_ratio - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
                                             _cover_needs = True
+                                    if force_exact and re_en and tgt > 0 and _w != _h:
+                                        _cover_needs = True
                                     if re_en and tgt > 0 and (_w != tgt or _h != tgt):
                                         _cover_needs = True
                             except Exception:
@@ -700,10 +716,13 @@ def _process_jpeg_in_place(args):
                     try:
                         with Image.open(filepath) as _im:
                             _w, _h = _im.size
+                            force_exact_j = bool(config.get("cover_force_exact_size", False))
                             if cr_en:
                                 _ratio = _w / _h if _h else 1.0
                                 if abs(_ratio - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
                                     _cover_needs = True
+                            if force_exact_j and re_en and tgt_cov > 0 and _w != _h:
+                                _cover_needs = True
                             if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
                                 _cover_needs = True
                     except Exception:
@@ -891,10 +910,13 @@ def _process_png_in_place(args):
                     try:
                         with Image.open(filepath) as _im:
                             _w, _h = _im.size
+                            force_exact_j = bool(config.get("cover_force_exact_size", False))
                             if cr_en:
                                 _ratio = _w / _h if _h else 1.0
                                 if abs(_ratio - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
                                     _cover_needs = True
+                            if force_exact_j and re_en and tgt_cov > 0 and _w != _h:
+                                _cover_needs = True
                             if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
                                 _cover_needs = True
                     except Exception:
@@ -1111,10 +1133,13 @@ def _process_jxl_in_place(args):
                         try:
                             with Image.open(src_path) as _im:
                                 _w, _h = _im.size
+                                force_exact = bool(config.get("cover_force_exact_size", False))
                                 if cr_en:
                                     _ratio = _w / _h if _h else 1.0
                                     if abs(_ratio - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
                                         _cover_needs = True
+                                if force_exact and re_en and tgt_cov > 0 and _w != _h:
+                                    _cover_needs = True
                                 if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
                                     _cover_needs = True
                         except Exception:

@@ -141,6 +141,7 @@ CONFIG_FIELDS = [
     ("cover_target_size", "Global Target Size (px, 0=keep)", "int", (0, 4000)),
     ("cover_crop_enabled", "Auto-Crop Non-Square Covers", "bool", None),
     ("cover_crop_threshold", "Crop Threshold (0.00-0.50)", "str", None),
+    ("cover_force_exact_size", "Force Exact Size (e.g. 1000×1000)", "bool", None),
     ("cover_enforce_size", "Grading: Enforce Size", "bool", None),
     ("cover_enforce_square", "Grading: Enforce Square", "bool", None),
     ("cover_jpeg_enabled", "Apply to JPEG Covers", "bool", None),
@@ -620,6 +621,14 @@ FIELD_DESCRIPTIONS = {
     "cover_crop_threshold":
         "Aspect-ratio deviation that triggers cropping. 0.05 = 5% (e.g., 1000×1050 "
         "stays, 1000×1100 is cropped). Range 0.00-0.50.",
+    "cover_force_exact_size":
+        "Force Exact Size: when Resize is on and a target is set (e.g. 1000), "
+        "always center-crop any non-square cover to 1:1 *before* resizing, "
+        "guaranteeing exactly target×target output (e.g. 1000×1000) "
+        "regardless of original aspect or threshold. Off by default; when on, "
+        "every cover that needs resizing will be cropped if w≠h, then resized "
+        "with LANCZOS. Use this if you want every cover to be exactly "
+        "1000×1000.",
     "cover_enforce_size":
         "Grading: fail albums whose cover is not exactly the target size "
         "(strict, 1px tolerance). Off by default.",
@@ -1090,6 +1099,7 @@ class ConfigDialog(tk.Toplevel):
             ("Cover Art — Resize & Crop", [
                 "cover_resize_enabled", "cover_target_size",
                 "cover_crop_enabled", "cover_crop_threshold",
+                "cover_force_exact_size",
                 "cover_enforce_size", "cover_enforce_square",
             ]),
             ("Cover Art — Per-Format", [
@@ -1773,9 +1783,19 @@ class App(tk.Tk):
             value=self.config.get("force_images_ui", False))
         self.force_audit_var = tk.BooleanVar(
             value=self.config.get("force_audit_ui", False))
+        self.force_lyrics_var = tk.BooleanVar(
+            value=self.config.get("force_lyrics_ui", False))
+        self.force_cue_var = tk.BooleanVar(
+            value=self.config.get("force_cue_ui", False))
+        self.force_dr_var = tk.BooleanVar(
+            value=self.config.get("force_dr_ui", False))
+        self.force_autotag_var = tk.BooleanVar(
+            value=self.config.get("force_auto_tag_ui", False))
         self.force_var = tk.BooleanVar(
             value=(self.force_flac_var.get() and self.force_images_var.get()
-                   and self.force_audit_var.get()))
+                   and self.force_audit_var.get() and self.force_lyrics_var.get()
+                   and self.force_cue_var.get() and self.force_dr_var.get()
+                   and self.force_autotag_var.get()))
         force_toggle = ToggleSwitch(
             force_box, self.force_var, bg=BG, command=self._on_force_master)
         force_toggle.pack(side=tk.LEFT)
@@ -2683,6 +2703,10 @@ class App(tk.Tk):
         self.force_flac_var.set(on)
         self.force_images_var.set(on)
         self.force_audit_var.set(on)
+        self.force_lyrics_var.set(on)
+        self.force_cue_var.set(on)
+        self.force_dr_var.set(on)
+        self.force_autotag_var.set(on)
         self._save_force_config()
 
     def _on_force_option(self):
@@ -2690,7 +2714,11 @@ class App(tk.Tk):
         whether all of them are on."""
         self.force_var.set(self.force_flac_var.get()
                            and self.force_images_var.get()
-                           and self.force_audit_var.get())
+                           and self.force_audit_var.get()
+                           and self.force_lyrics_var.get()
+                           and self.force_cue_var.get()
+                           and self.force_dr_var.get()
+                           and self.force_autotag_var.get())
         self._save_force_config()
 
     def _save_force_config(self):
@@ -2698,6 +2726,10 @@ class App(tk.Tk):
         self.config["force_flac_ui"] = self.force_flac_var.get()
         self.config["force_images_ui"] = self.force_images_var.get()
         self.config["force_audit_ui"] = self.force_audit_var.get()
+        self.config["force_lyrics_ui"] = self.force_lyrics_var.get()
+        self.config["force_cue_ui"] = self.force_cue_var.get()
+        self.config["force_dr_ui"] = self.force_dr_var.get()
+        self.config["force_auto_tag_ui"] = self.force_autotag_var.get()
         save_config(self.config)
 
     def _show_force_menu(self):
@@ -2709,6 +2741,10 @@ class App(tk.Tk):
             (self.force_flac_var, "Re-encode FLACs"),
             (self.force_images_var, "Re-encode images"),
             (self.force_audit_var, "Audit"),
+            (self.force_lyrics_var, "Format Lyrics"),
+            (self.force_cue_var, "Format CUE sheets"),
+            (self.force_dr_var, "DR & ReplayGain"),
+            (self.force_autotag_var, "Auto Tagging"),
         ):
             menu.add_checkbutton(label=label, variable=var, onvalue=True,
                                  offvalue=False,
@@ -3441,7 +3477,11 @@ class App(tk.Tk):
             args=(list(script_ids), title, targets,
                   self.force_flac_var.get(),
                   self.force_images_var.get(),
-                  self.force_audit_var.get()),
+                  self.force_audit_var.get(),
+                  self.force_lyrics_var.get(),
+                  self.force_cue_var.get(),
+                  self.force_dr_var.get(),
+                  self.force_autotag_var.get()),
             daemon=True
         )
         t.start()
@@ -3450,7 +3490,8 @@ class App(tk.Tk):
     # Worker thread
     # ------------------------------------------------------------------
     def _worker(self, script_ids, title, targets=None, force_flac=False,
-                force_images=False, force_audit=False):
+                force_images=False, force_audit=False, force_lyrics=False,
+                force_cue=False, force_dr=False, force_autotag=False):
         started = time.monotonic()
         prev_tqdm, prev_hook = stats_mod.tqdm, stats_mod.progress_hook
         stats_mod.tqdm = None
@@ -3462,7 +3503,7 @@ class App(tk.Tk):
         # Runners never mutate the config; a copy lets us scope a run to
         # user-selected directories/tracks without affecting the app.
         run_cfg = self.config
-        if targets or force_flac or force_images or force_audit:
+        if targets or force_flac or force_images or force_audit or force_lyrics or force_cue or force_dr or force_autotag:
             run_cfg = self.config.copy()
             if targets:
                 run_cfg["targets"] = list(targets)
@@ -3472,6 +3513,14 @@ class App(tk.Tk):
                 run_cfg["force_reencode_images"] = True
             if force_audit:
                 run_cfg["force_audit"] = True
+            if force_lyrics:
+                run_cfg["force_lyrics"] = True
+            if force_cue:
+                run_cfg["force_cue"] = True
+            if force_dr:
+                run_cfg["force_dr_replaygain"] = True
+            if force_autotag:
+                run_cfg["force_auto_tag"] = True
 
         per_script = []
         total_bytes_added = total_bytes_removed = total_errors = 0
