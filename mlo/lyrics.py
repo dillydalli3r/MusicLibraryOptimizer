@@ -250,11 +250,11 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
     while cleaned and cleaned[-1] == "":
         cleaned.pop()
 
-    # Compatibility: ensure first lyric line is [00:00.00] when enabled.
-    # Always adds a blank "[00:00.00]" as the very first line (no text) if
-    # the first lyric doesn't already start with the zero timestamp.
-    # Works for both standard and enhanced LRCs (per request).
-    if lrc_add_zero_timestamp and cleaned:
+    # Compatibility: ensure first lyric line is [00:00.00] when enabled,
+    # or remove it when disabled — always as a blank line, and only if the
+    # first lyric doesn't already match the desired state. This handles the
+    # 1px threshold case correctly: if the image/lyric already fits, leave it.
+    if cleaned:
         # Find first non-blank, non-metadata lyric line
         first_idx = None
         for idx, ln in enumerate(cleaned):
@@ -270,9 +270,15 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
             break
         if first_idx is not None:
             first_line = cleaned[first_idx]
-            # Always blank: ensure a bare zero line exists at first_idx
-            if first_line.strip() != zero_ts:
-                cleaned.insert(first_idx, zero_ts)
+            if lrc_add_zero_timestamp:
+                # Add: ensure a bare zero line exists at first_idx
+                if first_line.strip() != zero_ts:
+                    cleaned.insert(first_idx, zero_ts)
+            else:
+                # Remove: if the first line is exactly a blank zero, delete it
+                # (so turning the option off actually removes the tag)
+                if first_line.strip() == zero_ts:
+                    cleaned.pop(first_idx)
 
     return "\n".join(cleaned)
 

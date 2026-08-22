@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.5.2 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.5.3 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
@@ -163,7 +163,6 @@ CONFIG_FIELDS = [
     ("lrc_enhanced_word_sync", "Word-Level Timestamps", "bool", None),
     ("lrc_extended_enabled", "Enable Extended LRC", "bool", None),
     ("lrc_add_zero_timestamp", "Add [00:00.00] to First Line", "bool", None),
-    ("lrc_zero_timestamp_blank", "Zero Timestamp as Blank Line", "bool", None),
     ("lrc_zero_timestamp_target", "Zero Timestamp Target", "choice", ("EMBEDDED", "LRC", "BOTH")),
     ("append_final_newline", "Append Final Newline", "bool", None),
     ("fill_empty_source", "Fill Empty SOURCE for Digital Media", "bool", None),
@@ -686,19 +685,15 @@ FIELD_DESCRIPTIONS = {
         "preserves them for karaoke players that support it. When off, they "
         "are split onto separate lines.",
     "lrc_add_zero_timestamp":
-        "Compatibility: ensure the first lyric line starts with [00:00.00] "
-        "(or [00:00.000] at 3-decimal precision). When on, a missing zero "
-        "timestamp is added. Use the two options below to choose where (LRC vs "
-        "EMBEDDED vs BOTH) and whether it is a blank line or duplicates the "
-        "first lyric's text. Detection is literal and idempotent.",
+        "Compatibility: ensure the first lyric line is a blank [00:00.00] "
+        "(or [00:00.000] at 3-decimal precision). When on, a missing blank zero "
+        "is added as the very first line; when off, an existing blank zero is "
+        "removed. Works for both standard and enhanced LRCs via the target below. "
+        "Detection is literal and idempotent.",
     "lrc_zero_timestamp_target":
-        "Where the [00:00.00] zero timestamp is added: EMBEDDED (only embedded "
+        "Where the [00:00.00] zero timestamp is added/removed: EMBEDDED (only embedded "
         "LYRICS tag), LRC (only .lrc sidecar), or BOTH (default, respects your "
-        "Lyrics Format setting). Only matters when 'Add [00:00.00]' is on.",
-    "lrc_zero_timestamp_blank":
-        "When on, the zero timestamp is a blank line '[00:00.00]' with no text "
-        "(a silent lead-in). When off (default), it duplicates the first lyric's "
-        "text as '[00:00.00]<first text>' for karaoke compatibility.",
+        "Lyrics Format setting). Only matters when 'Add [00:00.00]' is on/off.",
     "append_final_newline":
         "Add one final LF byte to formatted .cue, .lrc, and embedded lyric "
         "text. Off by default for the existing byte-minimal format.",
@@ -1272,7 +1267,7 @@ class ConfigDialog(tk.Toplevel):
                 "optimize_lrc", "optimize_embedded_lyrics", "lyrics_format",
                 "lrc_timestamp_precision", "lrc_strip_metadata",
                 "lrc_collapse_blank_lines", "lrc_add_zero_timestamp",
-                "lrc_zero_timestamp_blank", "lrc_zero_timestamp_target",
+                "lrc_zero_timestamp_target",
                 "append_final_newline",
             ]),
             ("Enhanced LRC", [
@@ -1759,31 +1754,30 @@ class SetupWizard(tk.Toplevel):
              "lyrics_format": "EMBEDDED", "lrc_timestamp_precision": 2,
              "lrc_strip_metadata": True, "lrc_collapse_blank_lines": True,
              "lrc_enhanced_enabled": False, "lrc_extended_enabled": False,
-             "lrc_add_zero_timestamp": False, "lrc_zero_timestamp_blank": False,
+             "lrc_add_zero_timestamp": False,
              "lrc_zero_timestamp_target": "BOTH", "append_final_newline": False},
         ),
         (
-            "Enhanced — word-sync + zero (duplicate)",
+            "Enhanced — word-sync + zero (blank)",
             "Enhanced LRC on • word <mm:ss.xx> • extended (multi-ts) • "
-            "add [00:00.00] duplicating first line's text • 3 decimals • target BOTH "
+            "add blank [00:00.00] as first line • 3 decimals • target BOTH "
             "so it applies to LRC and embedded when format is BOTH. For karaoke/word-sync players.",
             {"optimize_lrc": True, "optimize_embedded_lyrics": True,
              "lyrics_format": "BOTH", "lrc_timestamp_precision": 3,
              "lrc_strip_metadata": True, "lrc_collapse_blank_lines": True,
              "lrc_enhanced_enabled": True, "lrc_enhanced_word_sync": True,
              "lrc_extended_enabled": True, "lrc_add_zero_timestamp": True,
-             "lrc_zero_timestamp_blank": False, "lrc_zero_timestamp_target": "BOTH"},
+             "lrc_zero_timestamp_target": "BOTH"},
         ),
         (
-            "Enhanced — word-sync + blank zero",
-            "Same as above but the zero timestamp is a blank line '[00:00.00]' "
-            "with no text — a silent lead-in at 0s. Target BOTH, 3 decimals.",
+            "Enhanced — word-sync (no zero)",
+            "Same as above but without zero timestamp — for players that don't need lead-in.",
             {"optimize_lrc": True, "optimize_embedded_lyrics": True,
              "lyrics_format": "BOTH", "lrc_timestamp_precision": 3,
              "lrc_strip_metadata": True, "lrc_collapse_blank_lines": True,
              "lrc_enhanced_enabled": True, "lrc_enhanced_word_sync": True,
-             "lrc_extended_enabled": True, "lrc_add_zero_timestamp": True,
-             "lrc_zero_timestamp_blank": True, "lrc_zero_timestamp_target": "BOTH"},
+             "lrc_extended_enabled": True, "lrc_add_zero_timestamp": False,
+             "lrc_zero_timestamp_target": "BOTH"},
         ),
         (
             "LRC Sidecar only",
@@ -1792,7 +1786,7 @@ class SetupWizard(tk.Toplevel):
             {"optimize_lrc": True, "optimize_embedded_lyrics": False,
              "lyrics_format": "LRC", "lrc_timestamp_precision": 2,
              "lrc_enhanced_enabled": False, "lrc_extended_enabled": False,
-             "lrc_add_zero_timestamp": False, "lrc_zero_timestamp_blank": False,
+             "lrc_add_zero_timestamp": False,
              "lrc_zero_timestamp_target": "LRC"},
         ),
     ]
