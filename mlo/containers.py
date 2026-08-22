@@ -74,6 +74,46 @@ def _write_flac_tags(filepath, quality, version, enabled=None):
     audio.save()
 
 
+# Whitelist of Vorbis comment keys to keep when cleaning FLAC tags.
+# Includes all semantic tags from TAG_MAP plus common aliases and the
+# ENCODER family. Everything else is considered unused metadata and removed.
+KEEP_VORBIS_KEYS = {
+    "TITLE", "ALBUM", "ARTIST", "ALBUMARTIST", "TRACKNUMBER", "TRACKTOTAL",
+    "DISCNUMBER", "DISCTOTAL", "DATE", "YEAR", "ORIGINALDATE", "ORIGINALYEAR",
+    "GENRE", "COMPOSER", "LYRICIST", "COMMENT", "LYRICS", "UNSYNCEDLYRICS",
+    "BPM", "COPYRIGHT", "MEDIA", "SOURCE", "INSTRUMENTAL", "ITUNESADVISORY",
+    "ALBUMITUNESADVISORY", "REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK",
+    "REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_PEAK", "DYNAMIC RANGE",
+    "ALBUM DYNAMIC RANGE", "AUDIT", "LOG_GRADE", "AUDIO_MD5", "INTEGRITY",
+    "LOG_CRC", "ENCODER", "ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION",
+    "ENCODEDBY", "PERFORMER", "ALBUMARTIST", "ARTISTSORT", "ALBUMARTISTSORT",
+    "TITLESORT", "COMPOSERSORT", "WORK", "MOVEMENT", "PART", "CONDUCTOR",
+}
+
+
+def _clean_flac_tags(filepath):
+    """Remove all Vorbis comments not in KEEP_VORBIS_KEYS and clear padding.
+
+    Keeps only tags used by this script (grading, audit, lyrics, etc.) plus
+    essential music tags. Returns True if any tags were removed.
+    """
+    try:
+        audio = FLAC(filepath)
+        if audio.tags is None:
+            return False
+        # Build a list of keys to remove (case-insensitive)
+        keep_lower = {k.lower() for k in KEEP_VORBIS_KEYS}
+        to_remove = [k for k in list(audio.tags.keys()) if k.lower() not in keep_lower]
+        if not to_remove:
+            return False
+        for k in to_remove:
+            del audio.tags[k]
+        audio.save()
+        return True
+    except Exception:
+        return False
+
+
 def _encoder_dict(program, quality, version, enabled=None):
     tags = {}
     if _enabled(enabled, "ENCODER_PROGRAM"):

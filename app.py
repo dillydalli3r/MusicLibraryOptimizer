@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.3 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.4 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.3.3 features: cover resize/crop,
+stable Tkinter engine with all v1.3.4 features: cover resize/crop,
 per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
 customizable pattern, etc.
 
@@ -2440,6 +2440,7 @@ class App(tk.Tk):
         self._folder_artist = {}
         self._grade_cache = {}
         self._checked = {}
+        self._last_clicked = None
         self._item_paths = {}
         self._item_base = {}
         self._path_items = {}
@@ -3075,6 +3076,9 @@ class App(tk.Tk):
         region = self.library_tree.identify_region(event.x, event.y)
         if region not in ("tree", "cell"):
             return
+        # Check modifiers: Shift (0x0001) and Control (0x0004) for multi-select
+        is_shift = bool(event.state & 0x0001)
+        is_ctrl = bool(event.state & 0x0004)
         # Easier hit targets: arrow and checkbox are now well separated
         # (indent=30 + "  ☐  " prefix). Arrow lives in x < 34, checkbox in
         # 34..~70, text after. We explicitly split the hit zones.
@@ -3099,10 +3103,22 @@ class App(tk.Tk):
             # Checkbox zone: the "  ☐  " / "  ☑  " prefix — approx 36px wide
             # Any click within ~40px of the text start toggles the checkbox.
             if event.x < bbox[0] + 38:
-                self._toggle_item(item)
+                if is_shift and hasattr(self, "_last_clicked") and self._last_clicked:
+                    self._toggle_range(self._last_clicked, item)
+                elif is_ctrl:
+                    self._toggle_item(item, cascade=False)
+                else:
+                    self._toggle_item(item)
+                self._last_clicked = item
                 return
         # Fallback: click on the row's text still toggles checkbox
-        self._toggle_item(item)
+        if is_shift and hasattr(self, "_last_clicked") and self._last_clicked:
+            self._toggle_range(self._last_clicked, item)
+        elif is_ctrl:
+            self._toggle_item(item, cascade=False)
+        else:
+            self._toggle_item(item)
+        self._last_clicked = item
 
     def _on_tree_double(self, event):
         item = self.library_tree.identify_row(event.y)
@@ -3111,22 +3127,78 @@ class App(tk.Tk):
                 item, open=not bool(self.library_tree.item(item, "open"))
             )
 
-    def _toggle_item(self, item):
+    def _get_all_items_in_display_order(self):
+        """Return all tree items in visible display order for Shift+Click range."""
+        result = []
+        def dfs(node):
+            for child in self.library_tree.get_children(node):
+                result.append(child)
+                # Only traverse expanded children for visible order; collapsed
+                # children are not visible and should not be in range
+                if self.library_tree.item(child, "open"):
+                    dfs(child)
+        dfs("")
+        return result
+
+    def _toggle_range(self, from_item, to_item):
+        """Shift+Click: set all items between from_item and to_item to the new state of to_item."""
+        all_items = self._get_all_items_in_display_order()
+        try:
+            i1 = all_items.index(from_item)
+            i2 = all_items.index(to_item)
+        except ValueError:
+            self._toggle_item(to_item)
+            return
+        lo, hi = (i1, i2) if i1 <= i2 else (i2, i1)
+        # New state is the toggled state of the target item (checked -> unchecked, etc.)
+        target_path = self._item_paths.get(to_item)
+        new_state = not self._checked.get(target_path, False) if target_path else True
+        for idx in range(lo, hi + 1):
+            it = all_items[idx]
+            p = self._item_paths.get(it)
+            b = self._item_base.get(it)
+            if p and b is not None:
+                self._checked[p] = new_state
+                self.library_tree.item(it, text=self._checked_text(p, b))
+        # After range, update ancestors for all affected parents
+        for it in all_items[lo:hi+1]:
+            parent = self.library_tree.parent(it)
+            while parent:
+                pp = self._item_paths.get(parent)
+                pb = self._item_base.get(parent)
+                if pp and pb is not None:
+                    children = self.library_tree.get_children(parent)
+                    if children:
+                        all_chk = all(self._checked.get(self._item_paths.get(c), False) for c in children if self._item_paths.get(c))
+                        none_chk = not any(self._checked.get(self._item_paths.get(c), False) for c in children if self._item_paths.get(c))
+                        should = all_chk and not none_chk
+                        if self._checked.get(pp, False) != should:
+                            self._checked[pp] = should
+                            self.library_tree.item(parent, text=self._checked_text(pp, pb))
+                parent = self.library_tree.parent(parent)
+        self._update_selection_label()
+
+    def _toggle_item(self, item, cascade=True):
         path = self._item_paths.get(item)
         base = self._item_base.get(item)
         if not path or base is None:
             return
         new_state = not self._checked.get(path, False)
-        # Cascade down to every descendant
-        def set_down(node, state):
-            p = self._item_paths.get(node)
-            b = self._item_base.get(node)
-            if p and b is not None:
-                self._checked[p] = state
-                self.library_tree.item(node, text=self._checked_text(p, b))
-            for child in self.library_tree.get_children(node):
-                set_down(child, state)
-        set_down(item, new_state)
+        if cascade:
+            # Cascade down to every descendant (default for normal clicks on folders)
+            def set_down(node, state):
+                p = self._item_paths.get(node)
+                b = self._item_base.get(node)
+                if p and b is not None:
+                    self._checked[p] = state
+                    self.library_tree.item(node, text=self._checked_text(p, b))
+                for child in self.library_tree.get_children(node):
+                    set_down(child, state)
+            set_down(item, new_state)
+        else:
+            # Ctrl+Click: toggle only this item (no cascade)
+            self._checked[path] = new_state
+            self.library_tree.item(item, text=self._checked_text(path, base))
         # Update ancestors to reflect children states (checked only if all
         # children checked, otherwise unchecked — Tk shows a single box so
         # partial is shown as unchecked but parent can be re-checked to select all)
@@ -4215,6 +4287,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

@@ -59,6 +59,15 @@ def _optimize_flac(args):
     filename = os.path.basename(filepath)
     temp_path = filepath + ".opttmp.flac"
 
+    # Always clean Vorbis tags: remove unused metadata while keeping the
+    # whitelist (grading/audit/lyrics etc.). Do this even when the file
+    # would otherwise be skipped, so .log-ignored metadata never accumulates.
+    try:
+        from .containers import _clean_flac_tags
+        _clean_flac_tags(filepath)
+    except Exception:
+        pass
+
     should_reencode, reason, ours = _should_reencode_flac(
         filepath,
         flac_level,
