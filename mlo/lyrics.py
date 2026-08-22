@@ -123,6 +123,7 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
                        lrc_enhanced_enabled=True,
                        lrc_enhanced_word_sync=True,
                        lrc_extended_enabled=True,
+                       lrc_add_zero_timestamp=False,
                        cfg=None):
     """
     Cleans lyrics:
@@ -146,6 +147,7 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
         lrc_enhanced_enabled = cfg.get("lrc_enhanced_enabled", lrc_enhanced_enabled)
         lrc_enhanced_word_sync = cfg.get("lrc_enhanced_word_sync", lrc_enhanced_word_sync)
         lrc_extended_enabled = cfg.get("lrc_extended_enabled", lrc_extended_enabled)
+        lrc_add_zero_timestamp = cfg.get("lrc_add_zero_timestamp", lrc_add_zero_timestamp)
         # precision/strip/collapse may also be in cfg when called via grader
         try:
             precision = int(cfg.get("lrc_timestamp_precision", precision))
@@ -190,10 +192,12 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
             parts = _split_merged_ts(s)
 
         # A [00:00.00] stacked directly in front of other timestamps is
-        # a start-of-file marker that labels no text of its own.
-        while (len(parts) > 1 and _stamp_only(parts[0])
-               and _part_stamp(parts[0]) == zero_ts):
-            parts = parts[1:]
+        # a start-of-file marker that labels no text of its own — unless the
+        # compatibility zero-timestamp option is enabled (then it is intentional).
+        if not lrc_add_zero_timestamp:
+            while (len(parts) > 1 and _stamp_only(parts[0])
+                   and _part_stamp(parts[0]) == zero_ts):
+                parts = parts[1:]
 
         # Timestamp-only line: hold the stamps for the next untimed
         # text line (dropped for good at a blank line, at EOF, or when
@@ -245,6 +249,70 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
     while cleaned and cleaned[-1] == "":
         cleaned.pop()
 
+    # Compatibility: ensure first lyric line carries [00:00.00] when enabled.
+    # When lrc_add_zero_timestamp is True, the very first non-blank lyric line
+    # must start with the zero timestamp. If it doesn't, we insert a new zero
+    # line with the same text before it (duplicate at 0 and at original time).
+    # Detection respects the current precision and is idempotent.
+    if lrc_add_zero_timestamp and cleaned:
+        # Find first non-blank, non-metadata lyric line
+        first_idx = None
+        for idx, ln in enumerate(cleaned):
+            s = ln.strip()
+            if not s:
+                continue
+            if strip_metadata and LRC_META_RE.match(s):
+                if lrc_enhanced_enabled and WORD_TS_RE.search(s):
+                    pass
+                else:
+                    continue
+            first_idx = idx
+            break
+        if first_idx is not None:
+            first_line = cleaned[first_idx]
+            if not first_line.startswith(zero_ts):
+                # Extract display text without leading line timestamps
+                text_part = first_line
+                # Strip all leading [mm:ss.xx] blocks
+                while True:
+                    m = TIMESTAMP_RE.match(text_part)
+                    if m:
+                        text_part = text_part[m.end():].lstrip()
+                    else:
+                        break
+                # If the first line was timestamp-only or text extraction left
+                # it empty, look ahead for the next lyric text
+                if not text_part:
+                    for nxt in range(first_idx + 1, len(cleaned)):
+                        nxt_s = cleaned[nxt].strip()
+                        if not nxt_s:
+                            continue
+                        if strip_metadata and LRC_META_RE.match(nxt_s):
+                            if lrc_enhanced_enabled and WORD_TS_RE.search(nxt_s):
+                                pass
+                            else:
+                                continue
+                        nxt_text = cleaned[nxt]
+                        while True:
+                            m2 = TIMESTAMP_RE.match(nxt_text)
+                            if m2:
+                                nxt_text = nxt_text[m2.end():].lstrip()
+                            else:
+                                break
+                        if nxt_text:
+                            text_part = nxt_text
+                            break
+                    # Still empty? Use empty (will produce bare zero line)
+                # Build zero line
+                zero_line = f"{zero_ts}{text_part}" if text_part else zero_ts
+                # If first line already has a line timestamp, insert new zero line
+                # before it (keeping original). If it was untimed, replace it
+                # to avoid duplicating plain text.
+                if TIMESTAMP_RE.match(first_line):
+                    cleaned.insert(first_idx, zero_line)
+                else:
+                    cleaned[first_idx] = zero_line
+
     return "\n".join(cleaned)
 
 
@@ -291,6 +359,7 @@ def _format_for_storage(text, cfg, optimize=True):
             lrc_enhanced_enabled=cfg.get("lrc_enhanced_enabled", True),
             lrc_enhanced_word_sync=cfg.get("lrc_enhanced_word_sync", True),
             lrc_extended_enabled=cfg.get("lrc_extended_enabled", True),
+            lrc_add_zero_timestamp=cfg.get("lrc_add_zero_timestamp", False),
             cfg=cfg,
         )
     return _canonical_lyrics(

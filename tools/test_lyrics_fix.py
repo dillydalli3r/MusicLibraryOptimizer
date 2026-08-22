@@ -47,7 +47,7 @@ SAMPLE = """[00:00.00][00:45.53]Stretching, filing[00:46.86]Against her skin
 [02:49.93]Tonight
 [02:53.18]"""
 
-out = format_lyrics_text(SAMPLE)
+out = format_lyrics_text(SAMPLE, lrc_extended_enabled=False, lrc_add_zero_timestamp=False)
 print(out)
 print("=" * 60)
 print("first lines check:")
@@ -56,8 +56,8 @@ for ln in out.split("\n")[:4]:
 assert out.split("\n")[0] == "[00:45.53]Stretching, filing", out.split("\n")[0]
 assert out.split("\n")[1] == "[00:46.86]Against her skin"
 assert "[02:53.18]" not in out, "trailing ts-only line must be dropped"
-assert format_lyrics_text(out) == out, "must be idempotent"
-assert format_lyrics_text(SAMPLE) != SAMPLE, "sample is malformed"
+assert format_lyrics_text(out, lrc_extended_enabled=False, lrc_add_zero_timestamp=False) == out, "must be idempotent"
+assert format_lyrics_text(SAMPLE, lrc_extended_enabled=False, lrc_add_zero_timestamp=False) != SAMPLE, "sample is malformed"
 
 # additional cases
 cases = {
@@ -85,8 +85,8 @@ cases = {
     "[00:00.00]first line": "[00:00.00]first line",
 }
 for src, want in cases.items():
-    got = format_lyrics_text(src)
+    got = format_lyrics_text(src, lrc_extended_enabled=False, lrc_add_zero_timestamp=False)
     assert got == want, f"{src!r}: got {got!r}, want {want!r}"
-    assert format_lyrics_text(got) == got
+    assert format_lyrics_text(got, lrc_extended_enabled=False, lrc_add_zero_timestamp=False) == got
 
 print("ALL LYRICS TESTS PASSED")

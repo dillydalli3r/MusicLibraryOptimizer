@@ -15,9 +15,10 @@ storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
 
-Desktop GUI (PySide6/Qt, themed) + command-line app (`mlo`) +
+Desktop GUI (Tkinter, dark-themed) + command-line app (`mlo`) +
 optional interactive console menu. **v1.2.0 adds cover resize/crop, per-format
-overrides, Enhanced LRC, and a reorganized tabbed Settings dialog.**
+overrides, Enhanced LRC (now with `[00:00.00]` compat option), and a reorganized
+Settings dialog (PySide6/Qt revamp removed — stable Tkinter is now the GUI).**
 
 ## Quick Start
 
@@ -36,7 +37,7 @@ PATH (the system scope requests admin elevation automatically). See
 [CLI (mlo)](#cli-mlo) below.
 
 **From source:** `Music Library Optimizer.bat` or `python app.py`
-(requires `pip install PySide6 mutagen`, optionally `Pillow` and `tqdm`).
+(requires `pip install mutagen`, optionally `Pillow` and `tqdm` — Tkinter is stdlib).
 
 **Console menu:** `python -m mlo` or `mlo menu`
 
@@ -64,14 +65,16 @@ PATH (the system scope requests admin elevation automatically). See
   Timestamps are normalized to the chosen precision (2/3 decimals, carry handled),
   `Extended` allows multiple `[mm:ss.xx]` on one line for karaoke, and the grader
   validates word-timestamp order/format.
-- **Reorganized Settings** — both the new Qt `gui/dialogs.py` and legacy `mlo` dialogs
-  are now grouped as `FLAC Encoding / Cover Art — Processing / Resize & Crop / Per-Format /
-  Lyrics / Enhanced LRC / CUE / Tags / Grading / Audio Audit / Interface / Updates` with
+- **Reorganized Settings** — Tkinter `app.py` dialog is now grouped as `FLAC Encoding /
+  Cover Art — Processing / Resize & Crop / Per-Format / Lyrics / Enhanced LRC (now with
+  `[00:00.00]` compat) / CUE / Tags / Grading / Audio Audit / Interface / Updates` with
   clear sub-sections and tooltips, keeping ~60 options scannable.
-- **Library Viewer / Updater / Deps polish** — Qt viewer shows cover thumbnails,
-  `Clear Filters`, persistent `Bad only / Show files / Sort`, faster inserts for large
-  libraries; Tk filter overlap fixed; updater retries on `429/5xx` with `Retry-After`,
-  verifies `MZ`+size + speed/ETA; deps installer resumes, SHA256 checks, `7-Zip` hint.
+- **Library Viewer / Updater / Deps polish** — Tkinter viewer has larger expand arrows
+  (28→32px row, wider hit-area), fixed checkbox cascade (selecting a folder now correctly
+  checks all children even after expand, no more stale unchecked children), `Clear Filters`,
+  persistent `Bad only / Show files / Sort`, faster inserts; updater retries on `429/5xx`
+  with `Retry-After`, verifies `MZ`+size + speed/ETA; deps installer resumes, SHA256 checks,
+  `7-Zip` hint.
 
 ## New in v1.1.0
 
@@ -649,19 +652,9 @@ You can also manually check anytime via **About** → **Check for Updates**.
 ## Project layout
 
 ```
-app.py                          GUI entry point (PySide6, themed) — v1.2.0
+app.py                          GUI entry point (Tkinter, dark-themed) — v1.2.0
+                                (PySide6/Qt `gui/` revamp removed; Tkinter is now primary)
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
-gui/                            PySide6 interface
-    __init__.py                 run() entry + theme bootstrap
-    theme.py                    Palettes, full-app QSS, accents, DWM title bar
-    widgets.py                  Animated toggle switch & small parts
-    console.py                  ANSI-colored console view
-    workers.py                  Script runner thread + ANSI stdout capture
-    library.py                  Library scan/grade threads + album tree
-    dialogs.py                  Settings / Custom Run / Grade Details / Tag editor
-    deps_dialog.py              Toolchain download manager
-    external.py                 External app launchers (Mp3tag/Picard/foobar2000)
-    main_window.py              Window assembly (sidebar, top bar, status bar)
 mlo/                            Core package — all processing logic
     __init__.py                 version + public re-exports (1.2.0)
     __main__.py                 python -m mlo entry

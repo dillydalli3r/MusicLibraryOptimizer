@@ -33,6 +33,7 @@
   "lrc_enhanced_enabled": true,
   "lrc_enhanced_word_sync": true,
   "lrc_extended_enabled": true,
+  "lrc_add_zero_timestamp": false,
   "append_final_newline": false,
   "keep_empty_cue_lines": false,
   "keep_other_cue_lines": false,

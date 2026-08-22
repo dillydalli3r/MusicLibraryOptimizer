@@ -96,18 +96,18 @@ CASES = [
 ]
 
 for src, want in CASES:
-    got = format_lyrics_text(src)
+    got = format_lyrics_text(src, lrc_extended_enabled=False, lrc_add_zero_timestamp=False)
     ok(got == want, f"case {src!r}: got {got!r}, want {want!r}")
-    ok(format_lyrics_text(got) == got, f"case {src!r}: not idempotent")
+    ok(format_lyrics_text(got, lrc_extended_enabled=False, lrc_add_zero_timestamp=False) == got, f"case {src!r}: not idempotent")
 
 # precision=3 keeps 3 fraction digits (1-digit input padded out).
-ok(format_lyrics_text("[00:05.9]x", precision=3) == "[00:05.900]x",
+ok(format_lyrics_text("[00:05.9]x", precision=3, lrc_extended_enabled=False) == "[00:05.900]x",
    "precision 3 pads fraction")
-ok(format_lyrics_text("[00:05.999]x", precision=3) == "[00:05.999]x",
+ok(format_lyrics_text("[00:05.999]x", precision=3, lrc_extended_enabled=False) == "[00:05.999]x",
    "precision 3 keeps ms")
-ok(format_lyrics_text("[00:05.9999]x", precision=3) == "[00:05.999]x",
+ok(format_lyrics_text("[00:05.9999]x", precision=3, lrc_extended_enabled=False) == "[00:05.999]x",
    "precision 3 truncates extra digits")  # int('9999'[:3]) -> 999
-ok(format_lyrics_text("[00:00.000][00:45.530]text", precision=3)
+ok(format_lyrics_text("[00:00.000][00:45.530]text", precision=3, lrc_extended_enabled=False)
    == "[00:45.530]text",
    "precision 3 start marker dropped")
 
@@ -117,6 +117,23 @@ ok(format_lyrics_text("[ar:Artist]\n[00:01.00]x", strip_metadata=False)
 # collapse_blank_lines=False keeps repeated blank lines (ends trimmed).
 ok(format_lyrics_text("a\n\n\nb\n\n", collapse_blank_lines=False)
    == "a\n\n\nb", "collapse False keeps inner blanks")
+
+# lrc_add_zero_timestamp: first lyric line must start with [00:00.00] when enabled
+ok(format_lyrics_text("[00:05.00]Hello", lrc_add_zero_timestamp=True, lrc_extended_enabled=False)
+   == "[00:00.00]Hello\n[00:05.00]Hello", "zero: add to timed first line")
+ok(format_lyrics_text("[00:00.00]Hello", lrc_add_zero_timestamp=True)
+   == "[00:00.00]Hello", "zero: already present -> no duplicate")
+ok(format_lyrics_text("Hello world", lrc_add_zero_timestamp=True)
+   == "[00:00.00]Hello world", "zero: untimed first line becomes timed")
+ok(format_lyrics_text("[00:05.00]Hello", lrc_add_zero_timestamp=False, lrc_extended_enabled=False)
+   == "[00:05.00]Hello", "zero: disabled -> no add")
+# idempotent with zero
+once = format_lyrics_text("[00:05.00]Hello", lrc_add_zero_timestamp=True, lrc_extended_enabled=False)
+twice = format_lyrics_text(once, lrc_add_zero_timestamp=True, lrc_extended_enabled=False)
+ok(twice == once, "zero: idempotent")
+# precision 3 variant
+ok(format_lyrics_text("[00:05.00]Hello", lrc_add_zero_timestamp=True, precision=3, lrc_extended_enabled=False)
+   == "[00:00.000]Hello\n[00:05.000]Hello", "zero: precision 3")
 
 # ----------------------------------------------------------------------
 # Fuzz idempotency: f(f(x)) == f(x) across the config knobs

@@ -2,7 +2,8 @@
 rem ============================================================
 rem  Music Library Optimizer v1.2.0 - executable builder
 rem  Produces: Music Library Optimizer.exe (GUI) + mlo.exe (CLI)
-rem  Requires: pip install pyinstaller mutagen pillow PySide6
+rem  Requires: pip install pyinstaller mutagen pillow
+rem  GUI: Tkinter (stdlib, no extra install) + optional Pillow for cover resize
 rem  Output:   dist\Music Library Optimizer.exe + dist\mlo.exe
 rem            (also copied to project root for convenience)
 rem ============================================================

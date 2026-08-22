@@ -480,7 +480,7 @@ def cmd_menu(_args):
 
 
 def cmd_gui(_args):
-    """Launch the PySide6 GUI (same folder / install)."""
+    """Launch the Tkinter GUI (same folder / install)."""
     if getattr(sys, "frozen", False):
         exe = os.path.join(SCRIPT_DIR, "Music Library Optimizer.exe")
         if os.path.isfile(exe):

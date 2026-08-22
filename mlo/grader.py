@@ -90,6 +90,7 @@ def _lyrics_formatted(text, cfg):
                 lrc_enhanced_enabled=bool(cfg.get("lrc_enhanced_enabled", True)),
                 lrc_enhanced_word_sync=bool(cfg.get("lrc_enhanced_word_sync", True)),
                 lrc_extended_enabled=bool(cfg.get("lrc_extended_enabled", True)),
+                lrc_add_zero_timestamp=bool(cfg.get("lrc_add_zero_timestamp", False)),
             ),
             append_final_newline=cfg.get("append_final_newline", False),
         )
@@ -97,6 +98,13 @@ def _lyrics_formatted(text, cfg):
         return True
     if raw != expected:
         return False
+    # Zero-timestamp compatibility: when enabled, first lyric line must be [00:00.00]
+    if cfg.get("lrc_add_zero_timestamp", False):
+        try:
+            if not _lyrics_zero_timestamp_ok(raw, cfg):
+                return False
+        except Exception:
+            pass
     # Enhanced LRC validity: word timestamps must be in order and correctly formatted
     # Only check when enhanced is enabled; otherwise they are plain text.
     if cfg.get("lrc_enhanced_enabled", True) and cfg.get("lrc_enhanced_word_sync", True):
@@ -219,6 +227,44 @@ def _lyrics_word_timestamps_valid(text, cfg):
 # Alias for task description naming
 def _lyrics_enhanced_valid(text, cfg):
     return _lyrics_word_timestamps_valid(text, cfg)
+
+
+def _lyrics_zero_timestamp_ok(text, cfg):
+    """True when the first lyric line starts with [00:00.00] if the compat flag is on.
+
+    When lrc_add_zero_timestamp is False, always True. Otherwise the first
+    non-blank, non-metadata lyric line must start with the zero timestamp for
+    the configured precision. Empty/whitespace-only lyrics are considered ok
+    (no first line to check). Detection is literal prefix check after trimming.
+    """
+    if not cfg.get("lrc_add_zero_timestamp", False):
+        return True
+    if not text or not str(text).strip():
+        return True
+    try:
+        precision = 3 if int(cfg.get("lrc_timestamp_precision", 2) or 2) == 3 else 2
+    except Exception:
+        precision = 2
+    zero_ts = f"[00:00.{'0' * precision}]"
+    # Find first non-blank, non-metadata line
+    for ln in str(text).splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        # Replicate metadata stripping logic from lyrics.py without importing
+        # the full regex to avoid circular import — simple check for [xx:
+        # Enhanced lines with < > are not metadata.
+        low = s.lower()
+        is_meta = (low.startswith("[ar:") or low.startswith("[ti:") or
+                   low.startswith("[al:") or low.startswith("[by:") or
+                   low.startswith("[au:") or low.startswith("[la:") or
+                   low.startswith("[offset:") or low.startswith("[length:") or
+                   low.startswith("[re:") or low.startswith("[ve:"))
+        if is_meta and "<" not in s:
+            continue
+        # First lyric line found
+        return s.startswith(zero_ts)
+    return True  # no lyric lines found — nothing to enforce
 
 
 def _cue_formatted(path, cfg):

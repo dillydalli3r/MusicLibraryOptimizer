@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
     "lrc_enhanced_enabled": True,
     "lrc_enhanced_word_sync": True,
     "lrc_extended_enabled": True,
+    "lrc_add_zero_timestamp": False,
     # Disabled by default to preserve the byte-exact no-final-newline mode.
     "append_final_newline": False,
     "keep_empty_cue_lines": False,
@@ -152,9 +153,10 @@ DEFAULT_CONFIG = {
     "library_sort": "name",
     "library_columns": {},
 
-    # v1.1.0 PySide6 GUI: theme ("dark" | "light" | "system"), accent
-    # color ("" = theme default, else #rrggbb), and whether the library
-    # tree also lists non-audio files inside each album.
+    # GUI: theme ("dark" | "light" | "system"), accent color ("" = theme
+    # default, else #rrggbb), and whether the library tree also lists
+    # non-audio files inside each album. Tkinter is now the GUI (PySide6
+    # removed as obsolete).
     "theme": "dark",
     "accent_color": "",
     "library_show_all_files": False,
