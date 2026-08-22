@@ -222,18 +222,19 @@ def verify_album_checksums(ffmpeg_exe, album_dir, paths, config=None):
     multi = bool(discs)
 
     verdicts = {}
+    pattern = _disc_pattern_for(config)
     for p in paths:
         d = disc_of_filename(os.path.basename(p))
         if d is None or d < 1:
             d = 1
         if multi:
-            log_path = os.path.join(album_dir, f"CD-{d}.log")
+            log_path = os.path.join(album_dir, _disc_expected_name(pattern, d, ".log"))
             if not os.path.isfile(log_path):
-                unverified[p] = f"missing CD-{d}.log"
+                unverified[p] = f"missing {_disc_expected_name(pattern, d, '.log')}"
                 continue
             per_track = parse_log_checksums(read_log_text(log_path))
             if not per_track:
-                unverified[p] = f"CD-{d}.log has no per-track CRCs"
+                unverified[p] = f"{_disc_expected_name(pattern, d, '.log')} has no per-track CRCs"
                 continue
         else:
             per_track = {}
@@ -280,10 +281,42 @@ def _rename(src, dst, notes):
         return False
 
 
+def _disc_pattern_for(config):
+    """Return the discs rename pattern (e.g. 'CD-{n}') with {n} placeholder."""
+    if config is None:
+        return "CD-{n}"
+    pat = str(config.get("discs_rename_pattern", "CD-{n}")).strip()
+    if "{n}" not in pat:
+        return "CD-{n}"
+    return pat[:32]
+
+
+def _disc_expected_name(pattern, disc, ext):
+    """Render pattern for a disc number, with extension."""
+    base = pattern.replace("{n}", str(disc))
+    # Ensure extension matches expected (lowercase comparison, keep ext as passed)
+    if not base.lower().endswith(ext.lower()):
+        base += ext
+    return base
+
+
+def _is_expected_disc_file(name, pattern, ext):
+    """True if filename matches the pattern for any disc 1..99."""
+    for n in range(1, 100):
+        if name.lower() == _disc_expected_name(pattern, n, ext).lower():
+            return True
+    return False
+
+
 def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
-    """Rename cues to CD-N.cue based on their FILE entries."""
+    """Rename cues to <pattern>.cue based on their FILE entries.
+
+    Pattern is configurable via discs_rename_pattern (default 'CD-{n}').
+    Uses only content-derived evidence (FILE entries), never order.
+    """
     if config is not None and not config.get("discs_rename_enabled", True):
         return []
+    pattern = _disc_pattern_for(config)
     discs = discs if discs is not None else album_discs(album_dir)
     if not discs:
         return []
@@ -296,7 +329,7 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
     for f in sorted(os.listdir(album_dir)):
         if not f.lower().endswith(".cue"):
             continue
-        if re.match(r"^CD-\d{1,2}\.cue$", f, re.IGNORECASE):
+        if _is_expected_disc_file(f, pattern, ".cue"):
             continue
         path = os.path.join(album_dir, f)
         try:
@@ -311,7 +344,7 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
                 file_discs.add(d)
         if len(file_discs) == 1:
             d = file_discs.pop()
-            dst = os.path.join(album_dir, f"CD-{d}.cue")
+            dst = os.path.join(album_dir, _disc_expected_name(pattern, d, ".cue"))
             if not os.path.exists(dst):
                 _rename(path, dst, notes)
     if log_fn and notes:
@@ -330,9 +363,10 @@ def _log_name_disc(name):
 
 
 def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
-    """Rename logs to CD-N.log using content-derived evidence only."""
+    """Rename logs to <pattern>.log using content-derived evidence only."""
     if config is not None and not config.get("discs_rename_enabled", True):
         return []
+    pattern = _disc_pattern_for(config)
     discs = discs if discs is not None else album_discs(album_dir)
     if not discs:
         return []
@@ -344,7 +378,7 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
     remaining = []
     claimed = {}
     for f in logs:
-        if re.match(r"^CD-\d{1,2}\.log$", f, re.IGNORECASE):
+        if _is_expected_disc_file(f, pattern, ".log"):
             d = _log_name_disc(f)
             if d:
                 claimed.setdefault(d, f)
@@ -384,7 +418,7 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
                     durations.pop(d, None)
 
     for d, f in sorted(claimed.items()):
-        dst = os.path.join(album_dir, f"CD-{d}.log")
+        dst = os.path.join(album_dir, _disc_expected_name(pattern, d, ".log"))
         if os.path.normcase(dst) == os.path.normcase(os.path.join(album_dir, f)):
             continue
         if not os.path.exists(dst):
@@ -584,15 +618,19 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
     if media != "CD":
         return {}, notes
 
+    # Fix FILE entries first (conservative) so the subsequent
+    # FILE->disc mapping for renaming has correct references; .log
+    # files are never modified — only renamed.
+    fix_cue_filenames(album_dir, log_fn=log_fn, config=config)
     rename_logs_for_discs(album_dir, discs, log_fn=log_fn, config=config)
     rename_cues_for_discs(album_dir, discs, log_fn=log_fn, config=config)
-    fix_cue_filenames(album_dir, log_fn=log_fn, config=config)
 
     scores = {}
+    pattern = _disc_pattern_for(config)
     for d, paths in sorted(discs.items()):
-        log_path = os.path.join(album_dir, f"CD-{d}.log")
+        log_path = os.path.join(album_dir, _disc_expected_name(pattern, d, ".log"))
         if not os.path.isfile(log_path):
-            notes.append(f"disc {d}: no CD-{d}.log")
+            notes.append(f"disc {d}: no {_disc_expected_name(pattern, d, '.log')}")
             continue
         if not force:
             have = []
@@ -604,7 +642,7 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
                 continue  # already graded
         score = score_disc_log(cli_exe, log_path, paths)
         if score is None:
-            notes.append(f"disc {d}: could not score CD-{d}.log")
+            notes.append(f"disc {d}: could not score {_disc_expected_name(pattern, d, '.log')}")
             continue
         scores[d] = score
         for p in paths:

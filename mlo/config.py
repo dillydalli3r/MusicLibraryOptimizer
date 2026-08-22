@@ -71,6 +71,7 @@ DEFAULT_CONFIG = {
     # conservative CUE FILE-name correction. Both are content-derived —
     # nothing is renamed when the evidence is ambiguous.
     "discs_rename_enabled": True,
+    "discs_rename_pattern": "CD-{n}",
     "cue_fix_filenames": True,
 
     # Music-file tag writes
@@ -267,6 +268,16 @@ def normalize_config(user=None) -> dict:
         except (TypeError, ValueError):
             cfg[k] = DEFAULT_CONFIG[k]
         cfg[k] = max(0, min(4000, cfg[k]))
+
+    # Discs rename pattern: must contain {n}, reasonable length, no path sep
+    pat = cfg.get("discs_rename_pattern", "CD-{n}")
+    if not isinstance(pat, str) or "{n}" not in pat:
+        pat = "CD-{n}"
+    # Sanitize: no directory separators, no null, limit length
+    pat = pat.replace("/", "").replace("\\", "").strip()[:32] or "CD-{n}"
+    if "{n}" not in pat:
+        pat = "CD-{n}"
+    cfg["discs_rename_pattern"] = pat
 
     default_tags = DEFAULT_CONFIG["encoder_tags"]
     user_tags = cfg.get("encoder_tags") if isinstance(cfg.get("encoder_tags"), dict) else {}

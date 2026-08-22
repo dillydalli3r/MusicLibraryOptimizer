@@ -873,6 +873,30 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             failed_checks += 1
             add_issue("Missing .cue file", "album")
 
+        # CD rip naming: .log/.cue must match discs_rename_pattern (default
+        # CD-{n} → CD-1 … CD-11) — the deterministic scheme from discs.py.
+        # If autorename left a file under its original name (ambiguous case,
+        # or discs_rename disabled) the album fails here. .log CONTENTS are
+        # never modified — only the filename is changed.
+        try:
+            from .discs import _disc_pattern_for as _pat, _is_expected_disc_file as _is_exp
+            pat = _pat(cfg)
+            bad_logs = [f for f in all_files
+                        if f.lower().endswith(".log")
+                        and not _is_exp(f, pat, ".log")]
+            bad_cues = [f for f in all_files
+                        if f.lower().endswith(".cue")
+                        and not _is_exp(f, pat, ".cue")]
+            if bad_logs or bad_cues:
+                total_checks += 1
+                failed_checks += 1
+                detail = ", ".join(bad_logs + bad_cues)
+                add_issue(f"CD rip sheets not named {pat} (found: {detail}) — "
+                          f"enable Settings → CD Rips → Auto-Rename or "
+                          f"rename manually to {pat.replace('{n}', '1')}.log", "album")
+        except Exception:
+            pass
+
         # CD releases must carry the rip-log score on every track.
         for tr in tracks:
             if tr.get("unreadable"):
@@ -896,7 +920,8 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         try:
             from .discs import parse_log_checksums, read_log_text, \
                 album_discs as _album_discs, disc_of_filename, \
-                _file_track_number
+                _file_track_number, _disc_pattern_for as _pat2, \
+                _disc_expected_name as _exp_name
             log_paths = [os.path.join(album_dir, f)
                          for f in all_files
                          if f.lower().endswith(".log")]
@@ -923,7 +948,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     covered = tn is not None and tn in crc_map
                     if multi:
                         d = disc_of_filename(os.path.basename(ap)) or 1
-                        dlog = os.path.join(album_dir, f"CD-{d}.log")
+                        dlog = os.path.join(album_dir, _exp_name(_pat2(cfg), d, ".log"))
                         if not os.path.isfile(dlog):
                             covered = False
                     total_checks += 1
@@ -1029,6 +1054,11 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 cover_detail = f"{cover_file} (needs resize/crop)"
         else:
             cover_detail = cover_file
+    # Cover failure makes every track fail as well (per request: track/album fail)
+    if not cover_ok:
+        for tr in tracks:
+            if "COVER" not in tr["issues"]:
+                tr["issues"].append("COVER")
 
     # CUE sheet FORMATTING compliance (when a cue exists): every cue must
     # already be in the canonical form the CUE formatter would produce.

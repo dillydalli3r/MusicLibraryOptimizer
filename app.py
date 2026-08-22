@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.2.0 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.0 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.2.0 features: cover resize/crop,
-per-format overrides, Enhanced/Extended LRC, worker-limit, etc.
+stable Tkinter engine with all v1.3.0 features: cover resize/crop,
+per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
+customizable pattern, etc.
 
 Layout
 ------
@@ -169,6 +170,7 @@ CONFIG_FIELDS = [
     ("cue_fix_filenames", "Fix CUE FILE Names to Match Tracks", "bool", None),
     # CD rips — disc handling
     ("discs_rename_enabled", "Auto-Rename .cue/.log to CD-N", "bool", None),
+    ("discs_rename_pattern", "Rename pattern (use {n} for disc number)", "str", None),
     # Tags — Media/Source + writes
     ("normalize_media_source", "Normalize MEDIA/SOURCE", "bool", None),
     ("digital_media_source_value", "Digital SOURCE Value", "str", None),
@@ -703,6 +705,10 @@ FIELD_DESCRIPTIONS = {
         "for multi-disc albums (content-derived: FILE entries for cues; "
         "filename/disc-number/duration for logs). Off by default discovery "
         "still works, only the rename step is skipped.",
+    "discs_rename_pattern":
+        "Customize the autorename pattern: use {n} as disc number "
+        "(e.g. CD-{n} → CD-1.log, Disc {n} → Disc 1.log). Change both .cue "
+        "and .log together; grading checks the same pattern. Must contain {n}.",
     "normalize_media_source":
         "Enforce the MEDIA/SOURCE rule: albums with MEDIA 'Digital Media' "
         "must have SOURCE populated; all other albums must not have SOURCE.",
@@ -1135,7 +1141,7 @@ class ConfigDialog(tk.Toplevel):
                 "cue_fix_filenames",
             ]),
             ("CD Rips", [
-                "discs_rename_enabled",
+                "discs_rename_enabled", "discs_rename_pattern",
             ]),
             ("Tags — Media & Source", [
                 "normalize_media_source", "digital_media_source_value",
@@ -2000,12 +2006,12 @@ class App(tk.Tk):
         style.configure("TNotebook.client", background=CARD, borderwidth=1, relief="solid", bordercolor=BRIGHT)
 
         style.configure("Treeview", background="#121212", fieldbackground="#121212",
-                        foreground=TEXT, borderwidth=0, rowheight=32,
-                        font=_font(9), padding=(0, 4))
+                        foreground=TEXT, borderwidth=0, rowheight=26,
+                        font=_font(9), padding=(0, 2), indent=30)
         style.map("Treeview", background=[("selected", ACCENT_DARK)],
                   foreground=[("selected", "#ffffff")])
         style.configure("Treeview.Heading", background=CARD, foreground=MUTED,
-                        borderwidth=1, padding=(10, 7), relief="raised",
+                        borderwidth=1, padding=(6, 4), relief="raised",
                         font=_sfont(8), bordercolor=BRIGHT)
         style.map("Treeview.Heading",
                   background=[("active", "#1f1f1f")])
@@ -2091,13 +2097,13 @@ class App(tk.Tk):
         notebook.grid(row=0, column=1, sticky="nswe", padx=16, pady=(8, 8))
 
         # --- Library tab ---------------------------------------------------
-        library_frame = ttk.Frame(notebook, padding=(16, 12))
+        library_frame = ttk.Frame(notebook, padding=(8, 6))
         notebook.add(library_frame, text="Library")
         library_frame.columnconfigure(0, weight=1)
-        library_frame.rowconfigure(3, weight=1, minsize=180)
+        library_frame.rowconfigure(3, weight=1, minsize=160)
 
         toolbar = ttk.Frame(library_frame)
-        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         # Make toolbar responsive: left and center can shrink, right stays visible
         toolbar.columnconfigure(0, weight=1)
 
@@ -2185,9 +2191,10 @@ class App(tk.Tk):
         compact_toggle.pack(side=tk.RIGHT, padx=(0, 14))
 
         # Filter row — responsive: entry shrinks but not to zero; buttons keep min width
+        # Reduced padding so bars/sections have less space between them
         filter_frame = ttk.Frame(library_frame, style="Card.TFrame",
-                                 padding=(12, 8))
-        filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+                                 padding=(8, 5))
+        filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         filter_frame.columnconfigure(1, weight=1, minsize=80)
         filter_frame.columnconfigure(2, minsize=50)
         filter_frame.columnconfigure(3, minsize=90)
@@ -2247,9 +2254,12 @@ class App(tk.Tk):
         )
         self.library_tree.configure(columns=tuple(TREE_COLUMNS))
         for col_id, (heading, width, _default) in TREE_COLUMNS.items():
-            self.library_tree.heading(col_id, text=heading)
-            self.library_tree.column(col_id, width=width, anchor="w",
-                                     stretch=False)
+            self.library_tree.heading(col_id, text=heading, anchor="w")
+            # TAGS stretches to fill leftover space; others have minwidth
+            # so dragging the separator is obvious (intuitive resizing).
+            is_tags = col_id == "tags"
+            self.library_tree.column(col_id, width=width, minwidth=40, anchor="w",
+                                     stretch=is_tags)
 
         # Row states: green = graded pass, purple = audited only,
         # blue = graded + audited, yellow = warnings/mixed, red = failing.
@@ -2439,8 +2449,9 @@ class App(tk.Tk):
     # Library view
     # ------------------------------------------------------------------
     def _checked_text(self, path, base):
-        """Compose row text with a selection checkbox prefix."""
-        return ("☑ " if self._checked.get(path, False) else "☐ ") + base
+        """Compose row text with a selection checkbox prefix.
+        Two leading spaces spread the arrow indicator away from the checkbox."""
+        return ("  ☑  " if self._checked.get(path, False) else "  ☐  ") + base
 
     def _refresh_library(self, regrade=False):
         """Start a background scan + grade of the library folder."""
@@ -2931,18 +2942,10 @@ class App(tk.Tk):
         region = self.library_tree.identify_region(event.x, event.y)
         if region not in ("tree", "cell"):
             return
+        # Easier hit targets: arrow and checkbox are now well separated
+        # (indent=30 + "  ☐  " prefix). Arrow lives in x < 34, checkbox in
+        # 34..~70, text after. We explicitly split the hit zones.
         bbox = self.library_tree.bbox(item, column="#0")
-        # Larger hit-area for the expand/collapse arrow: left gutter (x<30)
-        # or just left of the text (x < bbox[0]-4). The old 8px margin was
-        # hard to click, especially on high-DPI displays.
-        if bbox:
-            # bbox[0] is the x offset of the text; indicator is left of it
-            if event.x < bbox[0] - 4 or event.x < 28:
-                self.library_tree.item(
-                    item, open=not bool(self.library_tree.item(item, "open"))
-                )
-                return
-        # Also handle clicking directly on the indicator element if available
         try:
             elem = self.library_tree.identify_element(event.x, event.y)
             if elem and "indicator" in elem:
@@ -2952,6 +2955,20 @@ class App(tk.Tk):
                 return
         except Exception:
             pass
+        if bbox:
+            # bbox[0] is left of the text ("  ☐  Name")
+            # Arrow zone: far left (indent area)
+            if event.x < 34 or event.x < bbox[0] - 6:
+                self.library_tree.item(
+                    item, open=not bool(self.library_tree.item(item, "open"))
+                )
+                return
+            # Checkbox zone: the "  ☐  " / "  ☑  " prefix — approx 36px wide
+            # Any click within ~40px of the text start toggles the checkbox.
+            if event.x < bbox[0] + 38:
+                self._toggle_item(item)
+                return
+        # Fallback: click on the row's text still toggles checkbox
         self._toggle_item(item)
 
     def _on_tree_double(self, event):
