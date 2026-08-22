@@ -28,7 +28,7 @@ def _should_reencode_flac(filepath, target_quality, target_version, force,
 
     q, v, program = _read_flac_tags(filepath)
 
-    if _identity_missing(enabled, q, v):
+    if _identity_missing(enabled, q, v, program):
         return True, "missing ENCODER tags", False
 
     try:

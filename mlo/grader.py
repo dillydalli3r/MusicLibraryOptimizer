@@ -715,6 +715,59 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     add_issue(f"GENRE has leading/trailing spaces ({raw!r})", basename)
                     track["issues"].append(t)
 
+        # ENCODER marker tags — per-format, only when that field is enabled.
+        # For FLAC (the only audio type the app re-encodes), check PROGRAM/QUALITY/VERSION.
+        # PROGRAM is off by default since v1.4.2, but when turned on per format grading must require it.
+        try:
+            ext_enc = os.path.splitext(ap)[1].lower()
+            enc_key = None
+            if ext_enc == ".flac":
+                enc_key = "flac"
+            elif ext_enc in (".jpg", ".jpeg"):
+                enc_key = "jpeg"
+            elif ext_enc == ".png":
+                enc_key = "png"
+            elif ext_enc == ".jxl":
+                enc_key = "jxl"
+            if enc_key:
+                enc_cfg = (cfg.get("encoder_tags") or {}).get(enc_key, {}) if cfg else {}
+                for field in ("ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"):
+                    # Default: PROGRAM off, QUALITY/VERSION on
+                    default_on = False if field == "ENCODER_PROGRAM" else True
+                    if not enc_cfg.get(field, default_on):
+                        continue
+                    # Read the tag via the underlying mutagen object (PROGRAM not in TAG_MAP for FLAC)
+                    val = None
+                    try:
+                        if af.audio is not None and hasattr(af.audio, "get"):
+                            # FLAC Vorbis via mutagen.flac.FLAC — keys are lower-case in storage
+                            # Do case-insensitive lookup
+                            raw = None
+                            # Try direct lower and upper
+                            for k in (field, field.lower(), field.upper()):
+                                if k in af.audio:
+                                    try:
+                                        raw = af.audio.get(k, [None])[0]
+                                    except Exception:
+                                        raw = None
+                                    if raw is not None:
+                                        break
+                            # Fallback via get_tag for other containers
+                            if raw is None:
+                                raw = af.get_tag(field)
+                            val = str(raw).strip() if raw is not None else None
+                        else:
+                            val = af.get_tag(field)
+                    except Exception:
+                        val = None
+                    total_checks += 1
+                    if not val:
+                        failed_checks += 1
+                        add_issue(f"Missing {field} (re-optimize)", basename)
+                        track["issues"].append(field)
+        except Exception:
+            pass
+
         # Artist for the library view (first track that has one). Keys are
         # matched case-insensitively: Picard writes lowercase Vorbis
         # comments while other taggers use uppercase.
@@ -1131,6 +1184,65 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 cover_detail = f"{cover_file} (needs resize/crop)"
         else:
             cover_detail = cover_file
+        # ENCODER for cover image per-format (only when that field is enabled)
+        try:
+            cov_ext = os.path.splitext(cover_file)[1].lower() if cover_file else ""
+            cov_enc_key = None
+            if cov_ext in (".jpg", ".jpeg"):
+                cov_enc_key = "jpeg"
+            elif cov_ext == ".png":
+                cov_enc_key = "png"
+            elif cov_ext == ".jxl":
+                cov_enc_key = "jxl"
+            if cov_enc_key and cover_file:
+                cov_enc_cfg = (config.get("encoder_tags") or {}).get(cov_enc_key, {})
+                for field in ("ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"):
+                    default_on = False if field == "ENCODER_PROGRAM" else True
+                    if not cov_enc_cfg.get(field, default_on):
+                        continue
+                    # Check presence via appropriate reader
+                    has_enc = False
+                    try:
+                        if cov_enc_key == "jpeg":
+                            from .containers import _read_jpeg_xmp_tags
+                            q, v = _read_jpeg_xmp_tags(cover_path)
+                            if field == "ENCODER_PROGRAM":
+                                # Check XMP for program (parse raw)
+                                try:
+                                    with open(cover_path, "rb") as f:
+                                        has_enc = b"ENCODER_PROGRAM" in f.read()
+                                except Exception:
+                                    has_enc = False
+                            elif field == "ENCODER_QUALITY":
+                                has_enc = q is not None and str(q).strip() != ""
+                            else:  # VERSION
+                                has_enc = v is not None and str(v).strip() != ""
+                        elif cov_enc_key == "png":
+                            from .containers import _read_png_text
+                            txt = _read_png_text(cover_path)
+                            has_enc = field in txt and str(txt[field]).strip() != ""
+                        elif cov_enc_key == "jxl":
+                            from .containers import _read_jxl_tags
+                            q, v = _read_jxl_tags(cover_path)
+                            if field == "ENCODER_PROGRAM":
+                                try:
+                                    with open(cover_path, "rb") as f:
+                                        has_enc = b"ENCODER_PROGRAM" in f.read()
+                                except Exception:
+                                    has_enc = False
+                            elif field == "ENCODER_QUALITY":
+                                has_enc = q is not None
+                            else:
+                                has_enc = v is not None
+                    except Exception:
+                        has_enc = False
+                    total_checks += 1
+                    if not has_enc:
+                        failed_checks += 1
+                        add_issue(f"Cover missing {field} (re-optimize)", "album")
+                        cover_ok = False
+        except Exception:
+            pass
     # Cover failure makes every track fail as well (per request: track/album fail)
     if not cover_ok:
         for tr in tracks:

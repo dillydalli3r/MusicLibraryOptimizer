@@ -153,20 +153,25 @@ def _encoder_dict(program, quality, version, enabled=None):
     return tags
 
 
-def _identity_missing(enabled, q, v):
-    """Whether the enabled identity tags (QUALITY/VERSION) are missing.
+def _identity_missing(enabled, q, v, p=None):
+    """Whether any enabled ENCODER identity tag is missing.
 
     Used by skip-checks: a file can only be skipped when every identity
-    tag that is actually written exists. If neither identity tag is
-    configured, files can never be identified and always re-encode.
+    tag that is actually written exists. If no identity tag is enabled,
+    files can never be identified and always re-encode. Since v1.4.2
+    ``ENCODER_PROGRAM`` is off by default, so it only gates skipping when
+    the user has explicitly enabled it per format.
     """
     need_q = _enabled(enabled, "ENCODER_QUALITY")
     need_v = _enabled(enabled, "ENCODER_VERSION")
-    if not need_q and not need_v:
+    need_p = _enabled(enabled, "ENCODER_PROGRAM")
+    if not need_q and not need_v and not need_p:
         return True
     if need_q and (q is None or str(q).strip() == ""):
         return True
     if need_v and (v is None or str(v).strip() == ""):
+        return True
+    if need_p and (p is None or str(p).strip() == ""):
         return True
     return False
 
