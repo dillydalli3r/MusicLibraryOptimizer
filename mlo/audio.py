@@ -392,7 +392,12 @@ class AudioFile:
         self._invalidate_cache()
         if self.audio is None:
             return False
-        value = str(value)
+        # Trim leading/trailing spaces for all arbitrary tags as well (user request)
+        # Keep LYRICS content as-is (multi-line), but trim other fields
+        if str(key).upper() not in ("LYRICS", "UNSYNCEDLYRICS", "TXXX:LYRICS"):
+            value = str(value).strip()
+        else:
+            value = str(value)
 
         try:
             if self.kind in ("flac", "ogg", "opus"):
@@ -514,23 +519,19 @@ class AudioFile:
         name = str(name).upper()
         if name == "LYRICS":
             return self.set_lyrics(value)
-        # Normalize GENRE and ITUNESADVISORY per user request: trimmed, and
-        # ITUNESADVISORY strictly 0/1/2. This ensures formatting/optimization
-        # never writes spaced/invalid values.
-        if name == "GENRE":
-            value = str(value).strip()
-        elif name == "ITUNESADVISORY":
-            value = str(value).strip()
-            if value not in ("0", "1", "2"):
-                # Still write the trimmed value, but grading will flag invalid
-                # values (non-0/1/2) as failure; we don't silently coerce.
-                pass
+        # User request: all written tags must have no leading/trailing spaces.
+        # Trim every value (except LYRICS which is handled separately) and
+        # enforce ITUNESADVISORY 0/1/2.
+        value = str(value).strip()
+        if name == "ITUNESADVISORY" and value not in ("0", "1", "2"):
+            # Still write the trimmed value, but grading will flag invalid
+            # values (non-0/1/2) as failure; we don't silently coerce.
+            pass
         spec = TAG_MAP.get(name)
         if spec is None:
             return False
 
         kind = self.kind
-        value = str(value)
 
         try:
             if kind in ("flac", "ogg", "opus"):

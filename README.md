@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.3.7
+# Music Library Optimizer v1.3.8
 
 > ## ⚠️ VIBE CODED
 >
@@ -14,15 +14,15 @@ lyrics (including **Enhanced / Extended LRC word-sync**) — optimizing both
 storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
-Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.7`) + command-line app (`mlo`) +
-optional interactive console menu. **v1.3.7 defaults to both AudioAuditor+`.log` for CD `AUDIT` (both must be `REAL`), covers exactly `1000×1000` (resize+force exact+enforce), and all effort values at maximum (`FLAC 8`, `JXL 10`, `PNG 6`).**
+Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.8`) + command-line app (`mlo`) +
+optional interactive console menu. **v1.3.8 defaults to both AudioAuditor+`.log` for CD `AUDIT` (both must be `REAL`), covers exactly `1000×1000` (resize+force exact+enforce), and all effort values at maximum (`FLAC 8`, `JXL 10`, `PNG 6`).**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.7_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.8_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.3.7_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.3.8_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -41,8 +41,10 @@ PATH (the system scope requests admin elevation automatically). See
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
 
-## New in v1.3.7
+## New in v1.3.8
 
+- **Tag hygiene — all written tags trimmed, preserve list in Guide** — `mlo/audio.py:set_tag` and `set_any_tag` now `strip()` every value (except multi-line `LYRICS`) so `ITUNESADVISORY`/`GENRE`/other tags never have leading/trailing spaces; `mlo/grader.py` now fails `ITUNESADVISORY` if raw `!= stripped` or not in `0/1/2` and `GENRE` if `raw != stripped`, while `mlo/autotag.py` trims `GENRE`/`ITUNESADVISORY` on the fly before deriving `ALBUMITUNESADVISORY`. **Setup Guide** (`app.py: SetupWizard`) now has an `⑧  MusicBrainz Picard — Preserve Tags` card with a selectable `Text` widget containing the full 40-tag preserve list (`TITLE, ALBUM…AUDIT, LOG_GRADE, ENCODER_*…`), so you can copy-paste to Picard.
+- **Full metadata/padding strip verified for all edited types** — `FLAC` via `mlo/containers.py: KEEP_VORBIS_KEYS` + `_clean_flac_tags()` on every `Optimize` (even when skipped) plus `--no-padding`/`PADDING` removal; `JPEG` via `_strip_jpeg_metadata` (`APP0-APP15`/`COM` stripped, then `ENCODER` XMP kept), `PNG` via `_strip_png_metadata` (`tEXt`/`iTXt`/`zTXt`/`eXIf`/`tIME` stripped, then `ENCODER` `tEXt` kept), `JXL` via `xml ` box replacement. `.log` never touched.
 - **Defaults now maximum quality & thorough — `AUDIT` uses both sources, covers `1000×1000`, all efforts max** — `audit_cd_require_both` now `True` (both `.log` CRC + `AudioAuditor` must be `REAL`), `cover_resize_enabled`/`cover_force_exact_size`/`cover_enforce_size`/`cover_enforce_square` all `True` (guarantees exactly `1000×1000`), `png_optimization_level` `6` (max), `jpegxl_effort` `10` (max), `flac_level` `8` (max). New installs get these; existing `config.json` updated on save.
 - **TAGS column fully visible & resizable** — `TAGS · G I A AA L` width `320→420`, `FOLDER / TRACK` `#0` now `260` `stretch`, window `1280x780` `minsize 1100x640` so `G:Alternative/Avant-Gard…` no longer cuts off; `Treeview.Heading` now `1px BORDER` (`#262626`) with `padding (5,3)` so the drag handle between `COVER` and `TAGS` is visible and resizable, and `TAGS` stretches to fill leftover space but can be manually dragged.
 
@@ -739,7 +741,7 @@ For FLAC these are Vorbis comments (`UPPERCASE`), for MP3 they are `TXXX:` frame
 ## Project layout
 
 ```
-app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.7
+app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.8
                                  (PySide6/Qt `gui/` revamp removed; Tkinter is now primary)
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
 mlo/                            Core package — all processing logic
@@ -747,7 +749,7 @@ mlo/                            Core package — all processing logic
     __main__.py                 python -m mlo entry
     paths.py                    Locations & constants (exe-aware)
     deps.py                     Optional dependency detection (mutagen/Pillow/tqdm)
-    config.py                   config.json load/save & defaults (v1.3.7 keys)
+    config.py                   config.json load/save & defaults (v1.3.8 keys)
     ui.py                       Console output helpers
     stats.py                    Run stats, byte accounting, progress hooks
     report.py                   Result report printing
@@ -777,7 +779,7 @@ tools/                          Dev helpers & tests
 docs/
     archive/                    Historical release notes
         RELEASE_NOTES_v1.1.0.md v1.1.0 detailed notes (archived)
-RELEASE_NOTES.md                v1.3.7 + v1.2.0 + v1.1.0 summary (current)
+RELEASE_NOTES.md                v1.3.8 + v1.2.0 + v1.1.0 summary (current)
 config.json                     Persisted settings (created on first save, ignored)
 config.example.json             Example/default config (tracked)
 app_icon.ico                    Application icon (256px ICO, black #0d0d0d bg)
@@ -816,7 +818,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.3.7_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.7_portable_x64.exe` + `dist/mlo.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.3.8_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.8_portable_x64.exe` + `dist/mlo.exe`
 
 ## Rebuilding the exe (without installer)
 
@@ -840,6 +842,7 @@ The exe reads `config.json` and `.dependencies/` from its own folder.
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
 
 
 

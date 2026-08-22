@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.7 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.8 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.3.7 features: cover resize/crop,
+stable Tkinter engine with all v1.3.8 features: cover resize/crop,
 per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
 customizable pattern, etc.
 
@@ -1706,6 +1706,26 @@ class SetupWizard(tk.Toplevel):
                                self.CD_PRESETS, self._cd_var)
         self._add_preset_group(preset_host, "⑦  Grading & Audit — strictness",
                                self.GENERAL_PRESETS, self._general_var)
+
+        # Picard preserve list — for FLAC tag cleaning
+        picard_card = ttk.Frame(preset_host, style="Card.TFrame", padding=(12, 10))
+        picard_card.pack(fill=tk.X, pady=(14, 0))
+        ttk.Label(picard_card, text="⑧  MusicBrainz Picard — Preserve Tags (for FLAC)",
+                  style="Card.TLabel", font=_sfont(9)).pack(anchor="w")
+        ttk.Label(picard_card, text="If you use Picard's 'Clear existing tags', add these to Options → Tags → Preserve these tags from being cleared. Covers all 8 scripts + standard music tags. The app's own FLAC cleaning keeps exactly this whitelist.",
+                  style="Muted.Card.TLabel", wraplength=700, justify=tk.LEFT, font=_font(8)).pack(anchor="w", pady=(4, 8))
+        # Use a read-only Text for easy copy
+        txt = tk.Text(picard_card, wrap="word", height=4, background=FIELD, foreground=TEXT,
+                      insertbackground=TEXT, borderwidth=0, highlightthickness=0, padx=8, pady=6,
+                      font=_font(8), undo=False)
+        txt.insert("1.0", "TITLE, ALBUM, ARTIST, ALBUMARTIST, TRACKNUMBER, DISCNUMBER, DATE, YEAR, GENRE, COMPOSER, LYRICIST, COMMENT, LYRICS, UNSYNCEDLYRICS, BPM, COPYRIGHT, MEDIA, SOURCE, INSTRUMENTAL, ITUNESADVISORY, ALBUMITUNESADVISORY, REPLAYGAIN_TRACK_GAIN, REPLAYGAIN_TRACK_PEAK, REPLAYGAIN_ALBUM_GAIN, REPLAYGAIN_ALBUM_PEAK, DYNAMIC RANGE, ALBUM DYNAMIC RANGE, AUDIT, LOG_GRADE, ENCODER, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, AUDIO_MD5, INTEGRITY, LOG_CRC, PERFORMER, WORK, MOVEMENT, PART, CONDUCTOR, ARTISTSORT, ALBUMARTISTSORT, TITLESORT, COMPOSERSORT, ORIGINALDATE, ORIGINALYEAR, ENCODEDBY, CATALOGNUMBER, BARCODE, ISRC")
+        txt.configure(state="disabled")
+        txt.pack(fill=tk.X, pady=(0, 4))
+        # Make it selectable but not editable
+        txt.bind("<FocusIn>", lambda e: txt.configure(state="normal"))
+        txt.bind("<FocusOut>", lambda e: txt.configure(state="disabled"))
+        ttk.Label(picard_card, text="Tip: Keep 'Clear existing tags' off unless needed; the app's FLAC cleaning (KEEP_VORBIS_KEYS) already removes unused metadata.",
+                  style="Muted.Card.TLabel", font=_font(8), wraplength=700).pack(anchor="w", pady=(4, 0))
 
         # Live summary of pending changes
         summary_card = ttk.Frame(outer, style="Card.TFrame", padding=(12, 8))
@@ -4311,6 +4331,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
