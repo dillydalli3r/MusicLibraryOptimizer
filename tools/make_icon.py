@@ -49,93 +49,45 @@ def sparkle(draw, cx, cy, r, color):
 def build_master():
     big = SIZE * S
 
-    # --- background ---------------------------------------------------
-    grad = diagonal_gradient(big, (79, 70, 229), (168, 85, 247))  # indigo->violet
+    # --- background: solid black rounded square -----------------------
     img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-
     mask = rounded_mask(big, int(big * 0.225))
-    img.paste(grad, (0, 0), mask)
+    black = Image.new("RGBA", (big, big), (0, 0, 0, 255))
+    img.paste(black, (0, 0), mask)
 
-    # subtle top sheen for depth
-    sheen = Image.new("L", (big, big), 0)
-    sd = ImageDraw.Draw(sheen)
-    sd.rounded_rectangle([0, 0, big - 1, int(big * 0.55)], radius=int(big * 0.225),
-                         fill=42)
-    sheen = sheen.filter(ImageFilter.GaussianBlur(big * 0.06))
-    sheen_img = Image.new("RGBA", (big, big), (255, 255, 255, 0))
-    sheen_img.putalpha(sheen)
-    img = Image.alpha_composite(img, sheen_img)
+    # --- spectrum: white vertical bars (audio equalizer) --------------
+    # 7 bars centered, varying heights like a spectrum, rounded tops
+    bar_layer = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(bar_layer)
+    # normalized bar heights (0..1) - classic spectrum shape
+    heights = [0.32, 0.55, 0.78, 0.95, 0.72, 0.48, 0.30]
+    n = len(heights)
+    # layout: total width 62% of icon, centered
+    total_w = big * 0.62
+    gap = total_w * 0.10 / (n - 1)  # 10% of total as gaps
+    bar_w = (total_w - gap * (n - 1)) / n
+    # bottom and top bounds for bars (leave 18% top/bottom margin)
+    bottom = big * 0.78
+    top_base = big * 0.22
+    avail_h = bottom - top_base
+    start_x = (big - total_w) / 2
+    for i, h_norm in enumerate(heights):
+        h = avail_h * h_norm
+        x0 = start_x + i * (bar_w + gap)
+        x1 = x0 + bar_w
+        y0 = bottom - h
+        y1 = bottom
+        # rounded top (radius = half bar width)
+        r = bar_w * 0.28
+        # draw as rounded rectangle (flat bottom, rounded top)
+        # Use rectangle + top ellipse for rounded top
+        bd.rounded_rectangle([x0, y0, x1, y1], radius=r, fill=(255, 255, 255, 255))
+    # subtle outer glow for white bars to pop on black
+    glow = bar_layer.filter(ImageFilter.GaussianBlur(big * 0.012))
+    glow = Image.new("RGBA", (big, big), (255, 255, 255, 0))
+    # composite bars over black
+    img = Image.alpha_composite(img, bar_layer)
 
-    # soft radial glow behind the note
-    glow = Image.new("L", (big, big), 0)
-    gd = ImageDraw.Draw(glow)
-    gd.ellipse([int(big * 0.20), int(big * 0.16), int(big * 0.86), int(big * 0.82)],
-               fill=80)
-    glow = glow.filter(ImageFilter.GaussianBlur(big * 0.075))
-    glow_img = Image.new("RGBA", (big, big), (255, 255, 255, 0))
-    glow_img.putalpha(glow)
-    img = Image.alpha_composite(img, glow_img)
-
-    # --- beamed pair of eighth notes (hand-drawn geometry) --------------
-    layer = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(layer)
-    white = (255, 255, 255, 255)
-    stem_w = big * 0.048
-    lean = big * 0.035          # rightward lean over the stem height
-
-    def stem(x, y_head, y_top):
-        ld.polygon([
-            (x, y_head),
-            (x + stem_w, y_head),
-            (x + stem_w + lean, y_top),
-            (x + lean, y_top),
-        ], fill=white)
-
-    # note heads (slanted ellipses) with stems rising to the beam
-    r1x, r1y = big * 0.118, big * 0.088
-    c1 = (big * 0.265, big * 0.680)
-    r2x, r2y = big * 0.108, big * 0.082
-    c2 = (big * 0.635, big * 0.632)
-    head1 = Image.new("RGBA", (int(r1x * 2 * 1.6), int(r1y * 2 * 1.6)), (0, 0, 0, 0))
-    ImageDraw.Draw(head1).ellipse(
-        [0, 0, head1.width - 1, head1.height - 1], fill=white)
-    head1 = head1.rotate(-22, expand=True, resample=Image.BICUBIC)
-    layer.alpha_composite(head1, (int(c1[0] - head1.width / 2),
-                                  int(c1[1] - head1.height / 2)))
-    head2 = Image.new("RGBA", (int(r2x * 2 * 1.6), int(r2y * 2 * 1.6)), (0, 0, 0, 0))
-    ImageDraw.Draw(head2).ellipse(
-        [0, 0, head2.width - 1, head2.height - 1], fill=white)
-    head2 = head2.rotate(-22, expand=True, resample=Image.BICUBIC)
-    layer.alpha_composite(head2, (int(c2[0] - head2.width / 2),
-                                  int(c2[1] - head2.height / 2)))
-
-    top1, top2 = big * 0.295, big * 0.250
-    stem(c1[0] + r1x * 0.86, c1[1] + r1y * 0.30, top1)
-    stem(c2[0] + r2x * 0.86, c2[1] + r2y * 0.30, top2)
-
-    # thick beam across the stem tops (slab, slightly rising)
-    beam_t = big * 0.105
-    ld.polygon([
-        (c1[0] + lean, top1),
-        (c2[0] + stem_w + lean, top2),
-        (c2[0] + stem_w + lean, top2 + beam_t),
-        (c1[0] + lean, top1 + beam_t),
-    ], fill=white)
-    img = Image.alpha_composite(img, layer)
-
-    # --- sparkles -------------------------------------------------------
-    sp = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    spd = ImageDraw.Draw(sp)
-    sparkle(spd, int(big * 0.78), int(big * 0.225), int(big * 0.105),
-            (255, 255, 255, 255))
-    sparkle(spd, int(big * 0.665), int(big * 0.135), int(big * 0.048),
-            (255, 255, 255, 235))
-    sparkle(spd, int(big * 0.885), int(big * 0.36), int(big * 0.036),
-            (255, 255, 255, 225))
-    img = Image.alpha_composite(img, sp)
-
-    # soft drop shadow of the rounded square onto the icon edge itself
-    img = img.convert("RGB")  # ico wants opaque
     return img.resize((SIZE, SIZE), Image.LANCZOS)
 
 

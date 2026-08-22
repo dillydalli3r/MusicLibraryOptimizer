@@ -825,7 +825,8 @@ FIELD_DESCRIPTIONS = {
 class DependenciesDialog(tk.Toplevel):
     """Download / update the external toolchain from GitHub."""
 
-    KEYS = ("flac", "libjxl", "libjpeg_turbo", "oxipng", "audioauditor")
+    KEYS = ("flac", "libjxl", "libjpeg_turbo", "oxipng", "audioauditor",
+            "rsgain", "ffmpeg", "simpledrmeter")
 
     def __init__(self, app):
         super().__init__(app)
@@ -834,7 +835,8 @@ class DependenciesDialog(tk.Toplevel):
         self.configure(background=PANEL)
         self.transient(app)
         self.grab_set()
-        self.minsize(720, 440)
+        self.minsize(720, 520)
+        self.geometry("760x560")
         self.busy = False
         self.q = queue.Queue()
         self.latest = {}
@@ -1483,10 +1485,15 @@ class CustomRunDialog(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Music Library Optimizer")
+        # Version in titlebar (Windows) as requested
+        try:
+            from mlo import __version__ as _ver
+            self.title(f"Music Library Optimizer v{_ver}")
+        except Exception:
+            self.title("Music Library Optimizer")
         self.configure(background=BG)
         self.geometry("1180x760")
-        self.minsize(880, 580)
+        self.minsize(980, 620)
 
         if not HAS_MUTAGEN:
             self.withdraw()
@@ -1657,15 +1664,21 @@ class App(tk.Tk):
         style.map("TScrollbar", background=[("active", "#3a3a3a")])
 
         style.configure("TNotebook", background=BG, borderwidth=0,
-                        tabmargins=(0, 6, 0, 0))
-        # Solid tab backgrounds only: "transparent" makes unselected tabs
-        # render invisibly on some clam builds until hovered.
+                        tabmargins=(0, 2, 0, 0))
+        # Both tabs same small size regardless of selection — previously
+        # selected tab had larger padding/border causing the misaligned look
+        # in the screenshot (Library lower than Console). Use identical small
+        # padding for all states and a uniform 1px border.
         style.configure("TNotebook.Tab", background="#141414",
-                        foreground=MUTED, borderwidth=0,
-                        padding=(22, 11), font=_sfont(9))
+                        foreground=MUTED, borderwidth=1,
+                        padding=(14, 6), font=_sfont(8))
         style.map("TNotebook.Tab",
-                  background=[("selected", CARD), ("active", "#1d1d1d")],
-                  foreground=[("selected", BRIGHT), ("active", TEXT)])
+                  background=[("selected", CARD), ("!selected", "#141414"), ("active", "#1d1d1d")],
+                  foreground=[("selected", BRIGHT), ("!selected", MUTED), ("active", TEXT)],
+                  bordercolor=[("selected", BORDER), ("!selected", BORDER)],
+                  lightcolor=[("selected", BORDER), ("!selected", BORDER)],
+                  darkcolor=[("selected", BORDER), ("!selected", BORDER)],
+                  padding=[("selected", (14, 6)), ("!selected", (14, 6))])
 
         style.configure("Treeview", background="#121212", fieldbackground="#121212",
                         foreground=TEXT, borderwidth=0, rowheight=32,
@@ -1762,10 +1775,12 @@ class App(tk.Tk):
         library_frame = ttk.Frame(notebook, padding=(16, 12))
         notebook.add(library_frame, text="Library")
         library_frame.columnconfigure(0, weight=1)
-        library_frame.rowconfigure(3, weight=1)
+        library_frame.rowconfigure(3, weight=1, minsize=180)
 
         toolbar = ttk.Frame(library_frame)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        # Make toolbar responsive: left and center can shrink, right stays visible
+        toolbar.columnconfigure(0, weight=1)
 
         self.opt_selected_btn = ttk.Button(
             toolbar, text="Optimize Selected", style="Accent.TButton",
@@ -1850,11 +1865,14 @@ class App(tk.Tk):
         )
         compact_toggle.pack(side=tk.RIGHT, padx=(0, 14))
 
-        # Filter row
+        # Filter row — responsive: entry shrinks but not to zero; buttons keep min width
         filter_frame = ttk.Frame(library_frame, style="Card.TFrame",
                                  padding=(12, 8))
         filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        filter_frame.columnconfigure(1, weight=1)
+        filter_frame.columnconfigure(1, weight=1, minsize=80)
+        filter_frame.columnconfigure(2, minsize=50)
+        filter_frame.columnconfigure(3, minsize=90)
+        filter_frame.columnconfigure(4, minsize=120)
         ttk.Label(filter_frame, text="Album Artist:", style="Card.TLabel").grid(
             row=0, column=0, sticky="w", padx=(0, 8))
         self.albumartist_var = tk.StringVar(value="")
@@ -3354,7 +3372,7 @@ class App(tk.Tk):
                     self._set_running(False)
                     self.status_var.set(f"Ready — completed in {payload:.1f}s")
                     self.progress.configure(value=0)
-                    self.prog_label_var.set("")
+                    self.prog_label_var.set("Finished")
                     # Runs may have changed tags (audit verdicts, lyrics,
                     # MEDIA/SOURCE): refresh the library view so grades,
                     # the AUDIT column and row colors stay current.
