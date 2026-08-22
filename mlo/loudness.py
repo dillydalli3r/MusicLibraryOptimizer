@@ -20,6 +20,7 @@ import sys
 import tempfile
 
 from .audio import AudioFile
+from .config import should_write_audio_tag
 from .paths import AUDIO_EXTS
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _walk_files,
@@ -181,7 +182,7 @@ def _raw_tag(af, name):
     return ""
 
 
-def _write_dr_tags(album, per_track, per_title, album_dr, write_tags=True):
+def _write_dr_tags(album, per_track, per_title, album_dr, write_tags=True, config=None):
     """Write DYNAMIC RANGE + ALBUM DYNAMIC RANGE to the album's files.
 
     Rows in dr.txt are keyed by TRACK NUMBER + TITLE; files are matched by
@@ -206,6 +207,8 @@ def _write_dr_tags(album, per_track, per_title, album_dr, write_tags=True):
             continue
         try:
             if not write_tags:
+                continue
+            if config is not None and not should_write_audio_tag(config, "DYNAMIC RANGE", filepath=path):
                 continue
             changed = False
             if str(af.get_tag("DYNAMIC RANGE") or "").strip() != str(dr):
@@ -288,6 +291,20 @@ def run_calc_dr_replaygain(config):
             log(c(f"rsgain failed: {err}", Color.RED))
             stats["error_count"] += 1
             stats["errors"].append(("rsgain", err))
+        else:
+            # Strip REPLAYGAIN tags for filetypes where it is disabled per-type
+            for album, paths in rg_missing.items():
+                for p in paths:
+                    if not should_write_audio_tag(config, "REPLAYGAIN_TRACK_GAIN", filepath=p):
+                        if not _file_missing_rgain(p):
+                            # It was missing before but rsgain just wrote it — remove because per-type disabled
+                            try:
+                                af = AudioFile(p)
+                                for tk in ("REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK", "REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_PEAK"):
+                                    if af.get_tag(tk):
+                                        af.delete_tag(tk)
+                            except Exception:
+                                pass
 
     counts = {"ok": 0, "skip": 0, "fail": 0}
     pbar = _make_pbar(len(albums), "DR/ReplayGain", unit="album")
@@ -308,7 +325,17 @@ def run_calc_dr_replaygain(config):
                 if rsgain and album_failed is None:
                     for path in rg_missing.get(album, []):
                         if not _file_missing_rgain(path):
-                            album_modified += 1
+                            if should_write_audio_tag(config, "REPLAYGAIN_TRACK_GAIN", filepath=path):
+                                album_modified += 1
+                            else:
+                                # Count as not modified but strip if it was written
+                                try:
+                                    af = AudioFile(path)
+                                    for tk in ("REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK", "REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_PEAK"):
+                                        if af.get_tag(tk):
+                                            af.delete_tag(tk)
+                                except Exception:
+                                    pass
                 if dr_script and ffmpeg and album_failed is None:
                     audio_files = [f for f in os.listdir(album) if is_audio_file(f)]
                     if audio_files and (force or any(_file_missing_dr(
@@ -321,6 +348,7 @@ def run_calc_dr_replaygain(config):
                             album_modified += _write_dr_tags(
                                 album, per_track, per_title, album_dr,
                                 write_tags=config.get("write_dynamic_range_tags", True),
+                                config=config,
                             )
                             try:
                                 os.remove(dr_path)
@@ -352,7 +380,18 @@ def run_calc_dr_replaygain(config):
             if rsgain and afail is None:
                 for p in rg_missing.get(album_path, []):
                     if not _file_missing_rgain(p):
-                        amod += 1
+                        # Only count if REPLAYGAIN allowed for this filetype
+                        if should_write_audio_tag(config, "REPLAYGAIN_TRACK_GAIN", filepath=p):
+                            amod += 1
+                        else:
+                            # Strip tags that rsgain wrote but are disabled per-type
+                            try:
+                                af = AudioFile(p)
+                                for tk in ("REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK", "REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_PEAK"):
+                                    if af.get_tag(tk):
+                                        af.delete_tag(tk)
+                            except Exception:
+                                pass
             if dr_script and ffmpeg and afail is None:
                 try:
                     audio_files = [f for f in os.listdir(album_path) if is_audio_file(f)]
@@ -362,7 +401,7 @@ def run_calc_dr_replaygain(config):
                     dr_path = _run_dr_meter(dr_script, os.path.dirname(ffmpeg["ffmpeg_exe"]), album_path, workdir)
                     if dr_path:
                         per_track, per_title, album_dr = _parse_dr_file(dr_path)
-                        amod += _write_dr_tags(album_path, per_track, per_title, album_dr, write_tags=config.get("write_dynamic_range_tags", True))
+                        amod += _write_dr_tags(album_path, per_track, per_title, album_dr, write_tags=config.get("write_dynamic_range_tags", True), config=config)
                         try:
                             os.remove(dr_path)
                         except OSError:

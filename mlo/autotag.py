@@ -23,6 +23,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .audio import AudioFile
+from .config import should_write_audio_tag
 from .paths import AUDIO_EXTS
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _collect_targets,
@@ -128,7 +129,7 @@ def run_auto_tagging(config):
         # ITUNESADVISORY is exactly 0/1/2 without spaces. This is the
         # optimization step for those tags.
         for d in info:
-            # GENRE
+            # GENRE (standard tag, not gated by per-type ADVISORY — but still trim)
             try:
                 raw_genre = d["af"].get_tag("GENRE")
                 if raw_genre is not None:
@@ -140,11 +141,14 @@ def run_auto_tagging(config):
             except Exception:
                 pass
             # ITUNESADVISORY: trim spaces; keep 0/1/2 only (grading will flag others)
+            # Gated by per-filetype ADVISORY
             try:
                 raw_adv = d["af"].get_tag("ITUNESADVISORY")
                 if raw_adv is not None:
                     stripped = str(raw_adv).strip()
                     if str(raw_adv) != stripped:
+                        if not should_write_audio_tag(config, "ITUNESADVISORY", filepath=d["af"].path):
+                            continue
                         # Only write trimmed if the trimmed value is valid 0/1/2 or empty
                         # If it's invalid like " 3 ", we still trim to "3" so grading can flag the value, not the spaces
                         if d["af"].set_tag("ITUNESADVISORY", stripped):
@@ -160,6 +164,8 @@ def run_auto_tagging(config):
                             for d in info):
                 for d in info:
                     if d["album_advisory"] != str(advisory_value):
+                        if not should_write_audio_tag(config, "ALBUMITUNESADVISORY", filepath=d["af"].path):
+                            continue
                         if d["af"].set_tag("ALBUMITUNESADVISORY",
                                            str(advisory_value)):
                             modified += 1
@@ -167,10 +173,12 @@ def run_auto_tagging(config):
                 notes.append(f"advisory={advisory_value}")
 
         if do_instrumental:
-            if force or any(d["has_lyrics"] and d["instrumental"] != "0"
+            if force or any(d["has_lyrics"] and d["instrumental"] != "0" and should_write_audio_tag(config, "INSTRUMENTAL", filepath=d["af"].path)
                             for d in info):
                 for d in info:
                     if d["has_lyrics"] and d["instrumental"] != "0":
+                        if not should_write_audio_tag(config, "INSTRUMENTAL", filepath=d["af"].path):
+                            continue
                         if d["af"].set_tag("INSTRUMENTAL", "0"):
                             modified += 1
             if modified:

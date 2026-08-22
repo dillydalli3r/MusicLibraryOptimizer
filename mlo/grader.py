@@ -4,6 +4,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .audio import AudioFile
+from .config import should_write_audio_tag
 from .lyrics import _lrc_for, _canonical_lyrics, format_lyrics_text
 from .cue import canonical_cue_text
 from .paths import AUDIO_EXTS, IMAGE_EXTS
@@ -68,7 +69,20 @@ def _grade_lyrics_present(embedded, lrc, lyrics_format):
     return embedded
 
 
-def _lyrics_formatted(text, cfg):
+def _zero_target_allows_grader(cfg, is_for_lrc: bool) -> bool:
+    """Whether zero-timestamp check should apply for LRC sidecar vs embedded tag."""
+    try:
+        target = str(cfg.get("lrc_zero_timestamp_target", "BOTH")).upper()
+    except Exception:
+        target = "BOTH"
+    if target == "LRC":
+        return is_for_lrc
+    if target == "EMBEDDED":
+        return not is_for_lrc
+    return True
+
+
+def _lyrics_formatted(text, cfg, is_for_lrc=False):
     """True when the lyrics already match the configured formatting
     (timestamps, metadata stripping, blank collapse, no trailing blanks).
 
@@ -76,11 +90,13 @@ def _lyrics_formatted(text, cfg):
     must not change it (so a stray trailing newline, CRLF, or timestamp
     precision drift is caught too). When enhanced LRC is enabled, word-level
     <mm:ss.xx> timestamps are also validated for correct precision/formatting.
+    Respects lrc_zero_timestamp_target and blank mode.
     """
     if not text or not str(text).strip():
         return True
     raw = str(text)
     try:
+        eff_zero = bool(cfg.get("lrc_add_zero_timestamp", False)) and _zero_target_allows_grader(cfg, is_for_lrc)
         expected = _canonical_lyrics(
             format_lyrics_text(
                 raw,
@@ -90,7 +106,8 @@ def _lyrics_formatted(text, cfg):
                 lrc_enhanced_enabled=bool(cfg.get("lrc_enhanced_enabled", True)),
                 lrc_enhanced_word_sync=bool(cfg.get("lrc_enhanced_word_sync", True)),
                 lrc_extended_enabled=bool(cfg.get("lrc_extended_enabled", True)),
-                lrc_add_zero_timestamp=bool(cfg.get("lrc_add_zero_timestamp", False)),
+                lrc_add_zero_timestamp=eff_zero,
+                lrc_zero_timestamp_blank=bool(cfg.get("lrc_zero_timestamp_blank", False)),
             ),
             append_final_newline=cfg.get("append_final_newline", False),
         )
@@ -98,10 +115,10 @@ def _lyrics_formatted(text, cfg):
         return True
     if raw != expected:
         return False
-    # Zero-timestamp compatibility: when enabled, first lyric line must be [00:00.00]
-    if cfg.get("lrc_add_zero_timestamp", False):
+    # Zero-timestamp compatibility: when enabled for this target, first lyric line must be [00:00.00]
+    if bool(cfg.get("lrc_add_zero_timestamp", False)) and _zero_target_allows_grader(cfg, is_for_lrc):
         try:
-            if not _lyrics_zero_timestamp_ok(raw, cfg):
+            if not _lyrics_zero_timestamp_ok(raw, cfg, is_for_lrc=is_for_lrc):
                 return False
         except Exception:
             pass
@@ -229,15 +246,18 @@ def _lyrics_enhanced_valid(text, cfg):
     return _lyrics_word_timestamps_valid(text, cfg)
 
 
-def _lyrics_zero_timestamp_ok(text, cfg):
+def _lyrics_zero_timestamp_ok(text, cfg, is_for_lrc=False):
     """True when the first lyric line starts with [00:00.00] if the compat flag is on.
 
-    When lrc_add_zero_timestamp is False, always True. Otherwise the first
-    non-blank, non-metadata lyric line must start with the zero timestamp for
-    the configured precision. Empty/whitespace-only lyrics are considered ok
-    (no first line to check). Detection is literal prefix check after trimming.
+    When lrc_add_zero_timestamp is False or target doesn't allow this type,
+    always True. Otherwise the first non-blank, non-metadata lyric line must
+    start with the zero timestamp for the configured precision. In blank mode
+    it must be exactly the bare timestamp, otherwise it may have text after.
+    Empty/whitespace-only lyrics are considered ok.
     """
     if not cfg.get("lrc_add_zero_timestamp", False):
+        return True
+    if not _zero_target_allows_grader(cfg, is_for_lrc):
         return True
     if not text or not str(text).strip():
         return True
@@ -246,14 +266,12 @@ def _lyrics_zero_timestamp_ok(text, cfg):
     except Exception:
         precision = 2
     zero_ts = f"[00:00.{'0' * precision}]"
+    blank_mode = bool(cfg.get("lrc_zero_timestamp_blank", False))
     # Find first non-blank, non-metadata line
     for ln in str(text).splitlines():
         s = ln.strip()
         if not s:
             continue
-        # Replicate metadata stripping logic from lyrics.py without importing
-        # the full regex to avoid circular import — simple check for [xx:
-        # Enhanced lines with < > are not metadata.
         low = s.lower()
         is_meta = (low.startswith("[ar:") or low.startswith("[ti:") or
                    low.startswith("[al:") or low.startswith("[by:") or
@@ -263,7 +281,10 @@ def _lyrics_zero_timestamp_ok(text, cfg):
         if is_meta and "<" not in s:
             continue
         # First lyric line found
-        return s.startswith(zero_ts)
+        if blank_mode:
+            return s == zero_ts
+        else:
+            return s.startswith(zero_ts)
     return True  # no lyric lines found — nothing to enforce
 
 
@@ -658,14 +679,20 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             track["issues"].append("UNREADABLE")
 
             for t in PER_TRACK_TAGS:
+                if not should_write_audio_tag(cfg, t, filepath=ap):
+                    continue
                 total_checks += 1
                 failed_checks += 1
 
             tracks.append(track)
             continue
 
-        # Required per-track tags.
+        # Required per-track tags (skip if per-filetype disabled).
         for t in PER_TRACK_TAGS:
+            if not should_write_audio_tag(cfg, t, filepath=ap):
+                # Track not supposed to have this tag for its filetype — don't grade it
+                track["values"][t] = af.get_tag(t)
+                continue
             total_checks += 1
             val = af.get_tag(t)
             track["values"][t] = val
@@ -703,8 +730,10 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             except Exception:
                 album_artist = None
 
-        # Album-wide tag values.
+        # Album-wide tag values (only for enabled filetypes).
         for t in ALBUM_TAGS:
+            if not should_write_audio_tag(cfg, t, filepath=ap):
+                continue
             v = af.get_tag(t)
             album_tag_values.setdefault(t, set()).add(
                 str(v).strip() if v is not None else ""
@@ -721,20 +750,21 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         track["values"]["SOURCE"] = source_clean or None
 
         # AudioAuditor verdict persisted by the Audit Library script:
-        # required on every track of every media type, REAL to pass.
+        # required on every track of every media type, REAL to pass (skipped if AUDIT disabled for this filetype).
         audit_val = af.get_tag("AUDIT")
         audit_clean = str(audit_val).strip() if audit_val is not None else ""
         track["audit"] = audit_clean or None
-        total_checks += 1
-        if not audit_clean:
-            failed_checks += 1
-            add_issue("Missing AUDIT tag (run Audit Library)", basename)
-            track["issues"].append("AUDIT")
-        elif audit_clean.upper() != "REAL":
-            failed_checks += 1
-            add_issue(f"AUDIT tag is {audit_clean.upper()} (not REAL)",
-                      basename)
-            track["issues"].append("AUDIT")
+        if should_write_audio_tag(cfg, "AUDIT", filepath=ap):
+            total_checks += 1
+            if not audit_clean:
+                failed_checks += 1
+                add_issue("Missing AUDIT tag (run Audit Library)", basename)
+                track["issues"].append("AUDIT")
+            elif audit_clean.upper() != "REAL":
+                failed_checks += 1
+                add_issue(f"AUDIT tag is {audit_clean.upper()} (not REAL)",
+                          basename)
+                track["issues"].append("AUDIT")
 
         # Rip-log score (MEDIA=CD releases only, checked once MEDIA is
         # known - read here, graded in the CD section below).
@@ -763,78 +793,92 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
 
         if inst_val == "1":
             instrumental_count += 1
-            total_checks += 1
-
-            if embedded or lrc:
-                failed_checks += 1
-                add_issue("INSTRUMENTAL=1 but lyrics present", basename)
-                track["issues"].append("LYRICS")
+            if should_write_audio_tag(cfg, "INSTRUMENTAL", filepath=ap):
+                total_checks += 1
+                if embedded or lrc:
+                    failed_checks += 1
+                    add_issue("INSTRUMENTAL=1 but lyrics present", basename)
+                    track["issues"].append("LYRICS")
 
         elif inst_val == "0":
-            lyrics_expected_count += 1
-            total_checks += 1
-
-            if _grade_lyrics_present(embedded, lrc, lyrics_format):
-                lyrics_present_count += 1
-            else:
-                failed_checks += 1
-                add_issue(f"Missing lyrics ({lyrics_format.upper()})", basename)
-                track["issues"].append("LYRICS")
+            if should_write_audio_tag(cfg, "INSTRUMENTAL", filepath=ap):
+                lyrics_expected_count += 1
+                total_checks += 1
+                if _grade_lyrics_present(embedded, lrc, lyrics_format):
+                    lyrics_present_count += 1
+                else:
+                    failed_checks += 1
+                    add_issue(f"Missing lyrics ({lyrics_format.upper()})", basename)
+                    track["issues"].append("LYRICS")
 
         # Lyrics FORMATTING compliance (only when lyrics are present):
         # the stored text must already be in the canonical form the Lyrics
         # script would produce, and never carry merged timestamps.
+        # Skip if LYRICS disabled for this filetype.
         if embedded or lrc:
-            total_checks += 1
-            lyr_text = str(lyr) if embedded else None
-            lrc_text = None
-            if lrc:
-                try:
-                    with open(_lrc_for(ap), "r", encoding="utf-8",
-                              errors="replace") as _f:
-                        lrc_text = _f.read()
-                except OSError:
-                    lrc_text = None
-            fmt_ok = True
-            if lyr_text and not _lyrics_formatted(lyr_text, cfg):
-                fmt_ok = False
-            if lrc_text and not _lyrics_formatted(lrc_text, cfg):
-                fmt_ok = False
-            if (lyr_text and _lyrics_merged_timestamps(lyr_text, cfg)) or \
-               (lrc_text and _lyrics_merged_timestamps(lrc_text, cfg)):
-                fmt_ok = False
-            # Enhanced LRC word timestamp validity (order / formatting)
-            if cfg.get("lrc_enhanced_enabled", True) and cfg.get("lrc_enhanced_word_sync", True):
-                if lyr_text and not _lyrics_word_timestamps_valid(lyr_text, cfg):
+            if not should_write_audio_tag(cfg, "LYRICS", filepath=ap):
+                pass
+            else:
+                total_checks += 1
+                lyr_text = str(lyr) if embedded else None
+                lrc_text = None
+                if lrc:
+                    try:
+                        with open(_lrc_for(ap), "r", encoding="utf-8",
+                                  errors="replace") as _f:
+                            lrc_text = _f.read()
+                    except OSError:
+                        lrc_text = None
+                fmt_ok = True
+                if lyr_text and not _lyrics_formatted(lyr_text, cfg, is_for_lrc=False):
                     fmt_ok = False
-                if lrc_text and not _lyrics_word_timestamps_valid(lrc_text, cfg):
+                if lrc_text and not _lyrics_formatted(lrc_text, cfg, is_for_lrc=True):
                     fmt_ok = False
-            if not fmt_ok:
-                failed_checks += 1
-                add_issue("Lyrics not optimally formatted "
-                          "(run Lyrics script)", basename)
-                track["issues"].append("LYRICS")
+                if (lyr_text and _lyrics_merged_timestamps(lyr_text, cfg)) or \
+                   (lrc_text and _lyrics_merged_timestamps(lrc_text, cfg)):
+                    fmt_ok = False
+                # Enhanced LRC word timestamp validity (order / formatting)
+                if cfg.get("lrc_enhanced_enabled", True) and cfg.get("lrc_enhanced_word_sync", True):
+                    if lyr_text and not _lyrics_word_timestamps_valid(lyr_text, cfg):
+                        fmt_ok = False
+                    if lrc_text and not _lyrics_word_timestamps_valid(lrc_text, cfg):
+                        fmt_ok = False
+                if not fmt_ok:
+                    failed_checks += 1
+                    add_issue("Lyrics not optimally formatted "
+                              "(run Lyrics script)", basename)
+                    track["issues"].append("LYRICS")
 
         tracks.append(track)
 
-    # MEDIA consistency.
-    total_checks += 1
+    # MEDIA consistency (skip if MEDIA_SOURCE disabled for all tracks).
+    any_media_enabled = any(
+        should_write_audio_tag(cfg, "MEDIA", filepath=os.path.join(album_dir, tr["file"]))
+        for tr in tracks if not tr.get("unreadable")
+    )
     media_summary = _summarize_values(media_values)
-
-    if media_summary is None:
-        failed_checks += 1
-        add_issue("Missing MEDIA", "album-wide")
-    elif media_summary == "INCONSISTENT":
-        failed_checks += 1
-        add_issue("MEDIA inconsistent across tracks", "album-wide")
+    if any_media_enabled:
+        total_checks += 1
+        if media_summary is None:
+            failed_checks += 1
+            add_issue("Missing MEDIA", "album-wide")
+        elif media_summary == "INCONSISTENT":
+            failed_checks += 1
+            add_issue("MEDIA inconsistent across tracks", "album-wide")
+    else:
+        # No enabled tracks — treat as unknown but not failing
+        media_summary = None
 
     digital = media_summary == "Digital Media"
 
-    # SOURCE policy per track.
+    # SOURCE policy per track (skipped if MEDIA_SOURCE disabled for this filetype).
     for tr in tracks:
         if tr.get("unreadable"):
             continue
-
+        # Resolve full path for per-type check
+        tr_path = os.path.join(album_dir, tr["file"])
+        if not should_write_audio_tag(cfg, "SOURCE", filepath=tr_path):
+            continue
         total_checks += 1
         src = tr["values"].get("SOURCE")
 
@@ -849,19 +893,35 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 add_issue("SOURCE present but MEDIA is not Digital Media", tr["file"])
                 tr["issues"].append("SOURCE")
 
-    # SOURCE consistency for Digital Media.
+    # SOURCE consistency for Digital Media (only if at least one track enables MEDIA_SOURCE).
     if digital:
-        total_checks += 1
-        clean_sources = _clean_set(source_values)
+        # Filter to only enabled filetypes
+        enabled_sources = []
+        any_enabled = False
+        for tr in tracks:
+            if tr.get("unreadable"):
+                continue
+            tr_path = os.path.join(album_dir, tr["file"])
+            if should_write_audio_tag(cfg, "SOURCE", filepath=tr_path):
+                any_enabled = True
+                v = tr["values"].get("SOURCE")
+                if v:
+                    enabled_sources.append(v)
+        if any_enabled:
+            total_checks += 1
+            clean_sources = _clean_set(enabled_sources)
 
-        if len(clean_sources) > 1:
-            failed_checks += 1
-            add_issue("SOURCE inconsistent across album", "album-wide")
+            if len(clean_sources) > 1:
+                failed_checks += 1
+                add_issue("SOURCE inconsistent across album", "album-wide")
 
-    # Album-wide tag consistency.
+    # Album-wide tag consistency (skip if no enabled tracks for this tag).
     for t in ALBUM_TAGS:
+        vals = album_tag_values.get(t)
+        if vals is None:
+            # No enabled filetypes for this tag — skip grading
+            continue
         total_checks += 1
-        vals = album_tag_values.get(t, set())
         clean = {x for x in vals if x}
 
         if not clean:
@@ -900,8 +960,8 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             bad_cues = [f for f in all_files
                         if f.lower().endswith(".cue")
                         and not _is_exp(f, pat, ".cue")]
+            total_checks += 1
             if bad_logs or bad_cues:
-                total_checks += 1
                 failed_checks += 1
                 detail = ", ".join(bad_logs + bad_cues)
                 add_issue(f"CD rip sheets not named {pat} (found: {detail}) — "
@@ -910,9 +970,12 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         except Exception:
             pass
 
-        # CD releases must carry the rip-log score on every track.
+        # CD releases must carry the rip-log score on every track (skipped if LOG_GRADE disabled for this filetype).
         for tr in tracks:
             if tr.get("unreadable"):
+                continue
+            tr_path = os.path.join(album_dir, tr["file"])
+            if not should_write_audio_tag(cfg, "LOG_GRADE", filepath=tr_path):
                 continue
             total_checks += 1
             lg = tr.get("log_grade")
@@ -1016,21 +1079,24 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         if force_exact and cfg.get("cover_resize_enabled", False) and target_cov > 0:
             enforce_size = True
             enforce_square = True
+        # Cache dimensions once (avoid double Image.open)
+        w = h = None
+        if HAS_PIL and (enforce_size or enforce_square):
+            try:
+                with Image.open(cover_path) as _im:
+                    w, h = _im.size
+            except Exception:
+                w = h = None
         # Size enforcement: require exact target_size x target_size (1px tolerance)
         if enforce_size and cfg.get("cover_resize_enabled", False) and target_cov > 0:
             total_checks += 1
-            if HAS_PIL:
-                try:
-                    with Image.open(cover_path) as _im:
-                        _w, _h = _im.size
-                        if abs(_w - target_cov) > 1 or abs(_h - target_cov) > 1:
-                            failed_checks += 1
-                            size_failed = True
-                            cover_ok = False
-                            size_info = f"{_w}x{_h} → {target_cov}x{target_cov}"
-                            add_issue(f"Cover image wrong size {_w}x{_h} (need {target_cov}x{target_cov})", "album")
-                except Exception:
-                    pass
+            if w is not None and h is not None:
+                if abs(w - target_cov) > 1 or abs(h - target_cov) > 1:
+                    failed_checks += 1
+                    size_failed = True
+                    cover_ok = False
+                    size_info = f"{w}x{h} → {target_cov}x{target_cov}"
+                    add_issue(f"Cover image wrong size {w}x{h} (need {target_cov}x{target_cov})", "album")
         # Square enforcement: aspect within threshold (force_exact uses strict 0 threshold)
         if enforce_square:
             total_checks += 1
@@ -1042,20 +1108,18 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 except (TypeError, ValueError):
                     thr_cov = 0.05
                 thr_cov = max(0.0, min(0.5, thr_cov))
-            if HAS_PIL:
-                try:
-                    with Image.open(cover_path) as _im:
-                        _w2, _h2 = _im.size
-                        ratio = _w2 / _h2 if _h2 else 1.0
-                        if abs(ratio - 1.0) > thr_cov:
-                            failed_checks += 1
-                            square_failed = True
-                            cover_ok = False
-                            add_issue(f"Cover image not square {_w2}x{_h2} (threshold {thr_cov:.0%})", "album")
-                            if not size_info:
-                                size_info = f"{_w2}x{_h2} not square"
-                except Exception:
-                    pass
+            try:
+                if w is not None and h is not None:
+                    ratio = w / h if h else 1.0
+                    if abs(ratio - 1.0) > thr_cov:
+                        failed_checks += 1
+                        square_failed = True
+                        cover_ok = False
+                        add_issue(f"Cover image not square {w}x{h} (threshold {thr_cov:.0%})", "album")
+                        if not size_info:
+                            size_info = f"{w}x{h} not square"
+            except Exception:
+                pass
         if size_failed or square_failed:
             if size_failed and square_failed:
                 cover_detail = f"{cover_file} (wrong size, not square {size_info})"

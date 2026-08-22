@@ -31,6 +31,7 @@ import tempfile
 import shutil
 
 from .audio import AudioFile
+from .config import should_write_audio_tag
 from .paths import AUDIO_EXTS
 from .stats import is_audio_file
 from .subproc import run_tool
@@ -729,6 +730,8 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
         scores[d] = score
         for p in paths:
             if not write_tags:
+                continue
+            if config is not None and not should_write_audio_tag(config, "LOG_GRADE", filepath=p):
                 continue
             t = AudioFile(p)
             if str(t.get_tag("LOG_GRADE") or "").strip() != str(score):

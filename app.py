@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.8 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.4.0 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
@@ -52,7 +52,7 @@ except ImportError:
 from mlo import stats as stats_mod
 from mlo import tools as tools_mod
 from mlo import fetchdeps
-from mlo.config import DEFAULT_CONFIG
+from mlo.config import DEFAULT_CONFIG, AUDIO_TAG_FAMILIES, AUDIO_TAG_TYPES
 from mlo.paths import DEFAULT_DIGITAL_SOURCE, DEPS_DIR, SCRIPT_DIR
 from mlo.deps import HAS_MUTAGEN, HAS_PIL
 from mlo.report import print_results, print_grade_results, print_combined_results
@@ -162,6 +162,8 @@ CONFIG_FIELDS = [
     ("lrc_enhanced_word_sync", "Word-Level Timestamps", "bool", None),
     ("lrc_extended_enabled", "Enable Extended LRC", "bool", None),
     ("lrc_add_zero_timestamp", "Add [00:00.00] to First Line", "bool", None),
+    ("lrc_zero_timestamp_blank", "Zero Timestamp as Blank Line", "bool", None),
+    ("lrc_zero_timestamp_target", "Zero Timestamp Target", "choice", ("EMBEDDED", "LRC", "BOTH")),
     ("append_final_newline", "Append Final Newline", "bool", None),
     # CUE
     ("keep_empty_cue_lines", "Keep Empty CUE Lines", "bool", None),
@@ -684,9 +686,17 @@ FIELD_DESCRIPTIONS = {
     "lrc_add_zero_timestamp":
         "Compatibility: ensure the first lyric line starts with [00:00.00] "
         "(or [00:00.000] at 3-decimal precision). When on, a missing zero "
-        "timestamp is added by inserting '[00:00.00] <first lyric text>' "
-        "before the first line. Works for LRC, EMBEDDED, or BOTH based on "
-        "your Lyrics Format setting. Detection is literal and idempotent.",
+        "timestamp is added. Use the two options below to choose where (LRC vs "
+        "EMBEDDED vs BOTH) and whether it is a blank line or duplicates the "
+        "first lyric's text. Detection is literal and idempotent.",
+    "lrc_zero_timestamp_target":
+        "Where the [00:00.00] zero timestamp is added: EMBEDDED (only embedded "
+        "LYRICS tag), LRC (only .lrc sidecar), or BOTH (default, respects your "
+        "Lyrics Format setting). Only matters when 'Add [00:00.00]' is on.",
+    "lrc_zero_timestamp_blank":
+        "When on, the zero timestamp is a blank line '[00:00.00]' with no text "
+        "(a silent lead-in). When off (default), it duplicates the first lyric's "
+        "text as '[00:00.00]<first text>' for karaoke compatibility.",
     "append_final_newline":
         "Add one final LF byte to formatted .cue, .lrc, and embedded lyric "
         "text. Off by default for the existing byte-minimal format.",
@@ -879,14 +889,15 @@ class DependenciesDialog(tk.Toplevel):
 
         grid = ttk.Frame(outer)
         grid.pack(fill=tk.X)
-        for col, width in ((0, 26), (1, 16), (2, 16), (3, 14), (4, 28)):
+        for col, width in ((0, 4), (1, 26), (2, 14), (3, 14), (4, 14), (5, 28), (6, 10)):
             grid.columnconfigure(col, minsize=width)
 
-        headers = ("Tool", "Installed", "Latest", "", "Status")
+        headers = ("", "Tool", "Installed", "Latest", "", "Status", "")
         for col, text in enumerate(headers):
-            ttk.Label(grid, text=text.upper(), style="Section.TLabel").grid(
-                row=0, column=col, sticky="w", padx=6, pady=(0, 6)
-            )
+            if text:
+                ttk.Label(grid, text=text.upper(), style="Section.TLabel").grid(
+                    row=0, column=col, sticky="w", padx=6, pady=(0, 6)
+                )
 
         self.rows = {}
         installed = fetchdeps.installed_versions()
@@ -897,37 +908,70 @@ class DependenciesDialog(tk.Toplevel):
                 "latest": tk.StringVar(value="…"),
                 "status": tk.StringVar(value=""),
                 "button": None,
+                "selected": tk.BooleanVar(value=False),
                 "installed_version": inst,
             }
             row = self.rows[key]
+            # Checkbox for bulk selection
+            ttk.Checkbutton(grid, variable=row["selected"]).grid(row=i, column=0, padx=(6, 2), pady=3)
             ttk.Label(grid, text=fetchdeps.DISPLAY_NAMES[key]).grid(
-                row=i, column=0, sticky="w", padx=6, pady=3
+                row=i, column=1, sticky="w", padx=6, pady=3
             )
             ttk.Label(grid, textvariable=row["installed"],
                       foreground=GREEN if inst else MUTED).grid(
-                row=i, column=1, sticky="w", padx=6, pady=3
+                row=i, column=2, sticky="w", padx=6, pady=3
             )
             ttk.Label(grid, textvariable=row["latest"]).grid(
-                row=i, column=2, sticky="w", padx=6, pady=3
+                row=i, column=3, sticky="w", padx=6, pady=3
             )
             btn = ttk.Button(grid, text="…", width=10,
                              command=lambda k=key: self._install([k]))
-            btn.grid(row=i, column=3, sticky="w", padx=6, pady=3)
+            btn.grid(row=i, column=4, sticky="w", padx=6, pady=3)
             row["button"] = btn
             ttk.Label(grid, textvariable=row["status"],
                       foreground=MUTED).grid(
-                row=i, column=4, sticky="w", padx=6, pady=3
+                row=i, column=5, sticky="w", padx=6, pady=3
             )
+            # Details button per tool
+            ttk.Button(grid, text="Details", width=8,
+                       command=lambda k=key: self._show_details(k)).grid(row=i, column=6, padx=6, pady=3)
+
+        # Bottom bar: progress + bulk actions
+        # Progress bar for current download (shared with app's global progress)
+        self.prog = ttk.Progressbar(outer, mode="determinate", style="Horizontal.TProgressbar")
+        self.prog.pack(fill=tk.X, pady=(10, 6))
+        self.prog_label = tk.StringVar(value="")
+        ttk.Label(outer, textvariable=self.prog_label, style="Muted.TLabel", font=_font(8)).pack(anchor="w", pady=(0, 8))
 
         btns = ttk.Frame(outer)
-        btns.pack(fill=tk.X, pady=(16, 0))
+        btns.pack(fill=tk.X, pady=(4, 0))
+        # Right side: primary actions
         ttk.Button(btns, text="Install / Update All",
                    style="Accent.TButton",
                    command=lambda: self._install(list(self.KEYS))).pack(side=tk.RIGHT)
-        ttk.Button(btns, text="Refresh",
+        ttk.Button(btns, text="Update Selected",
+                   command=self._update_selected).pack(side=tk.RIGHT, padx=(0, 8))
+        # Middle: selection helpers
+        ttk.Button(btns, text="Select All",
+                   command=lambda: self._set_all_selected(True)).pack(side=tk.LEFT)
+        ttk.Button(btns, text="Select None",
+                   command=lambda: self._set_all_selected(False)).pack(side=tk.LEFT, padx=(6, 0))
+        # Left side: secondary
+        ttk.Button(btns, text="Check Latest",
                    command=self._check_latest).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Button(btns, text="Open Folder",
                    command=self._open_folder).pack(side=tk.RIGHT, padx=(0, 8))
+        # Extra row for advanced
+        extra = ttk.Frame(outer)
+        extra.pack(fill=tk.X, pady=(8, 0))
+        self.force_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(extra, text="Force reinstall (even if current)", variable=self.force_var).pack(side=tk.LEFT)
+        ttk.Button(extra, text="Force Reinstall All",
+                   command=lambda: self._install(list(self.KEYS), force=True)).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(extra, text="Show Log",
+                   command=self._show_log).pack(side=tk.RIGHT)
+        ttk.Button(extra, text="Copy Paths",
+                   command=self._copy_paths).pack(side=tk.RIGHT, padx=(0, 8))
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(150, lambda: apply_window_chrome(self))
@@ -954,6 +998,64 @@ class DependenciesDialog(tk.Toplevel):
                 parent=self,
             )
 
+    def _set_all_selected(self, flag):
+        for row in self.rows.values():
+            row["selected"].set(flag)
+
+    def _update_selected(self):
+        keys = [k for k, v in self.rows.items() if v["selected"].get()]
+        if not keys:
+            messagebox.showinfo("No selection", "Tick at least one tool first.", parent=self)
+            return
+        self._install(keys)
+
+    def _show_details(self, key):
+        inst = self.rows[key]["installed_version"] or "—"
+        latest = self.latest.get(key, "…")
+        path = os.path.join(DEPS_DIR, fetchdeps.TOOL_DIRS.get(key, key))
+        try:
+            exists = os.path.isdir(path)
+            files = ", ".join(os.listdir(path)[:6]) if exists else "—"
+        except OSError:
+            files = "—"
+        messagebox.showinfo(
+            fetchdeps.DISPLAY_NAMES.get(key, key),
+            f"Installed: {inst}\nLatest: {latest}\n\nFolder: {path}\nExists: {exists}\nFiles: {files}",
+            parent=self,
+        )
+
+    def _show_log(self):
+        # Show recent log lines from the main app's console (last 200 lines)
+        try:
+            log_text = self.app.console_text.get("1.0", tk.END).strip().splitlines()[-200:]
+            text = "\n".join(log_text) or "No log yet."
+        except Exception:
+            text = "No log available."
+        win = tk.Toplevel(self)
+        win.title("Dependencies — Log")
+        win.geometry("700x400")
+        win.configure(background=PANEL)
+        txt = tk.Text(win, wrap="none", background=FIELD, foreground=TEXT, insertbackground=TEXT, font=("Consolas", 9))
+        txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        txt.insert("1.0", text)
+        txt.configure(state="disabled")
+        ttk.Button(win, text="Close", command=win.destroy).pack(pady=(0, 10))
+
+    def _copy_paths(self):
+        try:
+            installed = fetchdeps.installed_versions()
+            lines = []
+            for k in self.KEYS:
+                ver = installed.get(k, "—")
+                path = os.path.join(DEPS_DIR, fetchdeps.TOOL_DIRS.get(k, k))
+                lines.append(f"{fetchdeps.DISPLAY_NAMES.get(k,k)}: {ver} @ {path}")
+            text = "\n".join(lines)
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            messagebox.showinfo("Copied", "Tool paths copied to clipboard.", parent=self)
+        except Exception as e:
+            messagebox.showerror("Copy failed", str(e), parent=self)
+
     def _set_busy(self, flag):
         self.busy = flag
         state = tk.DISABLED if flag else tk.NORMAL
@@ -968,32 +1070,51 @@ class DependenciesDialog(tk.Toplevel):
                 self.q.put(("neterr", str(e)))
         threading.Thread(target=work, daemon=True).start()
 
-    def _install(self, keys):
+    def _install(self, keys, force=False):
         if self.busy:
             return
+        # Set busy synchronously to prevent double-click race (was previously async via queue)
+        self.busy = True
+        self._set_busy(True)
+        # If force, clear installed version cache so button shows Reinstall correctly
+        if force:
+            for k in keys:
+                self.q.put(("status", k, "Force reinstall…", TEXT))
 
         def work():
             self.q.put(("busy", True))
             for key in keys:
                 name = fetchdeps.DISPLAY_NAMES[key]
                 self.q.put(("status", key, "Downloading…", TEXT))
+                # Update bottom progress label
+                self.q.put(("prog", key, 0, 100))
                 try:
-                    def prog(done, total, _name=name):
+                    def prog(done, total, _name=name, _key=key):
+                        # Forward to main app + local prog bar
                         self.app.log_q.put(
                             ("prog", (done, total, f"Downloading {_name}"))
                         )
+                        # Local prog bar: map done/total to 0-100 for this key
+                        try:
+                            pct = int(done * 100 / max(1, total)) if total else 0
+                            self.q.put(("prog", _key, pct, 100))
+                        except Exception:
+                            pass
                     version = fetchdeps.install_dependency(
                         key,
                         log=lambda m: self.app.log(m, tag="muted"),
                         progress=prog,
                     )
                     self.q.put(("installed", key, version))
+                    self.q.put(("prog", key, 100, 100))
                 except Exception as e:
                     self.app.log(f"Dependency install failed ({name}): {e}",
                                  tag="red")
                     self.q.put(("fail", key, str(e)))
+                    self.q.put(("prog", key, 0, 100))
             fetchdeps.refresh_tool_cache()
             self.q.put(("busy", False))
+            self.q.put(("prog_done",))
         threading.Thread(target=work, daemon=True).start()
 
     def _row_button_text(self, key):
@@ -1039,6 +1160,19 @@ class DependenciesDialog(tk.Toplevel):
                 elif kind == "fail":
                     key, err = payload
                     self.rows[key]["status"].set(f"Failed: {err[:60]}")
+                elif kind == "prog":
+                    key, pct, total = payload
+                    try:
+                        self.prog.configure(value=pct)
+                        self.prog_label.set(f"{fetchdeps.DISPLAY_NAMES.get(key, key)}: {pct}%")
+                    except Exception:
+                        pass
+                elif kind == "prog_done":
+                    try:
+                        self.prog.configure(value=0)
+                        self.prog_label.set("")
+                    except Exception:
+                        pass
                 elif kind == "busy":
                     self._set_busy(payload[0])
         except queue.Empty:
@@ -1141,6 +1275,7 @@ class ConfigDialog(tk.Toplevel):
             ("Enhanced LRC", [
                 "lrc_enhanced_enabled", "lrc_enhanced_word_sync",
                 "lrc_extended_enabled", "lrc_add_zero_timestamp",
+                "lrc_zero_timestamp_blank", "lrc_zero_timestamp_target",
             ]),
             ("CUE Sheets", [
                 "keep_empty_cue_lines", "keep_other_cue_lines", "cue_file_type",
@@ -1190,7 +1325,9 @@ class ConfigDialog(tk.Toplevel):
         ]
         field_lookup = {f[0]: f for f in CONFIG_FIELDS}
 
+        # Sort keys within each group alphabetically for a tidy, predictable layout
         for group_title, keys in groups:
+            keys = sorted(keys)
             ttk.Label(inner, text=group_title, style="H2.Panel.TLabel").grid(
                 row=row, column=0, sticky="w", padx=5, pady=(8, 4)
             )
@@ -1298,6 +1435,70 @@ class ConfigDialog(tk.Toplevel):
                     row=i, column=j, padx=(0, 8), pady=5, sticky="e")
         row += 1
 
+        # --- Audio Tags — Per Format (which semantic tags each audio type gets) --------
+        audio_tag_header = ttk.Label(inner, text="Audio Tags — Per Format", style="H2.Panel.TLabel")
+        audio_tag_header.grid(row=row, column=0, sticky="w", padx=5, pady=(8, 4))
+        ToolTip(audio_tag_header, "Per-filetype switches for the semantic tags this app writes.\n"
+                                  "Each family groups related tags:\n"
+                                  "AUDIT: AUDIT (Audit Library)\n"
+                                  "LOG: LOG_GRADE (disc rip log scores)\n"
+                                  "RG: REPLAYGAIN_* (4 tags via rsgain)\n"
+                                  "DR: DYNAMIC RANGE + ALBUM DYNAMIC RANGE\n"
+                                  "M/S: MEDIA + SOURCE (Digital Media rule)\n"
+                                  "ADV: ITUNESADVISORY + ALBUMITUNESADVISORY\n"
+                                  "INST: INSTRUMENTAL\n"
+                                  "LYR: embedded LYRICS tag (+ .lrc sidecar)\n"
+                                  "Global master switches (Write AUDIT etc.) are ANDed with these.\n"
+                                  "FLAC uses Vorbis, MP3 TXXX, MP4 freeform — Picard maps them.")
+        row += 1
+        audio_tag_box = ttk.Frame(inner, style="Card.TFrame")
+        audio_tag_box.grid(row=row, column=0, sticky="ew", padx=5, pady=(0, 4))
+        audio_tag_box.columnconfigure(0, weight=1)
+        self.audio_tag_vars = {}
+        # Header row: short codes with tooltips for clarity
+        family_short = {
+            "AUDIT": "AUDIT", "LOG_GRADE": "LOG", "REPLAYGAIN": "RG", "DYNAMIC_RANGE": "DR",
+            "MEDIA_SOURCE": "M/S", "ADVISORY": "ADV", "INSTRUMENTAL": "INST", "LYRICS": "LYR",
+        }
+        family_tip = {
+            "AUDIT": "AUDIT (REAL/FAKE)",
+            "LOG_GRADE": "LOG_GRADE (0-100 rip score)",
+            "REPLAYGAIN": "REPLAYGAIN_* (4 tags)",
+            "DYNAMIC_RANGE": "DYNAMIC RANGE (track + album)",
+            "MEDIA_SOURCE": "MEDIA + SOURCE",
+            "ADVISORY": "ITUNESADVISORY + ALBUMITUNESADVISORY",
+            "INSTRUMENTAL": "INSTRUMENTAL",
+            "LYRICS": "LYRICS (embedded)",
+        }
+        for c, fam in enumerate(AUDIO_TAG_FAMILIES):
+            hdr = ttk.Label(audio_tag_box, text=family_short.get(fam, fam), style="Card.TLabel", font=_sfont(8))
+            hdr.grid(row=0, column=c+1, padx=4, pady=(8, 2), sticky="e")
+            ToolTip(hdr, family_tip.get(fam, fam))
+        ttk.Label(audio_tag_box, text="Audio Type", style="Card.TLabel", font=_sfont(9)).grid(row=0, column=0, padx=(10, 8), pady=(8, 2), sticky="w")
+        audio_types = [
+            ("flac", "FLAC (.flac)"),
+            ("mp3", "MP3 (.mp3)"),
+            ("mp4", "MP4 (.m4a/.mp4)"),
+            ("ogg", "OGG (.ogg)"),
+            ("opus", "Opus (.opus)"),
+            ("aac", "AAC (.aac)"),
+        ]
+        for i, (ftype, label) in enumerate(audio_types, start=1):
+            ttk.Label(audio_tag_box, text=label, style="Card.TLabel").grid(row=i, column=0, sticky="w", padx=(10, 8), pady=4)
+            self.audio_tag_vars[ftype] = {}
+            per = (config.get("audio_tag_writes") or {}).get(ftype, {})
+            for j, fam in enumerate(AUDIO_TAG_FAMILIES, start=1):
+                default = True
+                val = per.get(fam, default) if isinstance(per, dict) else default
+                var = tk.BooleanVar(value=bool(val))
+                self.audio_tag_vars[ftype][fam] = var
+                sw = ToggleSwitch(audio_tag_box, var, bg=CARD)
+                sw.grid(row=i, column=j, padx=2, pady=4, sticky="e")
+                ToolTip(sw, f"{family_tip.get(fam, fam)} for {label}")
+        # Hint line
+        ttk.Label(audio_tag_box, text="Master switches (Write AUDIT etc.) + per-type must both be on. Disable a family to skip it for that container; grading also skips it.", style="Muted.Card.TLabel", font=_font(7), wraplength=680, justify=tk.LEFT).grid(row=8, column=0, columnspan=9, sticky="w", padx=10, pady=(4, 8))
+        row += 1
+
         # --- Dependency status -------------------------------------------------
         enc_header = ttk.Frame(inner, style="Panel.TFrame")
         enc_header.grid(row=row, column=0, sticky="ew", padx=5, pady=(8, 4))
@@ -1395,6 +1596,11 @@ class ConfigDialog(tk.Toplevel):
         for ftype, fields in self.encoder_tag_vars.items():
             for key, var in fields.items():
                 var.set(bool(default_tags.get(ftype, {}).get(key, True)))
+        # Reset per-format audio tags
+        default_audio = defaults.get("audio_tag_writes") or {}
+        for ftype, fields in getattr(self, "audio_tag_vars", {}).items():
+            for fam, var in fields.items():
+                var.set(bool(default_audio.get(ftype, {}).get(fam, True)))
 
     def _browse(self, var):
         path = filedialog.askdirectory(parent=self, initialdir=var.get() or "/")
@@ -1434,6 +1640,12 @@ class ConfigDialog(tk.Toplevel):
                 key: bool(var.get()) for key, var in fields.items()
             }
         self.config["encoder_tags"] = encoder_tags
+
+        # Persist per-format audio tags
+        audio_writes = self.config.get("audio_tag_writes") or {}
+        for ftype, fields in getattr(self, "audio_tag_vars", {}).items():
+            audio_writes[ftype] = {fam: bool(var.get()) for fam, var in fields.items()}
+        self.config["audio_tag_writes"] = audio_writes
 
         name_to_id = {v: k for k, v in SCRIPT_NAMES.items()}
         order = []
@@ -1539,31 +1751,46 @@ class SetupWizard(tk.Toplevel):
         (
             "Standard — clean & embedded",
             "Optimize LRC + embedded • format EMBEDDED • 2 decimals • strip "
-            "metadata • collapse blanks. Ideal for foobar2000 + ESLyric.",
+            "metadata • collapse blanks. No zero timestamp. Ideal for foobar2000 + ESLyric.",
             {"optimize_lrc": True, "optimize_embedded_lyrics": True,
              "lyrics_format": "EMBEDDED", "lrc_timestamp_precision": 2,
              "lrc_strip_metadata": True, "lrc_collapse_blank_lines": True,
              "lrc_enhanced_enabled": False, "lrc_extended_enabled": False,
-             "lrc_add_zero_timestamp": False, "append_final_newline": False},
+             "lrc_add_zero_timestamp": False, "lrc_zero_timestamp_blank": False,
+             "lrc_zero_timestamp_target": "BOTH", "append_final_newline": False},
         ),
         (
-            "Enhanced — word-sync + zero",
+            "Enhanced — word-sync + zero (duplicate)",
             "Enhanced LRC on • word <mm:ss.xx> • extended (multi-ts) • "
-            "add [00:00.00] to first line • 3 decimals • for karaoke/word-sync "
-            "players. Also cleans embedded & LRC.",
+            "add [00:00.00] duplicating first line's text • 3 decimals • target BOTH "
+            "so it applies to LRC and embedded when format is BOTH. For karaoke/word-sync players.",
             {"optimize_lrc": True, "optimize_embedded_lyrics": True,
              "lyrics_format": "BOTH", "lrc_timestamp_precision": 3,
              "lrc_strip_metadata": True, "lrc_collapse_blank_lines": True,
              "lrc_enhanced_enabled": True, "lrc_enhanced_word_sync": True,
-             "lrc_extended_enabled": True, "lrc_add_zero_timestamp": True},
+             "lrc_extended_enabled": True, "lrc_add_zero_timestamp": True,
+             "lrc_zero_timestamp_blank": False, "lrc_zero_timestamp_target": "BOTH"},
+        ),
+        (
+            "Enhanced — word-sync + blank zero",
+            "Same as above but the zero timestamp is a blank line '[00:00.00]' "
+            "with no text — a silent lead-in at 0s. Target BOTH, 3 decimals.",
+            {"optimize_lrc": True, "optimize_embedded_lyrics": True,
+             "lyrics_format": "BOTH", "lrc_timestamp_precision": 3,
+             "lrc_strip_metadata": True, "lrc_collapse_blank_lines": True,
+             "lrc_enhanced_enabled": True, "lrc_enhanced_word_sync": True,
+             "lrc_extended_enabled": True, "lrc_add_zero_timestamp": True,
+             "lrc_zero_timestamp_blank": True, "lrc_zero_timestamp_target": "BOTH"},
         ),
         (
             "LRC Sidecar only",
             "Keeps lyrics in .lrc files only • 2 decimals • no enhanced. "
-            "Use if your player prefers sidecars.",
+            "Use if your player prefers sidecars. Zero timestamp off; target LRC.",
             {"optimize_lrc": True, "optimize_embedded_lyrics": False,
              "lyrics_format": "LRC", "lrc_timestamp_precision": 2,
-             "lrc_enhanced_enabled": False, "lrc_extended_enabled": False},
+             "lrc_enhanced_enabled": False, "lrc_extended_enabled": False,
+             "lrc_add_zero_timestamp": False, "lrc_zero_timestamp_blank": False,
+             "lrc_zero_timestamp_target": "LRC"},
         ),
     ]
     CUE_PRESETS = [
@@ -1707,24 +1934,24 @@ class SetupWizard(tk.Toplevel):
         self._add_preset_group(preset_host, "⑦  Grading & Audit — strictness",
                                self.GENERAL_PRESETS, self._general_var)
 
-        # Picard preserve list — for FLAC tag cleaning
+        # Picard preserve list — only tags the app ADDS (not standard MusicBrainz tags)
         picard_card = ttk.Frame(preset_host, style="Card.TFrame", padding=(12, 10))
         picard_card.pack(fill=tk.X, pady=(14, 0))
-        ttk.Label(picard_card, text="⑧  MusicBrainz Picard — Preserve Tags (for FLAC)",
+        ttk.Label(picard_card, text="⑧  MusicBrainz Picard — Preserve Tags (app-added only)",
                   style="Card.TLabel", font=_sfont(9)).pack(anchor="w")
-        ttk.Label(picard_card, text="If you use Picard's 'Clear existing tags', add these to Options → Tags → Preserve these tags from being cleared. Covers all 8 scripts + standard music tags. The app's own FLAC cleaning keeps exactly this whitelist.",
+        ttk.Label(picard_card, text="If you use Picard's 'Clear existing tags', add these to Options → Tags → Preserve these tags from being cleared. This is ONLY tags this app writes — standard tags like TITLE/ALBUM/ARTIST/GENRE are already written by Picard and don't need preserving.",
                   style="Muted.Card.TLabel", wraplength=700, justify=tk.LEFT, font=_font(8)).pack(anchor="w", pady=(4, 8))
         # Use a read-only Text for easy copy
         txt = tk.Text(picard_card, wrap="word", height=4, background=FIELD, foreground=TEXT,
                       insertbackground=TEXT, borderwidth=0, highlightthickness=0, padx=8, pady=6,
                       font=_font(8), undo=False)
-        txt.insert("1.0", "TITLE, ALBUM, ARTIST, ALBUMARTIST, TRACKNUMBER, DISCNUMBER, DATE, YEAR, GENRE, COMPOSER, LYRICIST, COMMENT, LYRICS, UNSYNCEDLYRICS, BPM, COPYRIGHT, MEDIA, SOURCE, INSTRUMENTAL, ITUNESADVISORY, ALBUMITUNESADVISORY, REPLAYGAIN_TRACK_GAIN, REPLAYGAIN_TRACK_PEAK, REPLAYGAIN_ALBUM_GAIN, REPLAYGAIN_ALBUM_PEAK, DYNAMIC RANGE, ALBUM DYNAMIC RANGE, AUDIT, LOG_GRADE, ENCODER, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, AUDIO_MD5, INTEGRITY, LOG_CRC, PERFORMER, WORK, MOVEMENT, PART, CONDUCTOR, ARTISTSORT, ALBUMARTISTSORT, TITLESORT, COMPOSERSORT, ORIGINALDATE, ORIGINALYEAR, ENCODEDBY, CATALOGNUMBER, BARCODE, ISRC")
+        txt.insert("1.0", "MEDIA, SOURCE, INSTRUMENTAL, ITUNESADVISORY, ALBUMITUNESADVISORY, REPLAYGAIN_TRACK_GAIN, REPLAYGAIN_TRACK_PEAK, REPLAYGAIN_ALBUM_GAIN, REPLAYGAIN_ALBUM_PEAK, DYNAMIC RANGE, ALBUM DYNAMIC RANGE, AUDIT, LOG_GRADE, ENCODER, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, LYRICS, UNSYNCEDLYRICS, AUDIO_MD5, INTEGRITY, LOG_CRC")
         txt.configure(state="disabled")
         txt.pack(fill=tk.X, pady=(0, 4))
         # Make it selectable but not editable
         txt.bind("<FocusIn>", lambda e: txt.configure(state="normal"))
         txt.bind("<FocusOut>", lambda e: txt.configure(state="disabled"))
-        ttk.Label(picard_card, text="Tip: Keep 'Clear existing tags' off unless needed; the app's FLAC cleaning (KEEP_VORBIS_KEYS) already removes unused metadata.",
+        ttk.Label(picard_card, text="Standard tags (TITLE, ALBUM, ARTIST, TRACKNUMBER, GENRE, COMPOSER, PERFORMER, WORK…) are written by Picard itself — no need to preserve. Tip: Keep 'Clear existing tags' off unless needed; the app's FLAC cleaning (KEEP_VORBIS_KEYS) already removes unused metadata.",
                   style="Muted.Card.TLabel", font=_font(8), wraplength=700).pack(anchor="w", pady=(4, 0))
 
         # Live summary of pending changes

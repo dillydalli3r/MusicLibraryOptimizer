@@ -11,6 +11,119 @@ from .ui import c, Color
 # order / remove scripts via Settings -> Run All Order (or the console menu).
 DEFAULT_RUN_ALL_ORDER = [1, 2, 3, 4, 5, 6, 7, 8]
 
+# Audio tag families that can be toggled per filetype.
+# Each family groups related TAG_MAP keys that are written together.
+AUDIO_TAG_FAMILIES = [
+    "AUDIT",          # AUDIT (Audit Library)
+    "LOG_GRADE",      # LOG_GRADE (disc rip log scores)
+    "REPLAYGAIN",     # REPLAYGAIN_TRACK/ALBUM_GAIN/PEAK (4 tags via rsgain)
+    "DYNAMIC_RANGE",  # DYNAMIC RANGE + ALBUM DYNAMIC RANGE (simple-dr-meter)
+    "MEDIA_SOURCE",   # MEDIA + SOURCE (Digital Media normalization)
+    "INSTRUMENTAL",   # INSTRUMENTAL (lyrics presence)
+    "ADVISORY",       # ITUNESADVISORY + ALBUMITUNESADVISORY
+    "LYRICS",         # embedded LYRICS tag (and .lrc sidecar)
+]
+AUDIO_TAG_TYPES = ["flac", "mp3", "mp4", "ogg", "opus", "aac"]
+
+# Map individual tag names to their family for per-type checks.
+_TAG_TO_FAMILY = {
+    "AUDIT": "AUDIT",
+    "LOG_GRADE": "LOG_GRADE",
+    "REPLAYGAIN_TRACK_GAIN": "REPLAYGAIN",
+    "REPLAYGAIN_TRACK_PEAK": "REPLAYGAIN",
+    "REPLAYGAIN_ALBUM_GAIN": "REPLAYGAIN",
+    "REPLAYGAIN_ALBUM_PEAK": "REPLAYGAIN",
+    "DYNAMIC RANGE": "DYNAMIC_RANGE",
+    "ALBUM DYNAMIC RANGE": "DYNAMIC_RANGE",
+    "MEDIA": "MEDIA_SOURCE",
+    "SOURCE": "MEDIA_SOURCE",
+    "INSTRUMENTAL": "INSTRUMENTAL",
+    "ITUNESADVISORY": "ADVISORY",
+    "ALBUMITUNESADVISORY": "ADVISORY",
+    "LYRICS": "LYRICS",
+    "UNSYNCEDLYRICS": "LYRICS",
+    # integrity tags follow AUDIT family (written alongside audit when present)
+    "AUDIO_MD5": "AUDIT",
+    "INTEGRITY": "AUDIT",
+    "LOG_CRC": "LOG_GRADE",
+}
+
+def _audio_tag_family(tag_name):
+    return _TAG_TO_FAMILY.get(str(tag_name).upper())
+
+def _ext_to_audio_type(ext):
+    ext = (ext or "").lower().lstrip(".")
+    if ext == "flac":
+        return "flac"
+    if ext == "mp3":
+        return "mp3"
+    if ext in ("m4a", "mp4", "aac"):
+        # aac files use mp4 container in mutagen; keep separate for aac
+        return "aac" if ext == "aac" else "mp4"
+    if ext == "ogg":
+        return "ogg"
+    if ext == "opus":
+        return "opus"
+    return None
+
+def should_write_audio_tag(config, tag_name, filepath=None, filetype=None):
+    """Whether an audio tag may be written for the given file.
+
+    Checks the global master switch for the tag's family (e.g. write_audit_tag)
+    AND the per-filetype `audio_tag_writes` override. If no per-type entry
+    exists the default is True (backward compatible).
+    Unknown tags or filetypes always return True.
+    """
+    if config is None:
+        return True
+    family = _audio_tag_family(tag_name)
+    if not family:
+        return True
+    # Global master switches (map family -> config key).
+    family_global = {
+        "AUDIT": "write_audit_tag",
+        "LOG_GRADE": "write_log_grade",
+        "REPLAYGAIN": "write_replaygain_tags",
+        "DYNAMIC_RANGE": "write_dynamic_range_tags",
+        "MEDIA_SOURCE": "normalize_media_source",
+        "INSTRUMENTAL": None,  # gated by two keys; handle below
+        "ADVISORY": "auto_advisory",
+        "LYRICS": None,  # lyrics_format gates this separately
+    }
+    gkey = family_global.get(family)
+    if gkey is not None and not config.get(gkey, True):
+        return False
+    # INSTRUMENTAL has two globals; require at least one path to be enabled.
+    # For per-type we still respect the individual caller: fix_instrumental
+    # vs auto_instrumental are checked at call sites, so here just check
+    # that at least one is enabled when family is INSTRUMENTAL.
+    if family == "INSTRUMENTAL":
+        if not config.get("fix_instrumental_from_lyrics", True) and not config.get("auto_instrumental", True):
+            return False
+    # Resolve filetype
+    if not filetype:
+        if filepath:
+            ext = os.path.splitext(filepath)[1]
+            filetype = _ext_to_audio_type(ext)
+        else:
+            return True
+    if not filetype:
+        return True
+    # Per-filetype override
+    per = config.get("audio_tag_writes") or {}
+    # Normalize filetype alias: aac -> aac, mp4 stays mp4
+    ft = per.get(filetype)
+    if not isinstance(ft, dict):
+        # Also try ext-based fallback for mp4/m4a
+        if filetype == "mp4":
+            ft = per.get("mp4") or per.get("m4a")
+        if not isinstance(ft, dict):
+            return True
+    # If family not in ft, default True
+    if family not in ft:
+        return True
+    return bool(ft.get(family, True))
+
 DEFAULT_CONFIG = {
     # The first-run wizard supplies this; never ship a developer-specific
     # library path in the application defaults.
@@ -57,6 +170,11 @@ DEFAULT_CONFIG = {
     "lrc_enhanced_word_sync": True,
     "lrc_extended_enabled": True,
     "lrc_add_zero_timestamp": False,
+    # Where the zero timestamp is added when enabled: EMBEDDED, LRC, or BOTH.
+    "lrc_zero_timestamp_target": "BOTH",
+    # When True, the zero timestamp is a blank line "[00:00.00]" with no text;
+    # when False (default), it duplicates the first lyric's text for compatibility.
+    "lrc_zero_timestamp_blank": False,
     # Disabled by default to preserve the byte-exact no-final-newline mode.
     "append_final_newline": False,
     "keep_empty_cue_lines": False,
@@ -125,6 +243,18 @@ DEFAULT_CONFIG = {
         "jpeg": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
         "png": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
         "jxl": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+    },
+    # Per-filetype audio tag writes — which semantic tag families each audio
+    # container receives. All True by default; ANDed with the global master
+    # switches above (write_audit_tag etc.). Organized by filetype for
+    # predictable, fine-grained control without crowding the UI.
+    "audio_tag_writes": {
+        "flac": {k: True for k in AUDIO_TAG_FAMILIES},
+        "mp3": {k: True for k in AUDIO_TAG_FAMILIES},
+        "mp4": {k: True for k in AUDIO_TAG_FAMILIES},
+        "ogg": {k: True for k in AUDIO_TAG_FAMILIES},
+        "opus": {k: True for k in AUDIO_TAG_FAMILIES},
+        "aac": {k: True for k in AUDIO_TAG_FAMILIES},
     },
 
     # DR / ReplayGain (script 7): rsgain + simple-dr-meter.
@@ -202,6 +332,7 @@ _INT_RANGES = {
 }
 _CHOICES = {
     "lyrics_format": {"EMBEDDED", "LRC", "BOTH"},
+    "lrc_zero_timestamp_target": {"EMBEDDED", "LRC", "BOTH"},
     "cue_file_type": {"WAVE", "MP3"},
 }
 
@@ -295,6 +426,25 @@ def normalize_config(user=None) -> dict:
                 )
     cfg["encoder_tags"] = merged_tags
 
+    # Audio tag writes per filetype
+    default_audio = DEFAULT_CONFIG.get("audio_tag_writes", {})
+    user_audio = cfg.get("audio_tag_writes") if isinstance(cfg.get("audio_tag_writes"), dict) else {}
+    merged_audio = {}
+    for ftype in AUDIO_TAG_TYPES:
+        base = default_audio.get(ftype, {k: True for k in AUDIO_TAG_FAMILIES})
+        merged_audio[ftype] = dict(base)
+        vals = user_audio.get(ftype)
+        if isinstance(vals, dict):
+            for fam in AUDIO_TAG_FAMILIES:
+                if fam in vals:
+                    merged_audio[ftype][fam] = _as_bool(vals.get(fam), base.get(fam, True))
+    # alias: if user used "m4a" key, fold into mp4
+    if isinstance(user_audio.get("m4a"), dict):
+        for fam in AUDIO_TAG_FAMILIES:
+            if fam in user_audio["m4a"]:
+                merged_audio["mp4"][fam] = _as_bool(user_audio["m4a"].get(fam), merged_audio["mp4"].get(fam, True))
+    cfg["audio_tag_writes"] = merged_audio
+
     columns = cfg.get("library_columns")
     cfg["library_columns"] = dict(columns) if isinstance(columns, dict) else {}
 
@@ -333,7 +483,7 @@ def save_config(cfg: dict) -> bool:
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-                json.dump(normalized, f, indent=2)
+                json.dump(normalized, f, indent=2, sort_keys=True)
                 f.write("\n")
                 f.flush()
                 os.fsync(f.fileno())

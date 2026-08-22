@@ -25,6 +25,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 from .audio import AudioFile
+from .config import should_write_audio_tag
 from .paths import AUDIO_EXTS, DEPS_DIR
 from .stats import (
     new_stats, _make_pbar, _pbar_update, _collect_targets, _walk_files,
@@ -167,7 +168,7 @@ def _audit_tag_value(severity, cli_status):
     return "REAL" if cli_status == "Valid" else "FAKE"
 
 
-def _read_and_normalize_audit(path, write_tags=True):
+def _read_and_normalize_audit(path, write_tags=True, config=None):
     """Read the AUDIT verdict and fix legacy mixed-case values (Real -> REAL)
     in a single file open. Returns (verdict, changed)."""
     try:
@@ -176,7 +177,9 @@ def _read_and_normalize_audit(path, write_tags=True):
         v = raw.upper()
         changed = False
         if write_tags and raw and v in ("REAL", "FAKE") and raw != v:
-            changed = bool(af.set_tag("AUDIT", v))
+            # Respect per-filetype AUDIT toggle
+            if config is None or should_write_audio_tag(config, "AUDIT", filepath=path):
+                changed = bool(af.set_tag("AUDIT", v))
         return (v if v in ("REAL", "FAKE") else None), changed
     except Exception:
         return None, False
@@ -262,11 +265,12 @@ def run_audit_library(config):
     unverified_cd = {}
     checksum_verified = {}
     if config.get("audit_verify_cd_checksums", True):
-        _tools_ff = detect_all_tools()
-        ffmpeg_exe_for_cd = (_tools_ff.get("ffmpeg") or {}).get("ffmpeg_exe")
+        # Reuse already-detected tools to avoid redundant GitHub cache lookup
+        ffmpeg_exe_for_cd = (tools.get("ffmpeg") or {}).get("ffmpeg_exe")
         if not ffmpeg_exe_for_cd:
             log(c("WARNING: ffmpeg not found - CD checksum verification "
                   "unavailable.", Color.YELLOW))
+            stats["errors"].append(("CD checksum", "ffmpeg not found"))
         else:
             from .discs import verify_album_checksums
             from concurrent.futures import as_completed
@@ -298,12 +302,19 @@ def run_audit_library(config):
                     album = futures[fut]
                     try:
                         res, unver = fut.result()
-                    except Exception:
+                    except Exception as e:
+                        stats["errors"].append((os.path.basename(album), f"checksum verify: {e}"))
                         continue
                     for path, verdict in res.items():
                         # When bothrequired, defer tag write until after AA
-                        if not require_both and config.get("write_audit_tag", True):
-                            _write_audit_tag(path, verdict)
+                        if not require_both and config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=path):
+                            changed, b_rem, b_add, err = _write_audit_tag(path, verdict)
+                            if err:
+                                stats["errors"].append((os.path.basename(path), err))
+                            elif changed:
+                                stats["modified_count"] += 1
+                                stats["total_bytes_removed"] += b_rem
+                                stats["total_bytes_added"] += b_add
                         checksum_verified[path] = verdict
                     unverified_cd.update(unver)
 
@@ -333,25 +344,9 @@ def run_audit_library(config):
 
     # When require_both is False, CD rips are excluded from AudioAuditor;
     # when True, they are included and the final verdict is the AND of both
-    # sources (both must be REAL, otherwise FAKE).
-    if require_both:
-        # Defer writing checksum tags; we'll write the combined result below.
-        # Undo any premature writes from the checksum phase — they will be
-        # overwritten with the combined verdict.
-        pass
-    else:
-        # Default: write checksum verdicts now and exclude CD files from AA.
-        if not require_both:
-            for path, verdict in list(checksum_verified.items()):
-                # Already written above when not require_both? For default we
-                # wrote earlier; for both we deferred. Ensure default writes.
-                pass
-        # The actual writes for default were done inside the checksum loop above.
-        # For clarity, ensure any CD file not yet written gets its verdict.
-        if not require_both:
-            for path, verdict in checksum_verified.items():
-                # Tags already written in the loop; no-op here
-                pass
+    # sources (both must be REAL, otherwise FAKE). Checksum tags were already
+    # written above when not require_both; when require_both we deferred and
+    # will write the combined result per-file below.
 
     # Skip files that already carry a REAL/FAKE verdict (normalizing
     # legacy mixed-case values) unless the audit is forced.
@@ -363,7 +358,7 @@ def run_audit_library(config):
         with ThreadPoolExecutor(max_workers=workers) as pool:
             results = list(pool.map(
                 lambda path: _read_and_normalize_audit(
-                    path, config.get("write_audit_tag", True)
+                    path, config.get("write_audit_tag", True), config
                 ),
                 files,
             ))
@@ -414,11 +409,18 @@ def run_audit_library(config):
         try:
             items = _audit_batch(cli, batch, config)
         except Exception as e:
+            stats["total_scanned"] += len(batch)
             stats["error_count"] += len(batch)
             stats["errors"].append((f"batch {start // BATCH_SIZE + 1} "
-                                    f"({len(batch)} files)", str(e)))
+                                     f"({len(batch)} files)", str(e)))
             log(c(f"Audit batch failed: {e}", Color.RED))
-            _pbar_update(pbar, counts, kind="fail")
+            counts["fail"] += len(batch)
+            if pbar is not None:
+                try:
+                    pbar.update(len(batch))
+                    pbar.set_postfix(ok=counts["ok"], skip=counts["skip"], fail=counts["fail"])
+                except Exception:
+                    pass
             continue
 
         # Files the CLI silently dropped (unsupported/renamed). Paths
@@ -451,15 +453,21 @@ def run_audit_library(config):
             # CLI verdict drives the status counts; warnings (clipping
             # flags etc. on an otherwise Valid file) are tracked apart.
             skey = {"Valid": "Real", "Fake": "Fake", "Corrupt": "Corrupt",
-                    "Optimized": "Optimized"}.get(cli_status, "Unknown")
+                     "Optimized": "Optimized"}.get(cli_status, "Unknown")
             status_counts[skey] += 1
+
+            # Base AA tag value before CD combination.
+            tag_value = _audit_tag_value(severity, cli_status)
 
             # When bothrequired, the final AUDIT is the AND of the two sources.
             # checksum must be REAL and AA must be Valid/REAL; otherwise FAKE.
             # .log CRC is authoritative, so an unverified log also means FAKE.
+            # Preserve warning flags (Valid+clipping etc.) when both are REAL.
             if require_both and path in cd_files:
                 chk = checksum_verified.get(path)
                 aa_real = (tag_value == "REAL" and severity != "fail")
+                orig_severity = severity
+                orig_reason = reason
                 # Normalize AA verdict: _audit_tag_value returns REAL only for Valid
                 if chk != "REAL":
                     tag_value = "FAKE"
@@ -469,16 +477,21 @@ def run_audit_library(config):
                     tag_value = "FAKE"
                     severity = "fail"
                     # keep AA reason but note log was REAL
-                    reason = f"{reason} (log REAL but AA {cli_status})" if reason else f"AA {cli_status} (log REAL)"
+                    reason = f"{orig_reason} (log REAL but AA {cli_status})" if orig_reason else f"AA {cli_status} (log REAL)"
                 else:
                     tag_value = "REAL"
-                    severity = "ok"
-                    reason = ""
+                    # Both REAL: keep original warn if AA had flags, else ok
+                    if orig_severity == "warn":
+                        severity = "warn"
+                        reason = orig_reason
+                    else:
+                        severity = "ok"
+                        reason = ""
                 # Ensure status counts reflect the AA side already counted;
                 # the final tag is what grading will use.
 
-            # Persist the verdict into the file's AUDIT tag.
-            if config.get("write_audit_tag", True):
+            # Persist the verdict into the file's AUDIT tag (respects per-filetype).
+            if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=path):
                 changed, b_rem, b_add, tag_err = _write_audit_tag(
                     path, tag_value)
             else:
@@ -537,6 +550,26 @@ def run_audit_library(config):
     # Parallelized across albums - each disc scores in its own CLI process,
     # so thread workers scale instead of running one album at a time.
     album_dirs = sorted({os.path.dirname(p) for p in files})
+    # Pre-filter to albums that could be CD rips (contain .log and MEDIA==CD) to avoid
+    # spawning thousands of no-op threads for non-CD libraries (5k albums = 5k futures).
+    cd_candidate_dirs = []
+    for d in album_dirs:
+        try:
+            # Quick check: .log present -> likely CD, otherwise skip scoring
+            if not any(f.lower().endswith(".log") for f in os.listdir(d)):
+                continue
+            # Check first track's MEDIA is CD (lightweight)
+            first = next((os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))), None)
+            if first:
+                try:
+                    af0 = AudioFile(first)
+                    if str(af0.get_tag("MEDIA") or "").strip() != "CD":
+                        continue
+                except Exception:
+                    continue
+            cd_candidate_dirs.append(d)
+        except OSError:
+            continue
     log_scores = {}
     log_notes = []
     from .discs import grade_album_logs
@@ -552,14 +585,18 @@ def run_audit_library(config):
             log_fn=(lambda m: log(f"  {m}")) if verbose else None)
         return album_dir, scores, notes
 
-    workers = worker_count(config, default=8, maximum=8, items=len(album_dirs))
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(_grade_one, d) for d in album_dirs]
-        for fut in as_completed(futures):
-            album_dir, scores, notes = fut.result()
-            if scores:
-                log_scores[album_dir] = scores
-            log_notes.extend(f"{os.path.basename(album_dir)}: {n}" for n in notes)
+    if not cd_candidate_dirs:
+        # No CD candidates — skip thread pool entirely
+        pass
+    else:
+        workers = worker_count(config, default=8, maximum=8, items=len(cd_candidate_dirs))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_grade_one, d) for d in cd_candidate_dirs]
+            for fut in as_completed(futures):
+                album_dir, scores, notes = fut.result()
+                if scores:
+                    log_scores[album_dir] = scores
+                log_notes.extend(f"{os.path.basename(album_dir)}: {n}" for n in notes)
 
     if log_scores:
         log("")

@@ -4,6 +4,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .audio import AudioFile
+from .config import should_write_audio_tag
 from .paths import AUDIO_EXTS, DEFAULT_DIGITAL_SOURCE
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _diff_bytes,
@@ -124,6 +125,7 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
                        lrc_enhanced_word_sync=True,
                        lrc_extended_enabled=True,
                        lrc_add_zero_timestamp=False,
+                       lrc_zero_timestamp_blank=False,
                        cfg=None):
     """
     Cleans lyrics:
@@ -148,6 +150,7 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
         lrc_enhanced_word_sync = cfg.get("lrc_enhanced_word_sync", lrc_enhanced_word_sync)
         lrc_extended_enabled = cfg.get("lrc_extended_enabled", lrc_extended_enabled)
         lrc_add_zero_timestamp = cfg.get("lrc_add_zero_timestamp", lrc_add_zero_timestamp)
+        lrc_zero_timestamp_blank = cfg.get("lrc_zero_timestamp_blank", lrc_zero_timestamp_blank)
         # precision/strip/collapse may also be in cfg when called via grader
         try:
             precision = int(cfg.get("lrc_timestamp_precision", precision))
@@ -251,9 +254,13 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
 
     # Compatibility: ensure first lyric line carries [00:00.00] when enabled.
     # When lrc_add_zero_timestamp is True, the very first non-blank lyric line
-    # must start with the zero timestamp. If it doesn't, we insert a new zero
-    # line with the same text before it (duplicate at 0 and at original time).
-    # Detection respects the current precision and is idempotent.
+    # must start with the zero timestamp. Two modes:
+    #  - blank=False (default, duplicate): insert "[00:00.00]<first text>" duplicating
+    #    the first lyric's text at 0 and at its original time (idempotent).
+    #  - blank=True: insert a bare "[00:00.00]" blank line at the very start
+    #    (no text), leaving the original first line untouched.
+    # Detection respects the current precision and is idempotent. Target filtering
+    # (LRC/EMBEDDED/BOTH) is handled by the caller via cfg overrides.
     if lrc_add_zero_timestamp and cleaned:
         # Find first non-blank, non-metadata lyric line
         first_idx = None
@@ -270,48 +277,53 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
             break
         if first_idx is not None:
             first_line = cleaned[first_idx]
-            if not first_line.startswith(zero_ts):
-                # Extract display text without leading line timestamps
-                text_part = first_line
-                # Strip all leading [mm:ss.xx] blocks
-                while True:
-                    m = TIMESTAMP_RE.match(text_part)
-                    if m:
-                        text_part = text_part[m.end():].lstrip()
-                    else:
-                        break
-                # If the first line was timestamp-only or text extraction left
-                # it empty, look ahead for the next lyric text
-                if not text_part:
-                    for nxt in range(first_idx + 1, len(cleaned)):
-                        nxt_s = cleaned[nxt].strip()
-                        if not nxt_s:
-                            continue
-                        if strip_metadata and LRC_META_RE.match(nxt_s):
-                            if lrc_enhanced_enabled and WORD_TS_RE.search(nxt_s):
-                                pass
-                            else:
-                                continue
-                        nxt_text = cleaned[nxt]
-                        while True:
-                            m2 = TIMESTAMP_RE.match(nxt_text)
-                            if m2:
-                                nxt_text = nxt_text[m2.end():].lstrip()
-                            else:
-                                break
-                        if nxt_text:
-                            text_part = nxt_text
+            if lrc_zero_timestamp_blank:
+                # Blank mode: ensure a bare zero line exists at first_idx
+                if first_line.strip() != zero_ts:
+                    cleaned.insert(first_idx, zero_ts)
+            else:
+                if not first_line.startswith(zero_ts):
+                    # Extract display text without leading line timestamps
+                    text_part = first_line
+                    # Strip all leading [mm:ss.xx] blocks
+                    while True:
+                        m = TIMESTAMP_RE.match(text_part)
+                        if m:
+                            text_part = text_part[m.end():].lstrip()
+                        else:
                             break
-                    # Still empty? Use empty (will produce bare zero line)
-                # Build zero line
-                zero_line = f"{zero_ts}{text_part}" if text_part else zero_ts
-                # If first line already has a line timestamp, insert new zero line
-                # before it (keeping original). If it was untimed, replace it
-                # to avoid duplicating plain text.
-                if TIMESTAMP_RE.match(first_line):
-                    cleaned.insert(first_idx, zero_line)
-                else:
-                    cleaned[first_idx] = zero_line
+                    # If the first line was timestamp-only or text extraction left
+                    # it empty, look ahead for the next lyric text
+                    if not text_part:
+                        for nxt in range(first_idx + 1, len(cleaned)):
+                            nxt_s = cleaned[nxt].strip()
+                            if not nxt_s:
+                                continue
+                            if strip_metadata and LRC_META_RE.match(nxt_s):
+                                if lrc_enhanced_enabled and WORD_TS_RE.search(nxt_s):
+                                    pass
+                                else:
+                                    continue
+                            nxt_text = cleaned[nxt]
+                            while True:
+                                m2 = TIMESTAMP_RE.match(nxt_text)
+                                if m2:
+                                    nxt_text = nxt_text[m2.end():].lstrip()
+                                else:
+                                    break
+                            if nxt_text:
+                                text_part = nxt_text
+                                break
+                        # Still empty? Use empty (will produce bare zero line)
+                    # Build zero line
+                    zero_line = f"{zero_ts}{text_part}" if text_part else zero_ts
+                    # If first line already has a line timestamp, insert new zero line
+                    # before it (keeping original). If it was untimed, replace it
+                    # to avoid duplicating plain text.
+                    if TIMESTAMP_RE.match(first_line):
+                        cleaned.insert(first_idx, zero_line)
+                    else:
+                        cleaned[first_idx] = zero_line
 
     return "\n".join(cleaned)
 
@@ -347,10 +359,37 @@ def _canonical_lyrics(text, append_final_newline=False):
     return result
 
 
-def _format_for_storage(text, cfg, optimize=True):
-    """Format lyrics using the persisted exact-output choices."""
+def _zero_target_allows(cfg, is_for_lrc: bool) -> bool:
+    """Whether the zero-timestamp feature should apply for LRC file vs embedded tag.
+
+    cfg lrc_zero_timestamp_target: EMBEDDED, LRC, or BOTH (default BOTH).
+    is_for_lrc True = .lrc sidecar, False = embedded tag.
+    """
+    try:
+        target = str(cfg.get("lrc_zero_timestamp_target", "BOTH")).upper()
+    except Exception:
+        target = "BOTH"
+    if target == "LRC":
+        return is_for_lrc
+    if target == "EMBEDDED":
+        return not is_for_lrc
+    return True  # BOTH or unknown
+
+
+def _format_for_storage(text, cfg, optimize=True, is_for_lrc=False):
+    """Format lyrics using the persisted exact-output choices.
+
+    is_for_lrc distinguishes .lrc sidecar vs embedded tag for the
+    zero-timestamp target filter (lrc_zero_timestamp_target) and
+    lrc_zero_timestamp_blank mode.
+    """
     source = text
     if optimize:
+        # Gate zero timestamp by target
+        eff_zero = bool(cfg.get("lrc_add_zero_timestamp", False)) and _zero_target_allows(cfg, is_for_lrc)
+        # Build a cfg view with effective zero flag so format_lyrics_text sees the filtered value
+        cfg_view = dict(cfg)
+        cfg_view["lrc_add_zero_timestamp"] = eff_zero
         source = format_lyrics_text(
             text,
             precision=cfg.get("lrc_timestamp_precision", 2),
@@ -359,8 +398,9 @@ def _format_for_storage(text, cfg, optimize=True):
             lrc_enhanced_enabled=cfg.get("lrc_enhanced_enabled", True),
             lrc_enhanced_word_sync=cfg.get("lrc_enhanced_word_sync", True),
             lrc_extended_enabled=cfg.get("lrc_extended_enabled", True),
-            lrc_add_zero_timestamp=cfg.get("lrc_add_zero_timestamp", False),
-            cfg=cfg,
+            lrc_add_zero_timestamp=eff_zero,
+            lrc_zero_timestamp_blank=cfg.get("lrc_zero_timestamp_blank", False),
+            cfg=cfg_view,
         )
     return _canonical_lyrics(
         source,
@@ -388,10 +428,12 @@ def _process_lyrics_for_audio(audio_path, cfg):
     lyrics_touched = False
 
     # Clean embedded lyrics (no trailing newline / blank lines).
-    if force or cfg.get("optimize_embedded_lyrics", True):
+    can_write_lyrics = should_write_audio_tag(cfg, "LYRICS", filepath=audio_path)
+    can_write_instr = should_write_audio_tag(cfg, "INSTRUMENTAL", filepath=audio_path)
+    if (force or cfg.get("optimize_embedded_lyrics", True)) and can_write_lyrics:
         cur = af.get_lyrics()
         if cur:
-            cleaned = _format_for_storage(cur, cfg, optimize=True)
+            cleaned = _format_for_storage(cur, cfg, optimize=True, is_for_lrc=False)
             if cleaned != cur:
                 lyrics_touched = True
                 if af.set_lyrics(cleaned):
@@ -404,7 +446,7 @@ def _process_lyrics_for_audio(audio_path, cfg):
                 lrc_content = f.read()
 
             final = _format_for_storage(
-                lrc_content, cfg, optimize=cfg.get("optimize_lrc", True)
+                lrc_content, cfg, optimize=cfg.get("optimize_lrc", True), is_for_lrc=True
             )
 
             if final != lrc_content:
@@ -421,7 +463,7 @@ def _process_lyrics_for_audio(audio_path, cfg):
     # check passes afterwards.
     embedded_raw = af.get_lyrics()
     embedded_canonical = (
-        _format_for_storage(embedded_raw, cfg, optimize=True)
+        _format_for_storage(embedded_raw, cfg, optimize=True, is_for_lrc=False)
         if embedded_raw and str(embedded_raw).strip() else None
     )
 
@@ -444,59 +486,77 @@ def _process_lyrics_for_audio(audio_path, cfg):
                 pass
 
     lrc_canonical = (
-        _format_for_storage(lrc_raw, cfg, optimize=True)
+        _format_for_storage(lrc_raw, cfg, optimize=True, is_for_lrc=True)
         if lrc_raw and lrc_raw.strip() else None
     )
 
     # Conversion between LRC and embedded lyrics.
+    # Respect per-filetype LYRICS toggle for any embedded tag writes and
+    # lrc_zero_timestamp_target (EMBEDDED/LRC/BOTH) for zero insertion.
     if lyrics_format == "EMBEDDED" and lrc_canonical:
-        if embedded_canonical != lrc_canonical:
-            # Embed first; only delete the sidecar once the lyrics are
-            # safely inside the tag (a failed write must never destroy
-            # the only copy).
-            lyrics_touched = True
-            if not af.set_lyrics(lrc_canonical):
-                return ("fail", 0, 0, f"embed lyrics: {af.error}")
-        try:
-            os.remove(lrc_path)
-            lrc_exists = False
-            modified = True
-        except OSError as e:
-            return ("fail", 0, 0, f"lrc delete: {e}")
+        if can_write_lyrics:
+            # Destination is embedded tag — format lrc_raw for embedded target
+            dest_for_embedded = _format_for_storage(lrc_raw, cfg, optimize=True, is_for_lrc=False)
+            if embedded_canonical != dest_for_embedded:
+                # Embed first; only delete the sidecar once the lyrics are
+                # safely inside the tag (a failed write must never destroy
+                # the only copy).
+                lyrics_touched = True
+                if not af.set_lyrics(dest_for_embedded):
+                    return ("fail", 0, 0, f"embed lyrics: {af.error}")
+            try:
+                os.remove(lrc_path)
+                lrc_exists = False
+                modified = True
+            except OSError as e:
+                return ("fail", 0, 0, f"lrc delete: {e}")
+        else:
+            # LYRICS disabled for this filetype — leave both as is
+            pass
 
     elif lyrics_format == "LRC" and embedded_canonical:
+        # Destination is .lrc sidecar — format embedded_raw for LRC target
+        dest_for_lrc = _format_for_storage(embedded_raw, cfg, optimize=True, is_for_lrc=True)
+        # .lrc file write is always allowed (sidecar), but embedded delete is gated
         try:
             with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write(embedded_canonical)
+                f.write(dest_for_lrc)
         except Exception as e:
             return ("fail", 0, 0, f"lrc write: {e}")
-        lyrics_touched = True
-        if not af.delete_lyrics():
-            return ("fail", 0, 0, f"delete embedded lyrics: {af.error}")
+        if can_write_lyrics:
+            lyrics_touched = True
+            if not af.delete_lyrics():
+                return ("fail", 0, 0, f"delete embedded lyrics: {af.error}")
         lrc_exists = True
         modified = True
 
     elif lyrics_format == "BOTH":
         # Keep lyrics in both places, reconciled to one canonical text
         # (the embedded tag wins a disagreement - players read it).
+        # Respect target: format for each destination separately.
         try:
             if lrc_canonical and not embedded_canonical:
-                lyrics_touched = True
-                if not af.set_lyrics(lrc_canonical):
-                    return ("fail", 0, 0, f"embed lyrics: {af.error}")
-                modified = True
+                if can_write_lyrics:
+                    dest_for_embedded = _format_for_storage(lrc_raw, cfg, optimize=True, is_for_lrc=False)
+                    lyrics_touched = True
+                    if not af.set_lyrics(dest_for_embedded):
+                        return ("fail", 0, 0, f"embed lyrics: {af.error}")
+                    modified = True
 
             elif embedded_canonical and lrc_canonical != embedded_canonical:
+                # Write embedded's text formatted for LRC target
+                dest_for_lrc = _format_for_storage(embedded_raw, cfg, optimize=True, is_for_lrc=True)
                 with open(lrc_path, "w", encoding="utf-8",
                           newline="\n") as f:
-                    f.write(embedded_canonical)
+                    f.write(dest_for_lrc)
                 lrc_exists = True
                 modified = True
 
             elif embedded_canonical and not lrc_canonical:
+                dest_for_lrc = _format_for_storage(embedded_raw, cfg, optimize=True, is_for_lrc=True)
                 with open(lrc_path, "w", encoding="utf-8",
                           newline="\n") as f:
-                    f.write(embedded_canonical)
+                    f.write(dest_for_lrc)
                 lrc_exists = True
                 modified = True
 
@@ -515,6 +575,7 @@ def _process_lyrics_for_audio(audio_path, cfg):
     # INSTRUMENTAL=1 with lyrics present is contradictory: flip it to 0.
     inst = af.get_tag("INSTRUMENTAL")
     if (cfg.get("fix_instrumental_from_lyrics", True)
+            and can_write_instr
             and inst is not None and str(inst).strip() == "1"):
         embedded_now = bool(af.get_lyrics() and str(af.get_lyrics()).strip())
         lrc_now = os.path.exists(lrc_path)
@@ -535,7 +596,12 @@ def _process_lyrics_for_audio(audio_path, cfg):
 
 
 def _normalize_album_media_source(args):
-    album_dir, default_source = args
+    # args is (album_dir, default_source) or (album_dir, default_source, config)
+    if len(args) == 3:
+        album_dir, default_source, cfg = args
+    else:
+        album_dir, default_source = args
+        cfg = None
 
     try:
         files = sorted(f for f in os.listdir(album_dir) if is_audio_file(f))
@@ -593,6 +659,9 @@ def _normalize_album_media_source(args):
 
             for path, af, source_clean in entries:
                 if not source_clean:
+                    # Respect per-filetype MEDIA_SOURCE toggle
+                    if cfg is not None and not should_write_audio_tag(cfg, "SOURCE", filepath=path):
+                        continue
                     original_size = os.path.getsize(path)
 
                     if not af.set_tag("SOURCE", fill_source):
@@ -614,6 +683,8 @@ def _normalize_album_media_source(args):
         else:
             for path, af, source_clean in entries:
                 if source_clean:
+                    if cfg is not None and not should_write_audio_tag(cfg, "SOURCE", filepath=path):
+                        continue
                     original_size = os.path.getsize(path)
 
                     if not af.delete_tag("SOURCE"):
@@ -676,7 +747,7 @@ def _normalize_media_source_library(config, stats):
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
-            ex.submit(_normalize_album_media_source, (a, default_source)): a
+            ex.submit(_normalize_album_media_source, (a, default_source, config)): a
             for a in albums
         }
 

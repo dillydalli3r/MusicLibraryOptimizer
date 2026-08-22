@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.3.8
+# Music Library Optimizer v1.4.0
 
 > ## ⚠️ VIBE CODED
 >
@@ -14,15 +14,15 @@ lyrics (including **Enhanced / Extended LRC word-sync**) — optimizing both
 storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
-Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.8`) + command-line app (`mlo`) +
-optional interactive console menu. **v1.3.8 defaults to both AudioAuditor+`.log` for CD `AUDIT` (both must be `REAL`), covers exactly `1000×1000` (resize+force exact+enforce), and all effort values at maximum (`FLAC 8`, `JXL 10`, `PNG 6`).**
+Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.0`) + command-line app (`mlo`) +
+optional interactive console menu. **v1.4.0 adds blank zero-timestamp mode + per-target (LRC/EMBEDDED/BOTH), sorts all config options, revamps the Setup Guide, hardens grading/auditing, makes the Dependencies manager far more usable, and ships many bug/performance fixes; defaults remain both AudioAuditor+`.log` for CD `AUDIT`, `1000×1000` covers, max efforts (`FLAC 8`, `JXL 10`, `PNG 6`).**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.8_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.4.0_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.3.8_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.4.0_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -41,9 +41,21 @@ PATH (the system scope requests admin elevation automatically). See
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
 
-## New in v1.3.8
+## New in v1.4.0
 
-- **Tag hygiene — all written tags trimmed, preserve list in Guide** — `mlo/audio.py:set_tag` and `set_any_tag` now `strip()` every value (except multi-line `LYRICS`) so `ITUNESADVISORY`/`GENRE`/other tags never have leading/trailing spaces; `mlo/grader.py` now fails `ITUNESADVISORY` if raw `!= stripped` or not in `0/1/2` and `GENRE` if `raw != stripped`, while `mlo/autotag.py` trims `GENRE`/`ITUNESADVISORY` on the fly before deriving `ALBUMITUNESADVISORY`. **Setup Guide** (`app.py: SetupWizard`) now has an `⑧  MusicBrainz Picard — Preserve Tags` card with a selectable `Text` widget containing the full 40-tag preserve list (`TITLE, ALBUM…AUDIT, LOG_GRADE, ENCODER_*…`), so you can copy-paste to Picard.
+- **Blank zero-timestamp mode + per-target (LRC/EMBEDDED/BOTH)** — `Settings → Enhanced LRC` now has `Add [00:00.00] to First Line` plus two new options: `Zero Timestamp Target` (`EMBEDDED`/`LRC`/`BOTH`, default `BOTH`) and `Zero Timestamp as Blank Line` (when on, inserts a bare `[00:00.00]` blank lead-in; when off, duplicates first lyric's text as `[00:00.00]<text>`). `mlo/lyrics.py:format_lyrics_text` now respects `lrc_zero_timestamp_blank` and `mlo/lyrics.py:_format_for_storage` + `_zero_target_allows()` gates zero insertion per sidecar vs tag, and `mlo/grader.py:_lyrics_formatted` / `_lyrics_zero_timestamp_ok` validate the same rules. `Setup Guide → Lyrics` presets updated: `Standard`, `Enhanced — duplicate`, `Enhanced — blank`, `LRC Sidecar only` (each shows target/blank). Sorting: `config.json` now `sort_keys=True`, UI groups sort keys alphabetically for a tidy layout.
+- **Grading / auditing hardened + performance** — `mlo/audit.py`: reuse `detect_all_tools()` (no redundant lookup), count CD checksum `AUDIT` writes in `stats`, fix `pbar` undercount on failed batches (`pbar.update(len(batch))`), preserve `warn` flags in dual-source `require_both` (don’t mask `Valid+clipping` as `ok`), pre-filter `grade_album_logs` to only `.log`+`MEDIA==CD` albums (no 5k-thread fan-out). `mlo/lyrics.py`: reuse `final` for LRC to avoid double read. `mlo/grader.py`: fix `unreadable` undercount, fix `CD rip sheets not named` total_checks, cache `Image.open` once for cover size+square. `mlo/config.py`: safe `lrc_zero_timestamp_target` choices.
+- **Dependencies manager — far more usable** — `app.py:DependenciesDialog` now has row checkboxes + `Select All/None`, `Update Selected`, `Force reinstall`, `Check Latest`, `Open Folder`, `Copy Paths`, `Show Log`, per-tool `Details` button, bottom `Progressbar` + status label, and a synchronously-set `busy` flag to prevent double-click race. Each download reports `prog` to both the main console and the dialog’s bar. Much easier to update a subset or force-reinstall.
+- **Bug sweep + Setup Guide refresh** — `mlo/config.py`: sorted `audio_tag_writes` handling, `mlo/lyrics.py`: blank vs duplicate idempotency, `mlo/autotag.py` & `mlo/loudness.py` per-type stripping already; `SetupWizard` presets now cover all 8 scripts + cover + lyrics (including blank zero) and show a live pending summary.
+
+## New in v1.3.9
+
+- **Per-filetype tag controls — organized, not overwhelming** — `Settings → Audio Tags — Per Format` now lets you choose which semantic tag families each audio container receives. Families: `AUDIT` (`AUDIT`), `LOG` (`LOG_GRADE`), `RG` (`REPLAYGAIN_*` 4 tags), `DR` (`DYNAMIC RANGE` 2 tags), `M/S` (`MEDIA`+`SOURCE`), `ADV` (`ITUNESADVISORY`+`ALBUMITUNESADVISORY`), `INST` (`INSTRUMENTAL`), `LYR` (embedded `LYRICS`). Rows are `FLAC`, `MP3`, `MP4`, `OGG`, `Opus`, `AAC`; each toggle is ANDed with the global master (`Write AUDIT` etc.). Covers the 6 audio types with 8 families (48 toggles) — enough control without per-tag sprawl. `Grader` also skips disabled families so you don't get false FAILs, and every writer (`Audit`, `Discs`, `DR/RG`, `Lyrics`, `AutoTag`) respects the per-type setting. `mlo/config.py: AUDIO_TAG_FAMILIES` + `should_write_audio_tag()` + `audio_tag_writes` dict, normalized and persisted; `ConfigDialog` table uses `ToggleSwitch` per cell.
+- **Picard preserve narrowed to app-added only + audit bug fixed** — `README` and `SetupWizard` preserve list now contains only tags this app actually writes (`MEDIA, SOURCE, INSTRUMENTAL, ITUNESADVISORY, ALBUMITUNESADVISORY, REPLAYGAIN_*, DYNAMIC RANGE, AUDIT, LOG_GRADE, ENCODER_*, LYRICS…` 22 tags) — standard MusicBrainz tags (`TITLE`, `ALBUM`, `ARTIST`, `GENRE` etc.) are excluded because Picard already writes them. Fixed `mlo/audit.py: _audit_tag_value` undefined `tag_value` bug in dual-source `audit_cd_require_both` path (added missing `tag_value = _audit_tag_value(...)` and cleaned dead `pass` branches) and verified no other unfinished edits remain (`py_compile` clean on all modules).
+- **Full metadata/padding strip verified + TAGS layout kept** — no changes to the `KEEP_VORBIS_KEYS`/`_clean_flac_tags`/`_strip_*` pipelines; previous `v1.3.8` guarantees still hold.
+
+## New in v1.3.8
+- **Tag hygiene — all written tags trimmed, preserve list in Guide** — `mlo/audio.py:set_tag` and `set_any_tag` now `strip()` every value (except multi-line `LYRICS`) so `ITUNESADVISORY`/`GENRE`/other tags never have leading/trailing spaces; `mlo/grader.py` now fails `ITUNESADVISORY` if raw `!= stripped` or not in `0/1/2` and `GENRE` if `raw != stripped`, while `mlo/autotag.py` trims `GENRE`/`ITUNESADVISORY` on the fly before deriving `ALBUMITUNESADVISORY`. **Setup Guide** (`app.py: SetupWizard`) had the 40-tag preserve list (`TITLE, ALBUM…`) — now narrowed to app-added only in v1.3.9.
 - **Full metadata/padding strip verified for all edited types** — `FLAC` via `mlo/containers.py: KEEP_VORBIS_KEYS` + `_clean_flac_tags()` on every `Optimize` (even when skipped) plus `--no-padding`/`PADDING` removal; `JPEG` via `_strip_jpeg_metadata` (`APP0-APP15`/`COM` stripped, then `ENCODER` XMP kept), `PNG` via `_strip_png_metadata` (`tEXt`/`iTXt`/`zTXt`/`eXIf`/`tIME` stripped, then `ENCODER` `tEXt` kept), `JXL` via `xml ` box replacement. `.log` never touched.
 - **Defaults now maximum quality & thorough — `AUDIT` uses both sources, covers `1000×1000`, all efforts max** — `audit_cd_require_both` now `True` (both `.log` CRC + `AudioAuditor` must be `REAL`), `cover_resize_enabled`/`cover_force_exact_size`/`cover_enforce_size`/`cover_enforce_square` all `True` (guarantees exactly `1000×1000`), `png_optimization_level` `6` (max), `jpegxl_effort` `10` (max), `flac_level` `8` (max). New installs get these; existing `config.json` updated on save.
 - **TAGS column fully visible & resizable** — `TAGS · G I A AA L` width `320→420`, `FOLDER / TRACK` `#0` now `260` `stretch`, window `1280x780` `minsize 1100x640` so `G:Alternative/Avant-Gard…` no longer cuts off; `Treeview.Heading` now `1px BORDER` (`#262626`) with `padding (5,3)` so the drag handle between `COVER` and `TAGS` is visible and resizable, and `TAGS` stretches to fill leftover space but can be manually dragged.
@@ -728,28 +740,52 @@ You can also manually check anytime via **About** → **Check for Updates**.
 
 ## MusicBrainz Picard — Preserve Tags
 
-If you use **Options → Tags → Clear existing tags** in Picard, add these to **Preserve these tags from being cleared** so that Picard does not delete the tags that this script writes and needs for grading. This list covers every Vorbis/ID3/MP4 tag that any of the 8 scripts writes or that grading checks, plus the standard music tags that should survive a Picard save:
+If you use **Options → Tags → Clear existing tags** in Picard, add these to **Preserve these tags from being cleared** so that Picard does not delete the tags that **this app adds** and needs for grading. This list is **only** the tags the app writes — not the standard MusicBrainz tags (TITLE, ALBUM, ARTIST, GENRE etc. are already written by Picard and do not need preserving):
 
 ```
-TITLE, ALBUM, ARTIST, ALBUMARTIST, TRACKNUMBER, DISCNUMBER, DATE, YEAR, GENRE, COMPOSER, LYRICIST, COMMENT, LYRICS, UNSYNCEDLYRICS, BPM, COPYRIGHT, MEDIA, SOURCE, INSTRUMENTAL, ITUNESADVISORY, ALBUMITUNESADVISORY, REPLAYGAIN_TRACK_GAIN, REPLAYGAIN_TRACK_PEAK, REPLAYGAIN_ALBUM_GAIN, REPLAYGAIN_ALBUM_PEAK, DYNAMIC RANGE, ALBUM DYNAMIC RANGE, AUDIT, LOG_GRADE, ENCODER, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, AUDIO_MD5, INTEGRITY, LOG_CRC, PERFORMER, WORK, MOVEMENT, PART, CONDUCTOR, ARTISTSORT, ALBUMARTISTSORT, TITLESORT, COMPOSERSORT, ORIGINALDATE, ORIGINALYEAR, ENCODEDBY, CATALOGNUMBER, BARCODE, ISRC
+MEDIA, SOURCE, INSTRUMENTAL, ITUNESADVISORY, ALBUMITUNESADVISORY, REPLAYGAIN_TRACK_GAIN, REPLAYGAIN_TRACK_PEAK, REPLAYGAIN_ALBUM_GAIN, REPLAYGAIN_ALBUM_PEAK, DYNAMIC RANGE, ALBUM DYNAMIC RANGE, AUDIT, LOG_GRADE, ENCODER, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, LYRICS, UNSYNCEDLYRICS, AUDIO_MD5, INTEGRITY, LOG_CRC
 ```
 
 For FLAC these are Vorbis comments (`UPPERCASE`), for MP3 they are `TXXX:` frames (`TXXX:ITUNESADVISORY` etc.) and `COMM`/`USLT`, for MP4 they are `----:com.apple.iTunes:*` freeform atoms — Picard handles the mapping automatically when you list the Vorbis-style names above. If you do **not** use *Clear existing tags*, you do not need to set this; just ensure **Preserve these tags** is empty or add only the custom ones you care about (`AUDIT`, `LOG_GRADE`, `MEDIA`, `SOURCE`).
 
-**Tip:** Keep *Clear existing tags* **off** unless you have a specific reason; the app’s own **FLAC tag cleaning** (`mlo/containers.py: _clean_flac_tags`) already removes all unused metadata/padding while keeping exactly the whitelist above, so you get a clean library without needing Picard to clear.
+Tags **not** in this list such as `TITLE`, `ALBUM`, `ARTIST`, `ALBUMARTIST`, `TRACKNUMBER`, `DISCNUMBER`, `DATE`, `GENRE`, `COMPOSER`, `PERFORMER`, `WORK` etc. are standard MusicBrainz/Picard tags — you do not need to preserve them separately because Picard will rewrite them anyway.
+
+**Tip:** Keep *Clear existing tags* **off** unless you have a specific reason; the app’s own **FLAC tag cleaning** (`mlo/containers.py: _clean_flac_tags` / `KEEP_VORBIS_KEYS`) already removes all unused metadata/padding while keeping exactly the whitelist (standard tags + the app-added tags above), so you get a clean library without needing Picard to clear.
+
+## Per-Filetype Tag Writes (v1.3.9)
+
+`Settings → Audio Tags — Per Format` controls which semantic tag families each audio container receives. This is **organized but thorough**: 6 audio types × 8 families = 48 toggles, enough to fine-tune without per-tag sprawl.
+
+| Family | Tags | Script |
+|---|---|---|
+| **AUDIT** | `AUDIT` (REAL/FAKE) | 6 Audit Library |
+| **LOG** | `LOG_GRADE` (0-100) | 6 Audit Library (CD rips) |
+| **RG** | `REPLAYGAIN_TRACK/ALBUM_GAIN/PEAK` (4) | 7 DR & ReplayGain (rsgain) |
+| **DR** | `DYNAMIC RANGE` / `ALBUM DYNAMIC RANGE` | 7 DR & ReplayGain (simple-dr-meter) |
+| **M/S** | `MEDIA` + `SOURCE` | 1 Lyrics (MEDIA/SOURCE normalizer) |
+| **ADV** | `ITUNESADVISORY` + `ALBUMITUNESADVISORY` | 8 Auto Tagging |
+| **INST** | `INSTRUMENTAL` | 1 Lyrics + 8 Auto Tagging |
+| **LYR** | `LYRICS` (embedded) | 1 Lyrics |
+
+Rows: `FLAC (.flac)` · `MP3 (.mp3)` · `MP4 (.m4a/.mp4)` · `OGG (.ogg)` · `Opus (.opus)` · `AAC (.aac)`.
+
+- Each toggle is **ANDed** with its global master (`Settings → Tags — Writes` / `Audio Audit` / `Auto Tagging`): both must be on for a tag to be written. Example: `MP3 → AUDIT off` means MP3s never get `AUDIT`, even if `Write AUDIT Tags` is on.
+- `Encoder Tags` (`ENCODER_PROGRAM/QUALITY/VERSION`) are already per-type via `Settings → Encoder Tags` (Vorbris/XMP/tEXt) — the new table adds the semantic families.
+- `Grader` respects disabled families: a disabled tag is not counted as missing and does not cause FAIL, so you can keep a clean grade while tailoring writes.
+- Stored as `config.json: audio_tag_writes: { flac: {AUDIT:true,…}, mp3:{…}, … }` — all `true` by default for backward compatibility. Edit via GUI or `mlo config audio_tag_writes` JSON.
 
 ## Project layout
 
 ```
-app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.8
+app.py                          GUI entry point (Tkinter, dark-themed) — v1.4.0
                                  (PySide6/Qt `gui/` revamp removed; Tkinter is now primary)
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
 mlo/                            Core package — all processing logic
-    __init__.py                 version + public re-exports (1.3.3)
+    __init__.py                 version + public re-exports (1.4.0)
     __main__.py                 python -m mlo entry
     paths.py                    Locations & constants (exe-aware)
     deps.py                     Optional dependency detection (mutagen/Pillow/tqdm)
-    config.py                   config.json load/save & defaults (v1.3.8 keys)
+    config.py                   config.json load/save & defaults (v1.4.0 keys, now with blank timestamp + per-format)
     ui.py                       Console output helpers
     stats.py                    Run stats, byte accounting, progress hooks
     report.py                   Result report printing
@@ -779,7 +815,7 @@ tools/                          Dev helpers & tests
 docs/
     archive/                    Historical release notes
         RELEASE_NOTES_v1.1.0.md v1.1.0 detailed notes (archived)
-RELEASE_NOTES.md                v1.3.8 + v1.2.0 + v1.1.0 summary (current)
+RELEASE_NOTES.md                v1.4.0 + v1.3.9 + v1.3.8 + v1.2.0 + v1.1.0 summary (current)
 config.json                     Persisted settings (created on first save, ignored)
 config.example.json             Example/default config (tracked)
 app_icon.ico                    Application icon (256px ICO, black #0d0d0d bg)
@@ -818,7 +854,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.3.8_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.8_portable_x64.exe` + `dist/mlo.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.4.0_x64.exe` + `dist/MusicLibraryOptimizer_v1.4.0_portable_x64.exe` + `dist/mlo.exe`
 
 ## Rebuilding the exe (without installer)
 
