@@ -744,15 +744,15 @@ You can also manually check anytime via **About** → **Check for Updates**.
 
 ## MusicBrainz Picard — Preserve Tags
 
-If you use **Options → Tags → Clear existing tags** in Picard, add these to **Preserve these tags from being cleared** so that Picard does not delete the tags that **this app adds** and needs for grading. This list is **only** the tags the app writes — not the standard MusicBrainz tags (TITLE, ALBUM, ARTIST, TRACKNUMBER etc. are already written by Picard and do not need preserving). These cover the 13 app-added tags you listed, plus `MEDIA` (the app writes both `MEDIA` and `SOURCE`):
+If you use **Options → Tags → Clear existing tags** in Picard, add these to **Preserve these tags from being cleared** so that Picard does not delete the tags that **this app adds** and needs for grading. This list is **only** the 13 tags you listed — not the standard MusicBrainz tags (TITLE, ALBUM, ARTIST, TRACKNUMBER etc. are already written by Picard and do not need preserving). `MEDIA` is **not** included because Picard already tags `MEDIA` (e.g. `CD`/`Vinyl`/`File`):
 
 ```
-ALBUM DYNAMIC RANGE, ALBUMITUNESADVISORY, AUDIT, DYNAMIC RANGE, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, GENRE, INSTRUMENTAL, ITUNESADVISORY, LOG_GRADE, LYRICS, MEDIA, SOURCE
+ALBUM DYNAMIC RANGE, ALBUMITUNESADVISORY, AUDIT, DYNAMIC RANGE, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, GENRE, INSTRUMENTAL, ITUNESADVISORY, LOG_GRADE, LYRICS, SOURCE
 ```
 
-> **Correction for your list:** You had `SOURCE` but not `MEDIA` — the app writes both (`MEDIA` = `CD`/`Digital Media`/`Vinyl` etc., `SOURCE` = origin like `Digital`/`Web`). You also omitted the 4 `REPLAYGAIN_*` tags (`REPLAYGAIN_TRACK_GAIN`, `REPLAYGAIN_TRACK_PEAK`, `REPLAYGAIN_ALBUM_GAIN`, `REPLAYGAIN_ALBUM_PEAK`) which are written by the **DR & ReplayGain** script via `rsgain` — add those 4 as well if you use that feature, otherwise you can omit them. `UNSYNCEDLYRICS` is the same as `LYRICS` (the app normalizes both to `LYRICS`), so `LYRICS` alone is enough. `GENRE`/`ITUNESADVISORY` are included because you manage them manually and Picard doesn’t preserve them by default when clearing.
+> **Your list was correct** — `MEDIA` is now correctly excluded (Picard handles it). You omitted the 4 `REPLAYGAIN_*` tags (`REPLAYGAIN_TRACK_GAIN`, `REPLAYGAIN_TRACK_PEAK`, `REPLAYGAIN_ALBUM_GAIN`, `REPLAYGAIN_ALBUM_PEAK`) which are written by the **DR & ReplayGain** script via `rsgain` — add those 4 as well if you use that feature, otherwise omit. `UNSYNCEDLYRICS` is the same as `LYRICS` (the app normalizes both to `LYRICS`), so `LYRICS` alone is enough. `GENRE`/`ITUNESADVISORY` are included because you manage them manually and Picard doesn’t preserve them by default when clearing.
 
-For FLAC these are Vorbis comments (`UPPERCASE`), for MP3 they are `TXXX:` frames (`TXXX:ITUNESADVISORY` etc.) and `COMM`/`USLT`, for MP4 they are `----:com.apple.iTunes:*` freeform atoms — Picard handles the mapping automatically when you list the Vorbis-style names above. If you do **not** use *Clear existing tags*, you do not need to set this; just ensure **Preserve these tags** is empty or add only the custom ones you care about (`AUDIT`, `LOG_GRADE`, `MEDIA`, `SOURCE`).
+For FLAC these are Vorbis comments (`UPPERCASE`), for MP3 they are `TXXX:` frames (`TXXX:ITUNESADVISORY` etc.) and `COMM`/`USLT`, for MP4 they are `----:com.apple.iTunes:*` freeform atoms — Picard handles the mapping automatically when you list the Vorbis-style names above. If you do **not** use *Clear existing tags*, you do not need to set this; just ensure **Preserve these tags** is empty or add only the custom ones you care about (`AUDIT`, `LOG_GRADE`, `SOURCE`).
 
 Tags **not** in this list such as `TITLE`, `ALBUM`, `ARTIST`, `ALBUMARTIST`, `TRACKNUMBER`, `DISCNUMBER`, `DATE`, `COMPOSER`, `PERFORMER`, `WORK` etc. are standard MusicBrainz/Picard tags — you do not need to preserve them separately because Picard will rewrite them anyway.
 
@@ -768,7 +768,7 @@ Tags **not** in this list such as `TITLE`, `ALBUM`, `ARTIST`, `ALBUMARTIST`, `TR
 | **LOG** | `LOG_GRADE` (0-100) | 6 Audit Library (CD rips) |
 | **RG** | `REPLAYGAIN_TRACK/ALBUM_GAIN/PEAK` (4) | 7 DR & ReplayGain (rsgain) |
 | **DR** | `DYNAMIC RANGE` / `ALBUM DYNAMIC RANGE` | 7 DR & ReplayGain (simple-dr-meter) |
-| **M/S** | `MEDIA` + `SOURCE` | 1 Lyrics (MEDIA/SOURCE normalizer) |
+| **M/S** | `SOURCE` (MEDIA is now Picard-handled) | 1 Lyrics (SOURCE normalizer) |
 | **ADV** | `ITUNESADVISORY` + `ALBUMITUNESADVISORY` | 8 Auto Tagging |
 | **INST** | `INSTRUMENTAL` | 1 Lyrics + 8 Auto Tagging |
 | **LYR** | `LYRICS` (embedded) | 1 Lyrics |

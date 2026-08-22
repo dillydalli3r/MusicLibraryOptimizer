@@ -1934,24 +1934,24 @@ class SetupWizard(tk.Toplevel):
         self._add_preset_group(preset_host, "⑦  Grading & Audit — strictness",
                                self.GENERAL_PRESETS, self._general_var)
 
-        # Picard preserve list — only tags the app ADDS (corrected per user: 13 + MEDIA)
+        # Picard preserve list — only tags the app ADDS (corrected per user: 13, MEDIA excluded)
         picard_card = ttk.Frame(preset_host, style="Card.TFrame", padding=(12, 10))
         picard_card.pack(fill=tk.X, pady=(14, 0))
-        ttk.Label(picard_card, text="⑧  MusicBrainz Picard — Preserve Tags (app-added only, 14)",
+        ttk.Label(picard_card, text="⑧  MusicBrainz Picard — Preserve Tags (app-added only, 13)",
                   style="Card.TLabel", font=_sfont(9)).pack(anchor="w")
-        ttk.Label(picard_card, text="If you use Picard's 'Clear existing tags', add these to Options → Tags → Preserve these tags from being cleared. These are ONLY the 14 tags this app actually writes (standard TITLE/ALBUM/ARTIST etc. are already written by Picard). Includes your GENRE/ITUNESADVISORY (manually added) plus the app's AUDIT/LOG_GRADE/LYRICS etc. — sorted alphabetically.",
+        ttk.Label(picard_card, text="If you use Picard's 'Clear existing tags', add these to Options → Tags → Preserve these tags from being cleared. These are ONLY the 13 tags this app actually writes (standard TITLE/ALBUM/ARTIST etc. are already written by Picard; MEDIA is also handled by Picard, so excluded).",
                   style="Muted.Card.TLabel", wraplength=700, justify=tk.LEFT, font=_font(8)).pack(anchor="w", pady=(4, 8))
-        # Use a read-only Text for easy copy — sorted alphabetically, covers your 13 + MEDIA
+        # Use a read-only Text for easy copy — sorted alphabetically, your 13 exactly
         txt = tk.Text(picard_card, wrap="word", height=4, background=FIELD, foreground=TEXT,
                       insertbackground=TEXT, borderwidth=0, highlightthickness=0, padx=8, pady=6,
                       font=_font(8), undo=False)
-        txt.insert("1.0", "ALBUM DYNAMIC RANGE, ALBUMITUNESADVISORY, AUDIT, DYNAMIC RANGE, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, GENRE, INSTRUMENTAL, ITUNESADVISORY, LOG_GRADE, LYRICS, MEDIA, SOURCE")
+        txt.insert("1.0", "ALBUM DYNAMIC RANGE, ALBUMITUNESADVISORY, AUDIT, DYNAMIC RANGE, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, GENRE, INSTRUMENTAL, ITUNESADVISORY, LOG_GRADE, LYRICS, SOURCE")
         txt.configure(state="disabled")
         txt.pack(fill=tk.X, pady=(0, 4))
         # Make it selectable but not editable
         txt.bind("<FocusIn>", lambda e: txt.configure(state="normal"))
         txt.bind("<FocusOut>", lambda e: txt.configure(state="disabled"))
-        ttk.Label(picard_card, text="You listed 13 — corrected: added MEDIA (the app writes both MEDIA and SOURCE) and sorted. If you use DR/ReplayGain, also add REPLAYGAIN_TRACK/ALBUM_GAIN/PEAK (4). Tip: Keep 'Clear existing tags' off unless needed; the app's FLAC cleaning already removes unused metadata.",
+        ttk.Label(picard_card, text="Your 13 is now exact — MEDIA removed (Picard tags it). If you use DR/ReplayGain, also add REPLAYGAIN_TRACK/ALBUM_GAIN/PEAK (4). Tip: Keep 'Clear existing tags' off unless needed.",
                   style="Muted.Card.TLabel", font=_font(8), wraplength=700).pack(anchor="w", pady=(4, 0))
 
         # Live summary of pending changes
