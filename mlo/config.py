@@ -237,12 +237,15 @@ DEFAULT_CONFIG = {
     "audit_bpm": True,
 
     # Encoder marker tags written per file type (ENCODER_PROGRAM /
-    # ENCODER_QUALITY / ENCODER_VERSION)
+    # ENCODER_QUALITY / ENCODER_VERSION) — ENCODER_PROGRAM off by default
+    # (legacy, not needed for optimization gating), but can be re-enabled per
+    # format via Settings → Encoder Tags. QUALITY/VERSION remain on (they gate
+    # re-optimization: higher effort or newer version).
     "encoder_tags": {
-        "flac": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "jpeg": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "png": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "jxl": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "flac": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "jpeg": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "png": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "jxl": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
     },
     # Per-filetype audio tag writes — which semantic tag families each audio
     # container receives. All True by default; ANDed with the global master

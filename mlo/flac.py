@@ -45,26 +45,42 @@ def _should_reencode_flac(filepath, target_quality, target_version, force,
 
 
 def _optimize_flac(args):
-    (
-        flac_exe,
-        metaflac_exe,
-        filepath,
-        flac_level,
-        add_seektables,
-        target_version,
-        force,
-        enabled,
-    ) = args
+    # Backwards compatible: older callers pass 8 args, new pass 9 with config
+    if len(args) == 9:
+        (
+            flac_exe,
+            metaflac_exe,
+            filepath,
+            flac_level,
+            add_seektables,
+            target_version,
+            force,
+            enabled,
+            config,
+        ) = args
+    else:
+        (
+            flac_exe,
+            metaflac_exe,
+            filepath,
+            flac_level,
+            add_seektables,
+            target_version,
+            force,
+            enabled,
+        ) = args
+        config = None
 
     filename = os.path.basename(filepath)
     temp_path = filepath + ".opttmp.flac"
 
-    # Always clean Vorbis tags: remove unused metadata while keeping the
-    # whitelist (grading/audit/lyrics etc.). Do this even when the file
-    # would otherwise be skipped, so .log-ignored metadata never accumulates.
+    # Conservative clean: only remove UNSYNCEDLYRICS (always) and LYRICS when
+    # the user wants LRC sidecars only (lyrics_format == LRC), plus
+    # ENCODER_PROGRAM when that marker is disabled. No other tags are touched
+    # so Picard/MusicBrainz IDs etc. are never deleted.
     try:
         from .containers import _clean_flac_tags
-        _clean_flac_tags(filepath)
+        _clean_flac_tags(filepath, config=config, enabled=enabled)
     except Exception:
         pass
 
@@ -267,6 +283,7 @@ def run_optimize_flacs(config):
             target_version,
             force,
             (config.get("encoder_tags") or {}).get("flac") or {},
+            config,
         )
         for fp in flac_files
     ]

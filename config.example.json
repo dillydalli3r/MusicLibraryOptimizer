@@ -106,22 +106,22 @@
   "dr_replaygain_enabled": true,
   "encoder_tags": {
     "flac": {
-      "ENCODER_PROGRAM": true,
+      "ENCODER_PROGRAM": false,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "jpeg": {
-      "ENCODER_PROGRAM": true,
+      "ENCODER_PROGRAM": false,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "jxl": {
-      "ENCODER_PROGRAM": true,
+      "ENCODER_PROGRAM": false,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "png": {
-      "ENCODER_PROGRAM": true,
+      "ENCODER_PROGRAM": false,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     }

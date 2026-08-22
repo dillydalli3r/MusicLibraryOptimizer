@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.4.1
+# Music Library Optimizer v1.4.2
 
 > ## ⚠️ VIBE CODED
 >
@@ -14,15 +14,15 @@ lyrics (including **Enhanced / Extended LRC word-sync**) — optimizing both
 storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
-Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.1`) + command-line app (`mlo`) +
-optional interactive console menu. **v1.4.1 verifies covers are never upscaled (only downscaled to 1000×1000), widens TAGS to use all space, corrects Picard preserve to your 13+MEDIA (14 sorted), and keeps update-on-start on by default with in-app install; v1.4.0 added blank zero-timestamp mode + per-target and per-format tag controls.**
+Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.2`) + command-line app (`mlo`) +
+optional interactive console menu. **v1.4.2 makes `ENCODER_PROGRAM` off by default per format (but still toggleable), stops deleting any tags except `LYRICS`/`UNSYNCEDLYRICS` per your lyrics-format, and confirms optimization only re-runs on higher effort or newer encoder version; v1.4.1 fixed covers never upscaled and widened TAGS.**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.4.1_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.4.2_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.4.1_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.4.2_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -41,9 +41,12 @@ PATH (the system scope requests admin elevation automatically). See
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
 
-## New in v1.4.1
+## New in v1.4.2
 
-- **Covers never upscaled — only downscaled to 1000×1000** — verified `mlo/images.py:_resize_and_crop_image` now only resizes when `w > 1000 or h > 1000` (or `min(w,h) > 1000` after crop); small covers like `500×500` stay `500×500` and grading correctly flags `wrong size 500×500 → 1000×1000` until you supply a larger file. Previous logic used `w != 1000` and would upscale small images.
+- **No more tag deletion — only `LYRICS`/`UNSYNCEDLYRICS` per config** — `mlo/containers.py:_clean_flac_tags` no longer deletes every tag not in `KEEP_VORBIS_KEYS` (that deleted `MUSICBRAINZ_TRACKID`, `ARTISTSORT`, `WORK`, etc. and broke Picard recognition). Now it only ever removes `UNSYNCEDLYRICS` (always, legacy) and `LYRICS` when `Settings → Lyrics → Lyrics Format = LRC` (embedded not wanted), plus `ENCODER_PROGRAM` when that marker is disabled. All other Vorbis comments are left untouched — Picard now recognizes files after the app runs. `mlo/flac.py:_optimize_flac` now passes `config`+`enabled` to the cleaner.
+- **`ENCODER_PROGRAM` off by default, still toggleable per format** — `mlo/config.py:encoder_tags` now `{"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True}` for `flac`/`jpeg`/`png`/`jxl`. `Settings → Encoder Tags` shows `PROGRAM` off (you can turn it back on per format), `mlo/containers.py:_write_*` respects `_enabled`, `mlo/containers.py:_identity_missing` only checks `QUALITY`/`VERSION` (so `PROGRAM` off doesn’t force re-encode), and grading never requires `PROGRAM`. Verified `config.example.json` now shows `false` for all 4 formats.
+
+## New in v1.4.1
 - **TAGS column uses all space — no longer cut off** — `app.py:TREE_COLUMNS tags` widened `420→600`, `FOLDER / TRACK` now `stretch=False` (was `True`) so `TAGS` is the only `stretch=True` column (`minwidth 200`), window widened `1280→1440` (`min 1280`), and `tree_box` properly `columnconfigure(weight=1)`. Long genre strings like `G:Alternative/Avant-GardeNu Metal` now fully visible; horizontal scrollbar appears only when needed.
 - **Picard preserve corrected to your 13 + MEDIA (14 sorted)** — `README.md` + `SetupWizard` now list `ALBUM DYNAMIC RANGE, ALBUMITUNESADVISORY, AUDIT, DYNAMIC RANGE, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, GENRE, INSTRUMENTAL, ITUNESADVISORY, LOG_GRADE, LYRICS, MEDIA, SOURCE` (alphabetical, your 13 + missing `MEDIA`). Note added: add `REPLAYGAIN_*` (4) as well if you use that feature; `GENRE`/`ITUNESADVISORY` kept because you manage them manually. `About → Check for Updates` still on by default (`config.json:check_updates_on_start=True`) with one-click install inside the app.
 
@@ -756,7 +759,7 @@ For FLAC these are Vorbis comments (`UPPERCASE`), for MP3 they are `TXXX:` frame
 
 Tags **not** in this list such as `TITLE`, `ALBUM`, `ARTIST`, `ALBUMARTIST`, `TRACKNUMBER`, `DISCNUMBER`, `DATE`, `COMPOSER`, `PERFORMER`, `WORK` etc. are standard MusicBrainz/Picard tags — you do not need to preserve them separately because Picard will rewrite them anyway.
 
-**Tip:** Keep *Clear existing tags* **off** unless you have a specific reason; the app’s own **FLAC tag cleaning** (`mlo/containers.py: _clean_flac_tags` / `KEEP_VORBIS_KEYS`) already removes all unused metadata/padding while keeping exactly the whitelist (standard tags + the app-added tags above), so you get a clean library without needing Picard to clear.
+**Tip:** Keep *Clear existing tags* **off** unless you have a specific reason. Since `v1.4.2` the app **no longer removes tags** at all except for the two lyric variants (`UNSYNCEDLYRICS` is always removed as legacy, `LYRICS` is removed only when `Settings → Lyrics → Lyrics Format = LRC`); all other tags — including every MusicBrainz/Picard tag (`MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_ALBUMID`, `ARTISTSORT`, `WORK`, `ISRC`, `BARCODE`, etc.) — are left untouched so Picard continues to recognize your files. The old `KEEP_VORBIS_KEYS` whitelist is kept only for reference, not for deletion.
 
 ## Per-Filetype Tag Writes (v1.3.9)
 
@@ -783,15 +786,15 @@ Rows: `FLAC (.flac)` · `MP3 (.mp3)` · `MP4 (.m4a/.mp4)` · `OGG (.ogg)` · `Op
 ## Project layout
 
 ```
-app.py                          GUI entry point (Tkinter, dark-themed) — v1.4.1
+app.py                          GUI entry point (Tkinter, dark-themed) — v1.4.2
                                  (PySide6/Qt `gui/` revamp removed; Tkinter is now primary)
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
 mlo/                            Core package — all processing logic
-    __init__.py                 version + public re-exports (1.4.1)
+    __init__.py                 version + public re-exports (1.4.2)
     __main__.py                 python -m mlo entry
     paths.py                    Locations & constants (exe-aware)
     deps.py                     Optional dependency detection (mutagen/Pillow/tqdm)
-    config.py                   config.json load/save & defaults (v1.4.1 keys, now with blank timestamp + per-format, no-upscale)
+    config.py                   config.json load/save & defaults (v1.4.2 keys, ENCODER_PROGRAM off, no tag deletion)
     ui.py                       Console output helpers
     stats.py                    Run stats, byte accounting, progress hooks
     report.py                   Result report printing
@@ -821,7 +824,7 @@ tools/                          Dev helpers & tests
 docs/
     archive/                    Historical release notes
         RELEASE_NOTES_v1.1.0.md v1.1.0 detailed notes (archived)
-RELEASE_NOTES.md                v1.4.1 + v1.4.0 + v1.3.9 + v1.3.8 + v1.2.0 + v1.1.0 summary (current)
+RELEASE_NOTES.md                v1.4.2 + v1.4.1 + v1.4.0 + v1.3.9 + v1.3.8 + v1.2.0 + v1.1.0 summary (current)
 config.json                     Persisted settings (created on first save, ignored)
 config.example.json             Example/default config (tracked)
 app_icon.ico                    Application icon (256px ICO, black #0d0d0d bg)
@@ -860,7 +863,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.4.1_x64.exe` + `dist/MusicLibraryOptimizer_v1.4.1_portable_x64.exe` + `dist/mlo.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.4.2_x64.exe` + `dist/MusicLibraryOptimizer_v1.4.2_portable_x64.exe` + `dist/mlo.exe`
 
 ## Rebuilding the exe (without installer)
 

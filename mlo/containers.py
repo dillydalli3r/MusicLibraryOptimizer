@@ -91,23 +91,51 @@ KEEP_VORBIS_KEYS = {
 }
 
 
-def _clean_flac_tags(filepath):
-    """Remove all Vorbis comments not in KEEP_VORBIS_KEYS and clear padding.
+def _clean_flac_tags(filepath, config=None, enabled=None):
+    """Conditionally clean Vorbis comments — now conservative by default.
 
-    Keeps only tags used by this script (grading, audit, lyrics, etc.) plus
-    essential music tags. Returns True if any tags were removed.
+    The app previously removed *any* tag not in KEEP_VORBIS_KEYS, which broke
+    Picard recognition (MusicBrainz IDs etc. were deleted). New behavior:
+    * Never remove tags except for the two lyric variants.
+    * ``UNSYNCEDLYRICS`` is always removed (legacy, never written by this app).
+    * ``LYRICS`` is removed only when ``lyrics_format`` is ``LRC`` (embedded
+      lyrics are not wanted) — otherwise it is kept.
+    * ``ENCODER_PROGRAM`` is removed when it is disabled per-format via
+      ``encoder_tags`` (off by default since v1.4.2).
+
+    Returns True if any tags were removed.
     """
     try:
         audio = FLAC(filepath)
         if audio.tags is None:
             return False
-        # Build a list of keys to remove (case-insensitive)
-        keep_lower = {k.lower() for k in KEEP_VORBIS_KEYS}
-        to_remove = [k for k in list(audio.tags.keys()) if k.lower() not in keep_lower]
+        to_remove = []
+        # Always remove UNSYNCEDLYRICS (legacy, not used)
+        for k in list(audio.tags.keys()):
+            if str(k).lower() == "unsyncedlyrics":
+                to_remove.append(k)
+        # Remove LYRICS only when the user wants LRC sidecars only
+        if config is not None:
+            try:
+                fmt = str(config.get("lyrics_format", "EMBEDDED")).upper()
+            except Exception:
+                fmt = "EMBEDDED"
+            if fmt == "LRC":
+                for k in list(audio.tags.keys()):
+                    if str(k).lower() == "lyrics" and k not in to_remove:
+                        to_remove.append(k)
+        # Remove ENCODER_PROGRAM when disabled per-format
+        if enabled is not None and not _enabled(enabled, "ENCODER_PROGRAM"):
+            for k in list(audio.tags.keys()):
+                if str(k).lower() == "encoder_program" and k not in to_remove:
+                    to_remove.append(k)
         if not to_remove:
             return False
         for k in to_remove:
-            del audio.tags[k]
+            try:
+                del audio.tags[k]
+            except Exception:
+                pass
         audio.save()
         return True
     except Exception:
