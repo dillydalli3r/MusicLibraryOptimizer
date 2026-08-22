@@ -41,6 +41,8 @@
   "cue_file_type": "WAVE",
   "normalize_media_source": true,
   "digital_media_source_value": "Digital",
+  "discs_rename_enabled": true,
+  "cue_fix_filenames": true,
   "fix_instrumental_from_lyrics": true,
   "write_audit_tag": true,
   "write_log_grade": true,

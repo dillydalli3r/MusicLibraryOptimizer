@@ -889,6 +889,52 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 add_issue(f"LOG_GRADE not 0-100: {lg}", tr["file"])
                 tr["issues"].append("LOG_GRADE")
 
+        # CD integrity: every track must be covered by a per-track CRC in
+        # the rip log(s). The .log checksum is the ONLY audit source for
+        # CD rips — an album whose log is missing, unreadable, or lacks a
+        # CRC for any of its tracks can never grade PASS.
+        try:
+            from .discs import parse_log_checksums, read_log_text, \
+                album_discs as _album_discs, disc_of_filename, \
+                _file_track_number
+            log_paths = [os.path.join(album_dir, f)
+                         for f in all_files
+                         if f.lower().endswith(".log")]
+            crc_map = {}
+            for lp in sorted(log_paths):
+                crc_map.update(parse_log_checksums(read_log_text(lp)))
+            if not crc_map:
+                total_checks += 1
+                failed_checks += 1
+                add_issue("Rip .log has no per-track CRC checksums "
+                          "(cannot verify CD integrity)", "album")
+            else:
+                discs_map = _album_discs(album_dir)
+                multi = bool(discs_map)
+                for ap in audio_paths:
+                    tr_track = next(
+                        (t for t in tracks
+                         if t.get("unreadable") is False
+                         and os.path.join(album_dir, t["file"]) == ap),
+                        None)
+                    if tr_track is None:
+                        continue
+                    tn = _file_track_number(ap)
+                    covered = tn is not None and tn in crc_map
+                    if multi:
+                        d = disc_of_filename(os.path.basename(ap)) or 1
+                        dlog = os.path.join(album_dir, f"CD-{d}.log")
+                        if not os.path.isfile(dlog):
+                            covered = False
+                    total_checks += 1
+                    if not covered:
+                        failed_checks += 1
+                        add_issue("Track not covered by .log CRC "
+                                  "(unverifiable CD rip)", tr_track["file"])
+                        tr_track["issues"].append("CRC")
+        except Exception:
+            pass
+
     elif media_summary == "Digital Media":
         # SOURCE requirements already checked per-track.
         pass

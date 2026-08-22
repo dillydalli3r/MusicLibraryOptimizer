@@ -67,6 +67,12 @@ DEFAULT_CONFIG = {
     "normalize_media_source": True,
     "digital_media_source_value": DEFAULT_DIGITAL_SOURCE,
 
+    # CD rips (MEDIA=CD): deterministic CD-N renaming of .log/.cue and
+    # conservative CUE FILE-name correction. Both are content-derived —
+    # nothing is renamed when the evidence is ambiguous.
+    "discs_rename_enabled": True,
+    "cue_fix_filenames": True,
+
     # Music-file tag writes
     "fix_instrumental_from_lyrics": True,
     "write_audit_tag": True,

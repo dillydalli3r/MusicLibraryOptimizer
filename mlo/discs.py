@@ -192,24 +192,32 @@ def _audio_crc32(ffmpeg_exe, path):
 def verify_album_checksums(ffmpeg_exe, album_dir, paths, config=None):
     """Verify MEDIA=CD tracks against the CRC-32 checksums in the rip logs.
 
-    Only for CD rips: a file whose log checksum matches its actual PCM CRC
-    is REAL, a mismatch is FAKE, and files without a log checksum are left
-    alone (AudioAuditor decides those). Returns {path: 'REAL'|'FAKE'}.
+    This is the ONLY integrity source for CD rips — AudioAuditor is never
+    consulted for MEDIA=CD (see audit.py). A file whose log checksum
+    matches its actual decoded-PCM CRC is REAL, a mismatch is FAKE, and
+    files whose log carries no usable checksum are reported as unverified
+    (they get no AUDIT value, so grading fails the album instead of
+    guessing).
+
+    Returns ({path: 'REAL'|'FAKE'}, {path: reason}) — verified verdicts
+    first, then unverified files with the reason (no log / no checksum /
+    undecodable).
     """
+    unverified = {}
     if not config or not config.get("audit_verify_cd_checksums", True):
-        return {}
+        return {}, {}
     if not paths:
-        return {}
+        return {}, {}
     af = AudioFile(paths[0])
     if af.audio is None:
-        return {}
+        return {}, {p: "unreadable audio" for p in paths}
     if str(af.get_tag("MEDIA") or "").strip() != "CD":
-        return {}
+        return {}, {}
 
     logs = [os.path.join(album_dir, f) for f in sorted(os.listdir(album_dir))
             if f.lower().endswith(".log")]
     if not logs:
-        return {}
+        return {}, {p: "no .log file" for p in paths}
     discs = album_discs(album_dir)
     multi = bool(discs)
 
@@ -221,21 +229,30 @@ def verify_album_checksums(ffmpeg_exe, album_dir, paths, config=None):
         if multi:
             log_path = os.path.join(album_dir, f"CD-{d}.log")
             if not os.path.isfile(log_path):
+                unverified[p] = f"missing CD-{d}.log"
                 continue
             per_track = parse_log_checksums(read_log_text(log_path))
+            if not per_track:
+                unverified[p] = f"CD-{d}.log has no per-track CRCs"
+                continue
         else:
             per_track = {}
             for log_path in logs:
                 per_track.update(parse_log_checksums(read_log_text(log_path)))
+            if not per_track:
+                unverified[p] = "log has no per-track CRCs"
+                continue
         tn = _file_track_number(p)
         crc = per_track.get(tn)
         if not crc:
+            unverified[p] = f"log has no CRC for track {tn if tn else '?'}"
             continue
         actual = _audio_crc32(ffmpeg_exe, p)
         if actual is None:
+            unverified[p] = "could not decode audio for CRC"
             continue
         verdicts[p] = "REAL" if actual == crc else "FAKE"
-    return verdicts
+    return verdicts, unverified
 
 
 def _audio_seconds(paths):
@@ -263,8 +280,10 @@ def _rename(src, dst, notes):
         return False
 
 
-def rename_cues_for_discs(album_dir, discs=None, log_fn=None):
+def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
     """Rename cues to CD-N.cue based on their FILE entries."""
+    if config is not None and not config.get("discs_rename_enabled", True):
+        return []
     discs = discs if discs is not None else album_discs(album_dir)
     if not discs:
         return []
@@ -310,8 +329,10 @@ def _log_name_disc(name):
     return d if 1 <= d <= 99 else None
 
 
-def rename_logs_for_discs(album_dir, discs=None, log_fn=None):
+def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
     """Rename logs to CD-N.log using content-derived evidence only."""
+    if config is not None and not config.get("discs_rename_enabled", True):
+        return []
     discs = discs if discs is not None else album_discs(album_dir)
     if not discs:
         return []
@@ -375,6 +396,126 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None):
 
 
 # ----------------------------------------------------------------------
+# CUE FILE-name correction (conservative, evidence-based)
+# ----------------------------------------------------------------------
+def _norm_name(s):
+    """Normalize a filename for comparison: lowercase, strip extension
+    separators/underscores/double spaces. Never removes digits."""
+    s = os.path.splitext(os.path.basename(s))[0].lower()
+    s = re.sub(r"[\s_\-\.]+", " ", s).strip()
+    return re.sub(r"\s+", " ", s)
+
+
+def _track_num_of(name):
+    """Leading track number 'NN' from 'NN - Title.ext' / 'NN. Title'."""
+    m = re.match(r"^(\d{1,3})(?:\s*[-._\s])", os.path.basename(name))
+    return int(m.group(1)) if m else None
+
+
+def fix_cue_filenames(album_dir, log_fn=None, config=None):
+    """Correct FILE entries inside .cue sheets to match the actual audio
+    filenames in *album_dir* — with minimal assumptions.
+
+    A FILE entry is only rewritten when ALL of these hold:
+      1. the referenced file does not exist on disk (any letter-case), and
+      2. exactly ONE candidate audio file matches by normalized name
+         (punctuation/space-insensitive), OR exactly one candidate shares
+         the same leading track number AND the cue references exactly the
+         tracks of one album folder (single-cue sanity).
+    Ambiguous or missing matches are left untouched and reported.
+
+    Returns a list of note strings describing every change.
+    """
+    if config is not None and not config.get("cue_fix_filenames", True):
+        return []
+    notes = []
+    cues = [f for f in sorted(os.listdir(album_dir))
+            if f.lower().endswith(".cue")]
+    if not cues:
+        return notes
+
+    audio = [f for f in sorted(os.listdir(album_dir)) if is_audio_file(f)]
+    if not audio:
+        return notes
+
+    # Lookup tables over real files.
+    exact = {f.lower(): f for f in audio}
+    norm = {}
+    for f in audio:
+        norm.setdefault(_norm_name(f), []).append(f)
+    nums = {}
+    for f in audio:
+        n = _track_num_of(f)
+        if n is not None:
+            nums.setdefault(n, []).append(f)
+
+    for cue in cues:
+        path = os.path.join(album_dir, cue)
+        try:
+            with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+
+        changed = False
+        out_lines = []
+        for line in lines:
+            m = CUE_FILE_RE.match(line.rstrip("\n"))
+            if not m:
+                out_lines.append(line)
+                continue
+            ref = m.group(1)
+            ref_base = ref.replace("/", "\\").split("\\")[-1]
+            new_line = line
+
+            exists = (
+                os.path.isfile(os.path.join(album_dir, ref_base))
+                or ref_base.lower() in exact
+                or any(f.lower() == ref_base.lower() for f in audio)
+            )
+            if not exists:
+                candidates = None
+                # 1) unique normalized-name match
+                c = norm.get(_norm_name(ref_base), [])
+                if len(c) == 1:
+                    candidates = c
+                else:
+                    # 2) unique leading-track-number match
+                    tn = _track_num_of(ref_base)
+                    if tn is not None:
+                        c2 = nums.get(tn, [])
+                        if len(c2) == 1:
+                            candidates = c2
+                if candidates:
+                    actual = candidates[0]
+                    # Keep any directory part of the original reference.
+                    head = ref[: len(ref) - len(ref_base)] if ref_base else ""
+                    new_ref = head + actual
+                    if new_ref != ref:
+                        new_line = line.replace(
+                            f'"{ref}"', f'"{new_ref}"', 1)
+                        if new_line != line:
+                            notes.append(
+                                f"{cue}: FILE \"{ref}\" -> \"{new_ref}\"")
+                            changed = True
+                else:
+                    notes.append(
+                        f"{cue}: unresolved FILE \"{ref}\" left as-is")
+            out_lines.append(new_line)
+
+        if changed:
+            try:
+                with open(path, "w", encoding="utf-8", newline="") as fh:
+                    fh.writelines(out_lines)
+            except OSError as e:
+                notes.append(f"{cue}: write failed ({e})")
+    if log_fn and notes:
+        for n in notes:
+            log_fn(n)
+    return notes
+
+
+# ----------------------------------------------------------------------
 # Per-disc rip-log scoring
 # ----------------------------------------------------------------------
 def score_disc_log(cli_exe, log_path, disc_files, timeout=300):
@@ -422,9 +563,10 @@ def score_disc_log(cli_exe, log_path, disc_files, timeout=300):
 
 
 def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
-                     write_tags=True):
-    """Rename logs/cues to CD-N and write LOG_GRADE (0-100) to every
-    track of MEDIA=CD albums, one score per disc.
+                     write_tags=True, config=None):
+    """Rename logs/cues to CD-N (config-gated), fix CUE FILE names and
+    write LOG_GRADE (0-100) to every track of MEDIA=CD albums, one score
+    per disc.
 
     Returns ({disc: score}, notes list).
     """
@@ -442,8 +584,9 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
     if media != "CD":
         return {}, notes
 
-    rename_logs_for_discs(album_dir, discs, log_fn=log_fn)
-    rename_cues_for_discs(album_dir, discs, log_fn=log_fn)
+    rename_logs_for_discs(album_dir, discs, log_fn=log_fn, config=config)
+    rename_cues_for_discs(album_dir, discs, log_fn=log_fn, config=config)
+    fix_cue_filenames(album_dir, log_fn=log_fn, config=config)
 
     scores = {}
     for d, paths in sorted(discs.items()):

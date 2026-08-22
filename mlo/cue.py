@@ -200,18 +200,25 @@ def run_format_cues(config):
     log(f"target: {target}")
 
     # First pass: deterministically rename multi-CD cues to CD-N.cue
-    # (based on their FILE entries), then re-collect.
+    # (based on their FILE entries), then fix stale FILE names, then re-collect.
+    # Both steps are config-gated and make no assumptions.
     targets = config.get("targets")
     cues = _collect_targets(targets, (".cue",))
     if targets is None:
         cues = sorted(_walk_files(target, (".cue",)))
 
-    from .discs import rename_cues_for_discs
+    from .discs import rename_cues_for_discs, rename_logs_for_discs, fix_cue_filenames
     renamed_any = False
     for album_dir in sorted({os.path.dirname(c) for c in cues}):
-        for old, new in rename_cues_for_discs(album_dir):
+        for old, new in rename_cues_for_discs(album_dir, config=config):
             renamed_any = True
             log(f"cue renamed: {old} -> {new}")
+        for old, new in rename_logs_for_discs(album_dir, config=config):
+            renamed_any = True
+            log(f"log renamed: {old} -> {new}")
+        for note in fix_cue_filenames(album_dir, config=config):
+            log(note)
+            renamed_any = True if "->" in note else renamed_any
     if renamed_any:
         # Re-collect by walking each original album folder: explicit
         # targets may have pointed at a now-renamed .cue file.

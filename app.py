@@ -117,7 +117,7 @@ TREE_COLUMNS = {
     "tracks": ("TRACKS", 58, True),
     "media": ("MEDIA", 100, True),
     "cover": ("COVER", 110, True),
-    "tags": ("TAGS · G A I L AA", 300, True),
+    "tags": ("TAGS · G I A AA L", 320, True),
 }
 
 CONFIG_FIELDS = [
@@ -166,6 +166,9 @@ CONFIG_FIELDS = [
     ("keep_empty_cue_lines", "Keep Empty CUE Lines", "bool", None),
     ("keep_other_cue_lines", "Keep Other CUE Lines", "bool", None),
     ("cue_file_type", "CUE FILE Type", "choice", ("WAVE", "MP3")),
+    ("cue_fix_filenames", "Fix CUE FILE Names to Match Tracks", "bool", None),
+    # CD rips — disc handling
+    ("discs_rename_enabled", "Auto-Rename .cue/.log to CD-N", "bool", None),
     # Tags — Media/Source + writes
     ("normalize_media_source", "Normalize MEDIA/SOURCE", "bool", None),
     ("digital_media_source_value", "Digital SOURCE Value", "str", None),
@@ -691,6 +694,15 @@ FIELD_DESCRIPTIONS = {
         "dropping them.",
     "cue_file_type":
         "FILE line type written by the CUE formatter: WAVE or MP3.",
+    "cue_fix_filenames":
+        "Fix CUE FILE lines whose referenced audio file is missing — only "
+        "rewritten when exactly one audio file matches by normalized name or "
+        "leading track number, so ambiguous cases are never guessed.",
+    "discs_rename_enabled":
+        "Auto-rename cue/log sheets to CD-1.cue / CD-1.log … CD-11.cue/log "
+        "for multi-disc albums (content-derived: FILE entries for cues; "
+        "filename/disc-number/duration for logs). Off by default discovery "
+        "still works, only the rename step is skipped.",
     "normalize_media_source":
         "Enforce the MEDIA/SOURCE rule: albums with MEDIA 'Digital Media' "
         "must have SOURCE populated; all other albums must not have SOURCE.",
@@ -1120,6 +1132,10 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("CUE Sheets", [
                 "keep_empty_cue_lines", "keep_other_cue_lines", "cue_file_type",
+                "cue_fix_filenames",
+            ]),
+            ("CD Rips", [
+                "discs_rename_enabled",
             ]),
             ("Tags — Media & Source", [
                 "normalize_media_source", "digital_media_source_value",
@@ -1425,96 +1441,209 @@ class ConfigDialog(tk.Toplevel):
 # Setup Wizard with presets (first-run helper)
 # ======================================================================
 class SetupWizard(tk.Toplevel):
-    """First-run setup helper with presets for Music Files and Cover Images.
-    Includes Most Aggressive (LOSSLESS) and other presets."""
-    PRESETS = {
-        "Music Files — Most Aggressive (LOSSLESS)": {
-            "flac_level": 8,
-            "add_seektables": False,
-            "reencode_images": False,  # focus on music
-        },
-        "Music Files — Balanced": {
-            "flac_level": 5,
-            "add_seektables": False,
-            "reencode_images": True,
-        },
-        "Cover Images — Most Aggressive (LOSSLESS)": {
-            "jpegxl_effort": 9,
-            "reencode_images": True,
-            "reencode_to_jxl": True,
-            "cover_resize_enabled": True,
-            "cover_target_size": 1000,
-            "cover_force_exact_size": True,
-            "cover_crop_enabled": True,
-            "jpeg_progressive": True,
-            "png_optimization_level": 6,
-        },
-        "Cover Images — Balanced": {
-            "jpegxl_effort": 7,
-            "reencode_images": True,
-            "cover_resize_enabled": True,
-            "cover_target_size": 1000,
-            "cover_force_exact_size": False,
-            "cover_crop_enabled": True,
-            "cover_crop_threshold": 0.05,
-        },
-    }
+    """Intuitive first-run setup: library folder + two preset rows.
+
+    Two separate preset groups make choices obvious and never surprise
+    the user. Each preset lists exactly what it changes in the tooltip
+    and in a live summary below the buttons. Nothing destructive happens
+    until Save.
+
+    Music Files presets tune FLAC + image pipeline toggles.
+    Cover Image presets tune JPEG XL effort, resize/crop, JXL conversion,
+    progressive JPEG and PNG level — all lossless.
+    """
+
+    # (label, tooltip, {key: value})
+    MUSIC_PRESETS = [
+        (
+            "Balanced (recommended)",
+            "FLAC 5 (~5% smaller files, noticeably faster than 8) • no "
+            "seektables • image pipeline on • no other music changes.",
+            {"flac_level": 5, "add_seektables": False, "reencode_images": True,
+             "jpegxl_effort": 7, "png_optimization_level": 4},
+        ),
+        (
+            "Most Aggressive — LOSSLESS",
+            "Maximum lossless music compression: FLAC 8 • no seektables • "
+            "image pipeline off (so only music is touched). Slowest encode, "
+            "smallest FLAC files, zero quality loss.",
+            {"flac_level": 8, "add_seektables": False, "reencode_images": False,
+             "jpegxl_effort": 9, "png_optimization_level": 4},
+        ),
+        (
+            "Lightweight",
+            "Fast & gentle: FLAC 3 • seektables kept • image pipeline off.",
+            {"flac_level": 3, "add_seektables": True, "reencode_images": False},
+        ),
+    ]
+    COVER_PRESETS = [
+        (
+            "Balanced (recommended)",
+            "Re-encode images on • convert to JPEG XL (effort 7) • resize "
+            "covers to 1000×1000 with crop threshold 0.05 • progressive JPEG "
+            "• PNG level 2.",
+            {"reencode_images": True, "reencode_to_jxl": True,
+             "jpegxl_effort": 7, "cover_resize_enabled": True,
+             "cover_target_size": 1000, "cover_force_exact_size": False,
+             "cover_crop_enabled": True, "cover_crop_threshold": 0.05,
+             "jpeg_progressive": True, "png_optimization_level": 2,
+             "rename_to_cover": True, "remove_alpha": True},
+        ),
+        (
+            "Most Aggressive — LOSSLESS",
+            "Maximum lossless cover savings: JPEG XL effort 9 • rename to "
+            "cover • forced exact 1000×1000 (always crop → 1:1 then LANCZOS) "
+            "• progressive JPEG • PNG level 6 • alpha stripping. Still lossless "
+            "before the JXL step; originals are replaced atomically.",
+            {"reencode_images": True, "reencode_to_jxl": True,
+             "jpegxl_effort": 9, "cover_resize_enabled": True,
+             "cover_target_size": 1000, "cover_force_exact_size": True,
+             "cover_crop_enabled": True, "jpeg_progressive": True,
+             "png_optimization_level": 6, "rename_to_cover": True,
+             "remove_alpha": True},
+        ),
+        (
+            "Compatibility (no JXL)",
+            "Keeps JPEG/PNG as JPEG/PNG (no JXL) • optimizes in place • "
+            "resizes to 1000 only when forced exact • progressive JPEG.",
+            {"reencode_images": True, "reencode_to_jxl": False,
+             "convert_jxl_back": False, "cover_resize_enabled": True,
+             "cover_target_size": 1000, "cover_force_exact_size": False,
+             "cover_crop_enabled": True, "jpeg_progressive": True,
+             "png_optimization_level": 2},
+        ),
+    ]
 
     def __init__(self, parent, config, on_saved):
         super().__init__(parent)
         self.config = config
         self.on_saved = on_saved
-        self.title("Setup Guide — Presets")
+        self._pending = {}  # {key: value} staged until Save, shown in summary
+        self.title("Setup Guide")
         self.configure(background=PANEL)
         self.transient(parent)
         self.grab_set()
-        self.minsize(760, 520)
-        self.geometry("780x560")
+        self.minsize(760, 560)
+        self.geometry("820x660")
 
         outer = ttk.Frame(self, padding=20)
         outer.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(outer, text="Setup Guide", style="H2.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="Choose a preset for Music Files or Cover Images, or set your library folder to get started. Most Aggressive (LOSSLESS) uses maximum compression without quality loss.",
-                  style="Muted.TLabel", wraplength=700, justify=tk.LEFT).pack(anchor="w", pady=(6, 16))
+        # Title + intro
+        title_row = ttk.Frame(outer)
+        title_row.pack(fill=tk.X)
+        ttk.Label(title_row, text="Welcome — let's set up your library",
+                  style="H2.TLabel").pack(anchor="w")
+        ttk.Label(outer,
+                  text="Pick a library folder, then optionally apply a preset for Music Files "
+                       "and/or Cover Images. Hover a preset for details. Everything below is "
+                       "previewed before saving. You can always fine-tune in Settings →",
+                  style="Muted.TLabel", wraplength=760, justify=tk.LEFT).pack(anchor="w", pady=(6, 14))
 
-        # Library folder at top
-        folder_frame = ttk.Frame(outer, style="Card.TFrame", padding=(12, 10))
-        folder_frame.pack(fill=tk.X, pady=(0, 16))
-        folder_frame.columnconfigure(0, weight=1)
-        ttk.Label(folder_frame, text="Library Folder", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        # Library folder — always first, visually distinct
+        folder_card = ttk.Frame(outer, style="Card.TFrame", padding=(12, 12))
+        folder_card.pack(fill=tk.X, pady=(0, 14))
+        folder_card.columnconfigure(0, weight=1)
+        ttk.Label(folder_card, text="①  Library Folder  —  where your music lives",
+                  style="Card.TLabel", font=_sfont(9)).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(folder_card, text="Scanned recursively by every tool.",
+                  style="Muted.Card.TLabel", font=_font(8)).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
         self.folder_var = tk.StringVar(value=config.get("music_folder", ""))
-        ttk.Entry(folder_frame, textvariable=self.folder_var).grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(folder_frame, text="Browse…", command=self._browse).grid(row=1, column=1, padx=(8, 0), pady=(6, 0))
+        entry = ttk.Entry(folder_card, textvariable=self.folder_var)
+        entry.grid(row=2, column=0, sticky="ew")
+        ttk.Button(folder_card, text="Browse…",
+                   command=self._browse).grid(row=2, column=1, padx=(8, 0))
+        self.folder_msg = tk.StringVar(value="")
+        ttk.Label(folder_card, textvariable=self.folder_msg,
+                  style="Muted.Card.TLabel", font=_font(8)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.folder_var.trace_add("write", lambda *_: self._validate_folder())
 
-        # Presets
-        for title in ["Music Files — Most Aggressive (LOSSLESS)", "Cover Images — Most Aggressive (LOSSLESS)",
-                      "Music Files — Balanced", "Cover Images — Balanced"]:
-            btn = ttk.Button(outer, text=f"Apply: {title}", style="Small.TButton",
-                             command=lambda t=title: self._apply_preset(t))
-            btn.pack(fill=tk.X, pady=4)
-            ToolTip(btn, f"Apply {title} preset to config (not saved until you press Save)")
+        # Scrollable preset area (keeps dialog usable on small screens)
+        canvas = tk.Canvas(outer, highlightthickness=0, background=PANEL, height=280)
+        scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+        preset_host = ttk.Frame(canvas, style="Panel.TFrame")
+        preset_host.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        host_id = canvas.create_window((0, 0), window=preset_host, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(host_id, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", lambda ev: canvas.yview_scroll(int(-ev.delta / 120), "units")))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
-        # Info
-        ttk.Label(outer, text="Presets change FLAC level, cover resize/crop, and related settings. Review in Settings before saving.",
-                  style="Muted.TLabel", wraplength=700).pack(anchor="w", pady=(12, 0))
+        # Each preset group: radio-style selection (one per group) + apply
+        self._music_var = tk.StringVar(value="")
+        self._cover_var = tk.StringVar(value="")
+        self._add_preset_group(preset_host, "②  Music Files — how to handle FLAC & music tags",
+                               self.MUSIC_PRESETS, self._music_var)
+        self._add_preset_group(preset_host, "③  Cover Images — how to handle artwork",
+                               self.COVER_PRESETS, self._cover_var)
+
+        # Live summary of pending changes
+        summary_card = ttk.Frame(outer, style="Card.TFrame", padding=(12, 8))
+        summary_card.pack(fill=tk.X, pady=(12, 0))
+        ttk.Label(summary_card, text="Pending changes (not saved yet):",
+                  style="Card.TLabel", font=_sfont(8)).pack(anchor="w")
+        self.summary_var = tk.StringVar(value="Library folder only — no preset applied yet. Pick one above or just Save.")
+        ttk.Label(summary_card, textvariable=self.summary_var,
+                  style="Muted.Card.TLabel", wraplength=740, justify=tk.LEFT, font=_font(8)).pack(anchor="w", pady=(4, 0))
 
         btns = ttk.Frame(outer)
         btns.pack(fill=tk.X, pady=(16, 0))
+        ttk.Button(btns, text="Skip (use current settings)", command=self.destroy).pack(side=tk.LEFT)
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btns, text="Save & Close", style="Accent.TButton", command=self._save).pack(side=tk.RIGHT, padx=5)
         self.after(150, lambda: apply_window_chrome(self))
+        self._validate_folder()
+
+    # -- helpers --------------------------------------------------------
+    def _add_preset_group(self, parent, section_title, presets, strvar):
+        ttk.Label(parent, text=section_title, style="H2.Panel.TLabel").pack(anchor="w", pady=(14, 6))
+        row = ttk.Frame(parent, style="Card.TFrame", padding=(10, 8))
+        row.pack(fill=tk.X, pady=(0, 6))
+        for label, tip, _vals in presets:
+            rb = ttk.Radiobutton(row, text=label, variable=strvar, value=label,
+                                 command=self._on_preset_pick)
+            rb.pack(anchor="w", pady=3)
+            ToolTip(rb, tip)
+        ttk.Label(row, text="Select one option above — you can mix a Music preset with a Cover preset.",
+                  style="Muted.Card.TLabel", font=_font(8), wraplength=700).pack(anchor="w", pady=(6, 0))
+
+    def _on_preset_pick(self):
+        self._pending.clear()
+        for label, _tip, vals in self.MUSIC_PRESETS:
+            if self._music_var.get() == label:
+                self._pending.update(vals)
+        for label, _tip, vals in self.COVER_PRESETS:
+            if self._cover_var.get() == label:
+                self._pending.update(vals)
+        if not self._pending:
+            self.summary_var.set("Library folder only — no preset applied yet.")
+        else:
+            parts = []
+            for k, v in sorted(self._pending.items()):
+                cur = self.config.get(k, "(unset)")
+                if cur != v:
+                    parts.append(f"{k}: {cur!r} → {v!r}")
+            self.summary_var.set(";  ".join(parts) if parts else "Selected preset matches current settings — nothing new to change.")
+
+    def _validate_folder(self):
+        p = self.folder_var.get().strip()
+        if not p:
+            self.folder_msg.set("Choose your music library folder (required).")
+        elif not os.path.isdir(p):
+            self.folder_msg.set(f"Not found: {p}")
+        else:
+            try:
+                n = len([f for f in os.listdir(p) if not f.startswith(".")])
+                self.folder_msg.set(f"Found {n} item(s) in folder — looks good.")
+            except OSError as e:
+                self.folder_msg.set(str(e))
 
     def _browse(self):
         path = filedialog.askdirectory(parent=self, initialdir=self.folder_var.get() or "/")
         if path:
             self.folder_var.set(path)
-
-    def _apply_preset(self, title):
-        preset = self.PRESETS.get(title, {})
-        for k, v in preset.items():
-            self.config[k] = v
-        messagebox.showinfo("Preset Applied", f"{title} preset applied to current settings.\nPress Save & Close to keep it.", parent=self)
 
     def _save(self):
         folder = self.folder_var.get().strip()
@@ -1524,6 +1653,9 @@ class SetupWizard(tk.Toplevel):
         if not os.path.isdir(folder):
             messagebox.showerror("Folder not found", f"Folder does not exist:\n{folder}", parent=self)
             return
+        # Apply pending preset values atomically with the folder
+        for k, v in self._pending.items():
+            self.config[k] = v
         self.config["music_folder"] = folder
         self.config["first_run_done"] = True
         if not save_config(self.config):
@@ -2614,19 +2746,19 @@ class App(tk.Tk):
         return self._fmt_vals(vals)
 
     def _track_tags_txt(self, tr, aa_value=None):
-        """TAGS layout: G A I L AA (matches the column-heading key)."""
+        """TAGS layout: G I A AA L — advisory values (A, AA) adjacent."""
         v = tr.get("values") or {}
         lyr = 1 if (tr.get("lyrics_embedded") or tr.get("lyrics_lrc")) else 0
         return (
             f"G:{self._fmt_tag_val(v.get('GENRE'), 12)} "
-            f"A:{self._fmt_tag_val(v.get('ITUNESADVISORY'), 8)} "
             f"I:{self._fmt_tag_val(v.get('INSTRUMENTAL'), 4)} "
-            f"L:{lyr} "
-            f"AA:{self._fmt_tag_val(aa_value, 8)}"
+            f"A:{self._fmt_tag_val(v.get('ITUNESADVISORY'), 8)} "
+            f"AA:{self._fmt_tag_val(aa_value, 8)} "
+            f"L:{lyr}"
         )
 
     def _album_tags_txt(self, res):
-        """TAGS layout: G A I L AA (matches the column-heading key)."""
+        """TAGS layout: G I A AA L — advisory values (A, AA) adjacent."""
         av = res.get("album_values") or {}
         tracks = res.get("tracks") or []
         lyr = sum(
@@ -2636,10 +2768,10 @@ class App(tk.Tk):
         tot = res.get("track_count") or 0
         return (
             f"G:{self._sum_key(res, 'GENRE')} "
-            f"A:{self._sum_key(res, 'ITUNESADVISORY')} "
             f"I:{self._sum_key(res, 'INSTRUMENTAL')} "
-            f"L:{lyr}/{tot} "
-            f"AA:{self._fmt_tag_val(av.get('ALBUMITUNESADVISORY'), 8)}"
+            f"A:{self._sum_key(res, 'ITUNESADVISORY')} "
+            f"AA:{self._fmt_tag_val(av.get('ALBUMITUNESADVISORY'), 8)} "
+            f"L:{lyr}/{tot}"
         )
 
     def _apply_album_grade(self, tree, item, album_dir, res):
@@ -3090,7 +3222,7 @@ class App(tk.Tk):
         for col, (heading, _w, _d) in TREE_COLUMNS.items():
             var = tk.BooleanVar(value=self._col_visible.get(col, True))
             menu.add_checkbutton(
-                label=heading.replace(" · G A I L AA", ""),
+                label=heading.replace(" · G I A AA L", ""),
                 variable=var, onvalue=True, offvalue=False,
                 command=lambda c=col: self._toggle_column(c),
             )

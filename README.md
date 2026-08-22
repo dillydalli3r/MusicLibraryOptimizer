@@ -74,10 +74,16 @@ PATH (the system scope requests admin elevation automatically). See
   Timestamps are normalized to the chosen precision (2/3 decimals, carry handled),
   `Extended` allows multiple `[mm:ss.xx]` on one line for karaoke, and the grader
   validates word-timestamp order/format.
+- **Setup Wizard Revamped** — `Guide` button (status bar) now shows an intuitive
+  two-section wizard: **Music Files** and **Cover Images**, each with 3 presets
+  (Balanced / Most Aggressive LOSSLESS / Lightweight or Compatibility) with
+  hover tooltips and a live summary of pending changes. Library folder picker
+  with live validation; `Skip` keeps current settings.
 - **Reorganized Settings** — Tkinter `app.py` dialog is now grouped as `FLAC Encoding /
   Cover Art — Processing / Resize & Crop / Per-Format / Lyrics / Enhanced LRC (now with
-  `[00:00.00]` compat) / CUE / Tags / Grading / Audio Audit / Interface / Updates` with
-  clear sub-sections and tooltips, keeping ~60 options scannable.
+  `[00:00.00]` compat) / CUE (now with `Fix CUE FILE Names`) / CD Rips (`CD-N`
+  auto-rename) / Tags / Grading / Audio Audit / Interface / Updates` with
+  clear sub-sections and tooltips, keeping ~80 options scannable.
 - **Library Viewer / Updater / Deps polish** — Tkinter viewer has larger expand arrows
   (28→32px row, wider hit-area), fixed checkbox cascade (selecting a folder now correctly
   checks all children even after expand, no more stale unchecked children), `Clear Filters`,
@@ -432,7 +438,7 @@ Python used to run the app.
 | # | Script            | What it does                                              |
 |---|-------------------|-----------------------------------------------------------|
 | 1 | Format Lyrics     | Cleans embedded/LRC lyrics, converts format, normalizes MEDIA/SOURCE |
-| 2 | Format CUEs       | Normalizes .cue sheets (TRACK/INDEX padding, FILE lines, DISCID) |
+| 2 | Format CUEs       | Normalizes .cue sheets (TRACK/INDEX padding, FILE lines, DISCID), fixes FILE names to match tracks (conservative), auto-renames multi-CD cues to `CD-N.cue` |
 | 3 | Optimize FLACs    | Lossless re-encode via flac.exe, strips PADDING/PICTURE etc. |
 | 4 | Grade Library     | Per-album compliance report; albums grade 100% (all checks pass) or 0% |
 | 5 | Process Images    | JPEG XL conversion / lossless JPEG/PNG optimize / reverse  |
@@ -457,9 +463,15 @@ The lyrics formatter also auto-fixes contradictory tags: when a track has
 
 ### Audit Library (script 6)
 
-Runs [AudioAuditor](https://github.com/Angel2mp3/AudioAuditor)'s CLI
-(`analyze --json`) over every audio file (or just the checked items —
-paths are piped to the CLI in batches) and reports:
+For non-CD releases, runs [AudioAuditor](https://github.com/Angel2mp3/AudioAuditor)'s CLI
+(`analyze --json`) over every audio file and reports `Real`/`Fake`/`Corrupt`/etc.
+For **`MEDIA=CD`** rips, the log-file checksum is the **only** source of truth:
+each track's decoded PCM CRC32 (via `ffmpeg -f s16le`) is compared to the CRC
+printed in the `.log` (EAC Test/Copy/AccurateRip or XLD CRC32 hash) — `REAL` on
+match, `FAKE` on mismatch. Tracks not covered by a checksum get no `AUDIT`
+value at all and the album fails grading (unverifiable). AudioAuditor is never
+run on CD rips; it is reserved for every other `MEDIA` value. Only CD albums
+consult `.log` files at all.
 
 - **Real** — genuine lossless (JSON status `Valid`)
 - **Fake** — spectral cutoff / transcoded-to-lossless sources
@@ -484,24 +496,35 @@ every run.
 ### CD rip-log grading (Media = CD only)
 
 For releases tagged `MEDIA=CD` the audit run also grades the EAC/XLD rip
-logs. Multi-disc albums are supported:
+logs and verifies checksums. Multi-disc albums are supported:
 
 - Audio files use the `D-TT Title` naming convention (`2-03 Song.flac`),
   which identifies each disc with no guesswork.
 - `.log` and `.cue` files are renamed to a shared, deterministic
-  `CD-N.log` / `CD-N.cue` scheme (`CD-1`, `CD-2`, … `CD-11`). Cues are
+  `CD-N.log` / `CD-N.cue` scheme (`CD-1`, `CD-2`, … `CD-11`) when
+  `Settings → CD Rips → Auto-Rename to CD-N` is on (default). Cues are
   mapped from their `FILE` entries (exact filenames); logs from an
   explicit disc number in the filename (`CD-2.log`, `Disc 2.log`,
   `2 - Album.log`) or a unique total-duration match against the audio.
-  Ambiguous cases are left untouched rather than guessed — grading then
-  flags the missing `LOG_GRADE`.
+  Ambiguous cases are left untouched — grading then flags the missing
+  file/log. Each disc's `FILE` lines can also be auto-corrected to the
+  actual track filenames when `Fix CUE FILE Names` is on (default) —
+  only when exactly one candidate matches by normalized name or track
+  number, so no guessing.
 - Each disc's log is scored with AudioAuditorCLI's `--rip-log` mode in an
   isolated folder (no audio decoding needed) and the cambia 0-100 score is
   written to the **`LOG_GRADE`** tag of that disc's tracks.
+- **Integrity via `.log` CRCs:** the same `.log`’s per-track CRC32 hashes
+  (Test/Copy CRC, AccurateRip `[…]`, XLD CRC32) are the *only* audit source
+  for CD rips. `ffmpeg:153` decodes each track to raw PCM and `zlib.crc32` is
+  compared — mismatch → `AUDIT=FAKE`; no `.log` or no CRC → no `AUDIT` at all
+  and grading fails the album (`unverifiable CD rip`). Non-CD releases
+  are never checked against logs — they go through AudioAuditor only.
 
-Grading requires the `LOG_GRADE` tag (0-100) on every track of `MEDIA=CD`
-albums — a missing score fails the album — while the `AUDIT` tag must be
-`REAL` on every track of every media type.
+Grading requires, for `MEDIA=CD`: the `LOG_GRADE` tag (0-100) on every track,
+an `AUDIT` tag of `REAL` (from the log checksum), and every track covered by
+a CRC in the log — any missing or mismatched check fails the album — while
+for all other media the `AUDIT` tag must be `REAL` from AudioAuditor.
 
 ### Audio Auditor settings
 
