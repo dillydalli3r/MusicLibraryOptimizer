@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.4.0 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.4.1 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
@@ -118,7 +118,7 @@ TREE_COLUMNS = {
     "tracks": ("TRACKS", 58, True),
     "media": ("MEDIA", 100, True),
     "cover": ("COVER", 110, True),
-    "tags": ("TAGS · G I A AA L", 420, True),
+    "tags": ("TAGS · G I A AA L", 600, True),
 }
 
 CONFIG_FIELDS = [
@@ -1934,24 +1934,24 @@ class SetupWizard(tk.Toplevel):
         self._add_preset_group(preset_host, "⑦  Grading & Audit — strictness",
                                self.GENERAL_PRESETS, self._general_var)
 
-        # Picard preserve list — only tags the app ADDS (not standard MusicBrainz tags)
+        # Picard preserve list — only tags the app ADDS (corrected per user: 13 + MEDIA)
         picard_card = ttk.Frame(preset_host, style="Card.TFrame", padding=(12, 10))
         picard_card.pack(fill=tk.X, pady=(14, 0))
-        ttk.Label(picard_card, text="⑧  MusicBrainz Picard — Preserve Tags (app-added only)",
+        ttk.Label(picard_card, text="⑧  MusicBrainz Picard — Preserve Tags (app-added only, 14)",
                   style="Card.TLabel", font=_sfont(9)).pack(anchor="w")
-        ttk.Label(picard_card, text="If you use Picard's 'Clear existing tags', add these to Options → Tags → Preserve these tags from being cleared. This is ONLY tags this app writes — standard tags like TITLE/ALBUM/ARTIST/GENRE are already written by Picard and don't need preserving.",
+        ttk.Label(picard_card, text="If you use Picard's 'Clear existing tags', add these to Options → Tags → Preserve these tags from being cleared. These are ONLY the 14 tags this app actually writes (standard TITLE/ALBUM/ARTIST etc. are already written by Picard). Includes your GENRE/ITUNESADVISORY (manually added) plus the app's AUDIT/LOG_GRADE/LYRICS etc. — sorted alphabetically.",
                   style="Muted.Card.TLabel", wraplength=700, justify=tk.LEFT, font=_font(8)).pack(anchor="w", pady=(4, 8))
-        # Use a read-only Text for easy copy
+        # Use a read-only Text for easy copy — sorted alphabetically, covers your 13 + MEDIA
         txt = tk.Text(picard_card, wrap="word", height=4, background=FIELD, foreground=TEXT,
                       insertbackground=TEXT, borderwidth=0, highlightthickness=0, padx=8, pady=6,
                       font=_font(8), undo=False)
-        txt.insert("1.0", "MEDIA, SOURCE, INSTRUMENTAL, ITUNESADVISORY, ALBUMITUNESADVISORY, REPLAYGAIN_TRACK_GAIN, REPLAYGAIN_TRACK_PEAK, REPLAYGAIN_ALBUM_GAIN, REPLAYGAIN_ALBUM_PEAK, DYNAMIC RANGE, ALBUM DYNAMIC RANGE, AUDIT, LOG_GRADE, ENCODER, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, LYRICS, UNSYNCEDLYRICS, AUDIO_MD5, INTEGRITY, LOG_CRC")
+        txt.insert("1.0", "ALBUM DYNAMIC RANGE, ALBUMITUNESADVISORY, AUDIT, DYNAMIC RANGE, ENCODER_PROGRAM, ENCODER_QUALITY, ENCODER_VERSION, GENRE, INSTRUMENTAL, ITUNESADVISORY, LOG_GRADE, LYRICS, MEDIA, SOURCE")
         txt.configure(state="disabled")
         txt.pack(fill=tk.X, pady=(0, 4))
         # Make it selectable but not editable
         txt.bind("<FocusIn>", lambda e: txt.configure(state="normal"))
         txt.bind("<FocusOut>", lambda e: txt.configure(state="disabled"))
-        ttk.Label(picard_card, text="Standard tags (TITLE, ALBUM, ARTIST, TRACKNUMBER, GENRE, COMPOSER, PERFORMER, WORK…) are written by Picard itself — no need to preserve. Tip: Keep 'Clear existing tags' off unless needed; the app's FLAC cleaning (KEEP_VORBIS_KEYS) already removes unused metadata.",
+        ttk.Label(picard_card, text="You listed 13 — corrected: added MEDIA (the app writes both MEDIA and SOURCE) and sorted. If you use DR/ReplayGain, also add REPLAYGAIN_TRACK/ALBUM_GAIN/PEAK (4). Tip: Keep 'Clear existing tags' off unless needed; the app's FLAC cleaning already removes unused metadata.",
                   style="Muted.Card.TLabel", font=_font(8), wraplength=700).pack(anchor="w", pady=(4, 0))
 
         # Live summary of pending changes
@@ -2170,8 +2170,9 @@ class App(tk.Tk):
         except Exception:
             self.title("Music Library Optimizer")
         self.configure(background=BG)
-        self.geometry("1280x780")
-        self.minsize(1100, 640)
+        # Wider default so TAGS column (now 600) is not clipped at the window edge (user reported cut-off)
+        self.geometry("1440x780")
+        self.minsize(1280, 640)
 
         if not HAS_MUTAGEN:
             self.withdraw()
@@ -2642,14 +2643,18 @@ class App(tk.Tk):
         self.library_tree.configure(columns=tuple(TREE_COLUMNS))
         # First column (tree): label as FOLDER / TRACK so empty header is not confusing
         self.library_tree.heading("#0", text="  FOLDER / TRACK", anchor="w")
-        self.library_tree.column("#0", width=260, minwidth=120, stretch=True, anchor="w")
+        # FOLDER / TRACK is fixed so TAGS can use all remaining space (user reported TAGS cut off)
+        self.library_tree.column("#0", width=260, minwidth=180, stretch=False, anchor="w")
         for col_id, (heading, width, _default) in TREE_COLUMNS.items():
             self.library_tree.heading(col_id, text=heading, anchor="w")
-            # TAGS stretches to fill leftover space; others have minwidth
-            # so dragging the separator is obvious (intuitive resizing).
+            # Only TAGS stretches — it must utilize all available space; others are fixed
+            # so the long genre/tag string is never clipped at the window edge.
             is_tags = col_id == "tags"
-            self.library_tree.column(col_id, width=width, minwidth=40, anchor="w",
-                                     stretch=is_tags)
+            # Increase minwidth for TAGS so it never collapses, and allow it to stretch
+            minw = 200 if is_tags else 40
+            stretch = is_tags
+            self.library_tree.column(col_id, width=width, minwidth=minw, anchor="w",
+                                     stretch=stretch)
 
         # Row states: green = graded pass, purple = audited only,
         # blue = graded + audited, yellow = warnings/mixed, red = failing.

@@ -230,16 +230,17 @@ def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_t
                 force_exact = bool(config.get("cover_force_exact_size", False)) if config else False
                 if force_exact and resize_enabled and tsize > 0 and w != h:
                     need_crop = True
+                # Never upscale: only downscale if larger than target
                 need_resize = False
                 if resize_enabled and tsize > 0:
                     if not need_crop:
-                        if w != tsize or h != tsize:
+                        if w > tsize or h > tsize:
                             need_resize = True
                     else:
                         sq = min(w, h)
-                        if sq != tsize:
+                        if sq > tsize:
                             need_resize = True
-                        # if square already target, still need crop but not resize
+                        # if square already <= target, keep cropped square as-is (no upscale)
                     # Force exact also needs resize if square side != target even when
                     # no crop was otherwise needed but the image is not square — the
                     # crop above already set need_crop, so the square branch applies.
@@ -445,7 +446,7 @@ def _process_image_to_jxl(args):
                                             _cover_needs = True
                                     if force_exact and re_en and tgt > 0 and _w != _h:
                                         _cover_needs = True
-                                    if re_en and tgt > 0 and (_w != tgt or _h != tgt):
+                                    if re_en and tgt > 0 and (_w > tgt or _h > tgt):
                                         _cover_needs = True
                             except Exception:
                                 # If we can't inspect, assume needs re-encode when enabled
@@ -723,7 +724,7 @@ def _process_jpeg_in_place(args):
                                     _cover_needs = True
                             if force_exact_j and re_en and tgt_cov > 0 and _w != _h:
                                 _cover_needs = True
-                            if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
+                            if re_en and tgt_cov > 0 and (_w > tgt_cov or _h > tgt_cov):
                                 _cover_needs = True
                     except Exception:
                         _cover_needs = True
@@ -917,7 +918,7 @@ def _process_png_in_place(args):
                                     _cover_needs = True
                             if force_exact_j and re_en and tgt_cov > 0 and _w != _h:
                                 _cover_needs = True
-                            if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
+                            if re_en and tgt_cov > 0 and (_w > tgt_cov or _h > tgt_cov):
                                 _cover_needs = True
                     except Exception:
                         _cover_needs = True
@@ -1140,7 +1141,7 @@ def _process_jxl_in_place(args):
                                         _cover_needs = True
                                 if force_exact and re_en and tgt_cov > 0 and _w != _h:
                                     _cover_needs = True
-                                if re_en and tgt_cov > 0 and (_w != tgt_cov or _h != tgt_cov):
+                                if re_en and tgt_cov > 0 and (_w > tgt_cov or _h > tgt_cov):
                                     _cover_needs = True
                         except Exception:
                             _cover_needs = True
