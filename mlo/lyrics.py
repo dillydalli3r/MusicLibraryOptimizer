@@ -648,37 +648,44 @@ def _normalize_album_media_source(args):
         bytes_added = 0
 
         if digital:
-            clean_sources = _clean_set(source_values)
-
-            if len(clean_sources) == 1:
-                fill_source = next(iter(clean_sources))
-            elif clean_sources:
-                fill_source = sorted(clean_sources)[0]
+            # Respect the new fill_empty_source toggle (default False = keep empty)
+            if cfg is not None and not cfg.get("fill_empty_source", False):
+                # Do not auto-fill empty SOURCE; keep it empty (per user request)
+                # Still need to handle the case where SOURCE is present but inconsistent?
+                # For now, just don't fill.
+                pass
             else:
-                fill_source = default_source or DEFAULT_DIGITAL_SOURCE
+                clean_sources = _clean_set(source_values)
 
-            for path, af, source_clean in entries:
-                if not source_clean:
-                    # Respect per-filetype MEDIA_SOURCE toggle
-                    if cfg is not None and not should_write_audio_tag(cfg, "SOURCE", filepath=path):
-                        continue
-                    original_size = os.path.getsize(path)
+                if len(clean_sources) == 1:
+                    fill_source = next(iter(clean_sources))
+                elif clean_sources:
+                    fill_source = sorted(clean_sources)[0]
+                else:
+                    fill_source = default_source or DEFAULT_DIGITAL_SOURCE
 
-                    if not af.set_tag("SOURCE", fill_source):
-                        return (
-                            album_dir,
-                            "failed",
-                            0,
-                            0,
-                            f"failed writing SOURCE in {os.path.basename(path)}: {af.error}",
-                        )
+                for path, af, source_clean in entries:
+                    if not source_clean:
+                        # Respect per-filetype MEDIA_SOURCE toggle
+                        if cfg is not None and not should_write_audio_tag(cfg, "SOURCE", filepath=path):
+                            continue
+                        original_size = os.path.getsize(path)
 
-                    final_size = os.path.getsize(path)
-                    b_rem, b_add = _diff_bytes(original_size, final_size)
+                        if not af.set_tag("SOURCE", fill_source):
+                            return (
+                                album_dir,
+                                "failed",
+                                0,
+                                0,
+                                f"failed writing SOURCE in {os.path.basename(path)}: {af.error}",
+                            )
 
-                    modified_files += 1
-                    bytes_removed += b_rem
-                    bytes_added += b_add
+                        final_size = os.path.getsize(path)
+                        b_rem, b_add = _diff_bytes(original_size, final_size)
+
+                        modified_files += 1
+                        bytes_removed += b_rem
+                        bytes_added += b_add
 
         else:
             for path, af, source_clean in entries:

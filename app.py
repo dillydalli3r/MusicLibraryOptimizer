@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.4.3 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.5.1 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
@@ -118,7 +118,7 @@ TREE_COLUMNS = {
     "tracks": ("TRACKS", 58, True),
     "media": ("MEDIA", 100, True),
     "cover": ("COVER", 110, True),
-    "tags": ("TAGS · G I A AA L", 600, True),
+    "tags": ("TAGS · G I A AA L", 800, True),
 }
 
 CONFIG_FIELDS = [
@@ -165,6 +165,7 @@ CONFIG_FIELDS = [
     ("lrc_zero_timestamp_blank", "Zero Timestamp as Blank Line", "bool", None),
     ("lrc_zero_timestamp_target", "Zero Timestamp Target", "choice", ("EMBEDDED", "LRC", "BOTH")),
     ("append_final_newline", "Append Final Newline", "bool", None),
+    ("fill_empty_source", "Fill Empty SOURCE for Digital Media", "bool", None),
     # CUE
     ("keep_empty_cue_lines", "Keep Empty CUE Lines", "bool", None),
     ("keep_other_cue_lines", "Keep Other CUE Lines", "bool", None),
@@ -1260,7 +1261,6 @@ class ConfigDialog(tk.Toplevel):
                 "cover_resize_enabled", "cover_target_size",
                 "cover_crop_enabled", "cover_crop_threshold",
                 "cover_force_exact_size",
-                "cover_enforce_size", "cover_enforce_square",
             ]),
             ("Cover Art — Per-Format", [
                 "cover_jpeg_enabled", "cover_png_enabled", "cover_jxl_enabled",
@@ -1270,12 +1270,13 @@ class ConfigDialog(tk.Toplevel):
             ("Lyrics", [
                 "optimize_lrc", "optimize_embedded_lyrics", "lyrics_format",
                 "lrc_timestamp_precision", "lrc_strip_metadata",
-                "lrc_collapse_blank_lines", "append_final_newline",
+                "lrc_collapse_blank_lines", "lrc_add_zero_timestamp",
+                "lrc_zero_timestamp_blank", "lrc_zero_timestamp_target",
+                "append_final_newline",
             ]),
             ("Enhanced LRC", [
                 "lrc_enhanced_enabled", "lrc_enhanced_word_sync",
-                "lrc_extended_enabled", "lrc_add_zero_timestamp",
-                "lrc_zero_timestamp_blank", "lrc_zero_timestamp_target",
+                "lrc_extended_enabled",
             ]),
             ("CUE Sheets", [
                 "keep_empty_cue_lines", "keep_other_cue_lines", "cue_file_type",
@@ -1286,6 +1287,7 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("Tags — Media & Source", [
                 "normalize_media_source", "digital_media_source_value",
+                "fill_empty_source",
             ]),
             ("Tags — Writes", [
                 "fix_instrumental_from_lyrics", "write_audit_tag",
@@ -1855,6 +1857,16 @@ class SetupWizard(tk.Toplevel):
             "worker limit auto.",
             {"grade_verbose": True, "audit_thorough": True, "worker_limit": 0},
         ),
+        (
+            "Maximum Quality — All Encoders (lossless max)",
+            "Sets every encoder to its highest lossless effort: FLAC 8, JPEG XL 10, "
+            "PNG 6, plus cover resize/crop to 1000×1000 forced exact, and thorough audit on. "
+            "Use when you want the smallest lossless files and the most accurate audit.",
+            {"flac_level": 8, "jpegxl_effort": 10, "png_optimization_level": 6,
+             "cover_resize_enabled": True, "cover_target_size": 1000, "cover_force_exact_size": True,
+             "cover_enforce_size": True, "cover_enforce_square": True,
+             "audit_thorough": True, "lrc_add_zero_timestamp": True, "fill_empty_source": False},
+        ),
     ]
 
     def __init__(self, parent, config, on_saved):
@@ -2075,29 +2087,78 @@ class AboutDialog(tk.Toplevel):
         btns = ttk.Frame(outer)
         btns.pack(fill=tk.X, pady=(12, 0))
         ttk.Button(btns, text="Check for Updates Now", style="Accent.TButton", command=self._check).pack(side=tk.LEFT)
+        self.install_btn = ttk.Button(btns, text="Install Latest", style="Accent.TButton", command=self._install, state=tk.DISABLED)
+        self.install_btn.pack(side=tk.LEFT, padx=(8, 0))
+        ToolTip(self.install_btn, "Download and install the latest release (enabled when an update is found).")
         ttk.Button(btns, text="Close", command=self.destroy).pack(side=tk.RIGHT)
 
         # Auto-check if enabled
         if self.config.get("check_updates_on_start", True):
             self.after(500, self._check)
         self.after(150, lambda: apply_window_chrome(self))
+        self._pending_update = None  # (version, url)
+
+    def _install(self):
+        if not getattr(self, "_pending_update", None):
+            messagebox.showinfo("No Update", "No update is available to install.", parent=self)
+            return
+        version, url = self._pending_update
+        if not messagebox.askyesno("Install Update", f"Download and install v{version} now?\n\nThe app will close and the installer will launch.", parent=self):
+            return
+        self.status_var.set(f"Downloading v{version}…")
+        self.install_btn.configure(state=tk.DISABLED)
+        try:
+            from mlo.updater import download_and_prepare_installer, launch_installer_after_shutdown, app_instance_pids
+            def _dl_cb(ok, path, err):
+                def _ui():
+                    if ok and path:
+                        self.status_var.set(f"Installer ready — launching…")
+                        try:
+                            pids = app_instance_pids()
+                            launch_installer_after_shutdown(path, pids)
+                            self.master.destroy()
+                        except Exception as e:
+                            self.status_var.set(f"Launch failed: {e}")
+                            self.install_btn.configure(state=tk.NORMAL)
+                    else:
+                        self.status_var.set(f"Download failed: {err}")
+                        self.install_btn.configure(state=tk.NORMAL)
+                self.after(0, _ui)
+            download_and_prepare_installer(url, callback=_dl_cb)
+        except Exception as e:
+            self.status_var.set(f"Install error: {e}")
 
     def _check(self):
         self.status_var.set("Checking for updates…")
+        self.install_btn.configure(state=tk.DISABLED)
+        self._pending_update = None
         try:
             from mlo.updater import check_for_updates
             def _cb(has_update, version, url, notes, error):
                 def _ui():
                     if error:
                         self.status_var.set(f"Update check failed: {error}")
+                        self._pending_update = None
+                        self.install_btn.configure(state=tk.DISABLED)
                     elif has_update:
                         self.status_var.set(f"Update available: v{version} at {url}\n{notes[:200]}")
+                        self._pending_update = (version, url)
+                        self.install_btn.configure(state=tk.NORMAL)
+                        # Also notify via main window status if this was an on-start check
+                        try:
+                            self.master.status_var.set(f"Update v{version} available — open About to install")
+                        except Exception:
+                            pass
                     else:
                         self.status_var.set("Already on latest version.")
+                        self._pending_update = None
+                        self.install_btn.configure(state=tk.DISABLED)
                 self.after(0, _ui)
             check_for_updates(silent=False, callback=_cb)
         except Exception as e:
             self.status_var.set(f"Update check error: {e}")
+            self._pending_update = None
+            self.install_btn.configure(state=tk.DISABLED)
 
 
 # ======================================================================
@@ -2170,8 +2231,8 @@ class App(tk.Tk):
         except Exception:
             self.title("Music Library Optimizer")
         self.configure(background=BG)
-        # Wider default so TAGS column (now 600) is not clipped at the window edge (user reported cut-off)
-        self.geometry("1440x780")
+        # Wider default so TAGS column (now 800) is not clipped at the window edge (user reported cut-off)
+        self.geometry("1500x780")
         self.minsize(1280, 640)
 
         if not HAS_MUTAGEN:
@@ -3727,8 +3788,12 @@ class App(tk.Tk):
                        activebackground=ACCENT_DARK, activeforeground="#ffffff")
         menu.add_command(label="Columns", state=tk.DISABLED)
         menu.add_separator()
+        # Keep vars alive for the menu's lifetime to avoid GC clearing checkmarks
+        self._col_menu_vars = {}
         for col, (heading, _w, _d) in TREE_COLUMNS.items():
-            var = tk.BooleanVar(value=self._col_visible.get(col, True))
+            is_visible = bool(self._col_visible.get(col, True))
+            var = tk.BooleanVar(value=is_visible)
+            self._col_menu_vars[col] = var
             menu.add_checkbutton(
                 label=heading.replace(" · G I A AA L", ""),
                 variable=var, onvalue=True, offvalue=False,

@@ -169,8 +169,9 @@ DEFAULT_CONFIG = {
     "lrc_enhanced_enabled": True,
     "lrc_enhanced_word_sync": True,
     "lrc_extended_enabled": True,
-    "lrc_add_zero_timestamp": False,
+    "lrc_add_zero_timestamp": True,
     # Where the zero timestamp is added when enabled: EMBEDDED, LRC, or BOTH.
+    # Now works for both standard and enhanced LRCs (per request).
     "lrc_zero_timestamp_target": "BOTH",
     # When True, the zero timestamp is a blank line "[00:00.00]" with no text;
     # when False (default), it duplicates the first lyric's text for compatibility.
@@ -184,6 +185,9 @@ DEFAULT_CONFIG = {
     # MEDIA / SOURCE normalization
     "normalize_media_source": True,
     "digital_media_source_value": DEFAULT_DIGITAL_SOURCE,
+    # When True, empty SOURCE on Digital Media is filled with the value above;
+    # when False (default, per request), empty stays empty.
+    "fill_empty_source": False,
 
     # CD rips (MEDIA=CD): deterministic CD-N renaming of .log/.cue and
     # conservative CUE FILE-name correction. Both are content-derived —
@@ -216,7 +220,7 @@ DEFAULT_CONFIG = {
     # that already carry an AUDIT verdict. Detector toggles map to the CLI's
     # --no-* flags (default on) and --cutoff-allow sets the frequency-cutoff
     # threshold for fake detection (0 = CLI default).
-    "audit_thorough": False,
+    "audit_thorough": True,
     "force_audit": False,
     "audit_cutoff_allow": 0,
     # For MEDIA=CD rips, verify tracks against the CRC-32 checksums printed

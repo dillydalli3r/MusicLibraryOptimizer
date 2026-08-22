@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.4.3
+# Music Library Optimizer v1.5.1
 
 > ## ⚠️ VIBE CODED
 >
@@ -15,14 +15,14 @@ storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
 Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.3`) + command-line app (`mlo`) +
-optional interactive console menu. **v1.4.3 makes grading require `ENCODER_PROGRAM` only when that format’s toggle is on (off by default, so existing libraries pass), and ensures optimization writes `PROGRAM` even when skipping re-encode; v1.4.2 made `PROGRAM` off by default and stopped deleting tags.**
+optional interactive console menu. **v1.5.0 fixes Grading Enforce not saving, moves [00:00.00] to Lyrics (on by default, works for standard+enhanced), adds fill-empty-SOURCE toggle (default keep empty), makes Thorough Audit on by default, fixes columns menu, widens TAGS to truly use all space, adds Guide max-effort preset and About Install Latest, and keeps PROGRAM off; v1.4.3 made grading require `ENCODER_PROGRAM` only when that format’s toggle is on (off by default, so existing libraries pass), and ensures optimization writes `PROGRAM` even when skipping re-encode; v1.4.2 made `PROGRAM` off by default and stopped deleting tags.**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.4.3_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.5.1_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.4.3_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.5.1_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -40,6 +40,18 @@ PATH (the system scope requests admin elevation automatically). See
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.5.1
+
+- **Your config fixes — Grading Enforce now saves, Thorough Audit + [00:00.00] on by default, SOURCE keep-empty by default** — fixed duplicate cover_enforce_size/square in two UI groups which made Save do nothing for those (now only in Grading — Cover Enforce, correctly persists). Changed defaults: udit_thorough=True, cover_enforce_size=True, cover_enforce_square=True (already True in code, now UI saves), lrc_add_zero_timestamp=True (was False, now on per request) and moved from Enhanced LRC to Lyrics so it works for both standard and enhanced LRCs via mlo/lyrics.py:_zero_target_allows + BOTH target. Added ill_empty_source=False (mlo/config.py:186) — when off (default) Digital Media with empty SOURCE stays empty; when on it fills with digital_media_source_value (Digital or custom).
+- **Columns menu + TAGS truly fill space** — pp.py:3760 keeps BooleanVar alive in self._col_menu_vars so visible columns correctly show checked (was GC’d). pp.py:114 TREE_COLUMNS tags 600→800 + pp.py:2646 #0 stretch=False/	ags stretch=True + pp.py:2174 1500×780 ensures G:Alternative… uses all available width.
+
+## New in v1.5.0
+
+- **Fixes for your config — Grading Enforce now saves, Thorough Audit on, [00:00.00] on + moved** — fixed duplicate cover_enforce_size/square appearing in two groups (Cover Resize + Grading Cover Enforce) which caused self.vars overwrite so Saving did nothing — removed from Cover Resize (kept only in Grading). Changed defaults: udit_thorough=True, cover_enforce_size=True, cover_enforce_square=True (already True in code, now UI correctly persists), lrc_add_zero_timestamp=True (was False, now on by default per request) and moved from Enhanced LRC to Lyrics (mlo/config.py:172 + pp.py:1270) so it applies to both standard and enhanced LRCs via mlo/lyrics.py:_zero_target_allows. Your cover_enforce alse in the posted config.json will now correctly show unchecked and can be turned on.
+- **Digital SOURCE — keep empty by default** — new ill_empty_source (mlo/config.py:186 default False, pp.py:1289 Tags — Media & Source group) — when off (default) Digital Media with empty SOURCE stays empty; when on it fills with digital_media_source_value (Digital or custom). mlo/lyrics.py:651 now respects ill_empty_source.
+- **Columns menu + TAGS truly fill space** — pp.py:3760 _show_column_menu now keeps BooleanVar alive in self._col_menu_vars so visible columns correctly show checked (was GC’d). pp.py:114 TREE_COLUMNS tags 600→800 + pp.py:2646 #0 stretch=False/	ags stretch=True + pp.py:2174 1500×780 ensures G:Alternative… uses all available width; horizontal scrollbar appears only when needed.
+- **Guide max-effort preset + About Install Latest** — pp.py:1859 new GENERAL_PRESETS Maximum Quality — All Encoders sets lac_level 8, jpegxl_effort 10, png_optimization_level 6, cover 1000×1000 forced, udit_thorough on etc.; pp.py:2051 AboutDialog now has Install Latest button enabled when check_for_updates finds X.Y.Z (via self._pending_update), plus mlo/config.py:308 check_updates_on_start=True (already) and pp.py:2230 on-start check now also sets master.status_var so you are notified.
 
 ## New in v1.4.3
 
@@ -790,15 +802,15 @@ Rows: `FLAC (.flac)` · `MP3 (.mp3)` · `MP4 (.m4a/.mp4)` · `OGG (.ogg)` · `Op
 ## Project layout
 
 ```
-app.py                          GUI entry point (Tkinter, dark-themed) — v1.4.3
+app.py                          GUI entry point (Tkinter, dark-themed) — v1.5.1
                                  (PySide6/Qt `gui/` revamp removed; Tkinter is now primary)
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
 mlo/                            Core package — all processing logic
-    __init__.py                 version + public re-exports (1.4.3)
+    __init__.py                 version + public re-exports (1.5.1)
     __main__.py                 python -m mlo entry
     paths.py                    Locations & constants (exe-aware)
     deps.py                     Optional dependency detection (mutagen/Pillow/tqdm)
-    config.py                   config.json load/save & defaults (v1.4.3 keys, ENCODER_PROGRAM off, no tag deletion)
+    config.py                   config.json load/save & defaults (v1.5.1 keys, ENCODER_PROGRAM off, no tag deletion)
     ui.py                       Console output helpers
     stats.py                    Run stats, byte accounting, progress hooks
     report.py                   Result report printing
@@ -828,7 +840,7 @@ tools/                          Dev helpers & tests
 docs/
     archive/                    Historical release notes
         RELEASE_NOTES_v1.1.0.md v1.1.0 detailed notes (archived)
-RELEASE_NOTES.md                v1.4.3 + v1.4.2 + v1.4.1 + v1.4.0 + v1.3.9 + v1.3.8 + v1.2.0 + v1.1.0 summary (current)
+RELEASE_NOTES.md                v1.5.1 + v1.5.0 + v1.4.3 + v1.4.2 + v1.4.1 + v1.4.0 + v1.3.9 + v1.3.8 + v1.2.0 + v1.1.0 summary (current)
 config.json                     Persisted settings (created on first save, ignored)
 config.example.json             Example/default config (tracked)
 app_icon.ico                    Application icon (256px ICO, black #0d0d0d bg)
@@ -867,7 +879,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.4.2_x64.exe` + `dist/MusicLibraryOptimizer_v1.4.3_portable_x64.exe` + `dist/mlo.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.4.2_x64.exe` + `dist/MusicLibraryOptimizer_v1.5.1_portable_x64.exe` + `dist/mlo.exe`
 
 ## Rebuilding the exe (without installer)
 
