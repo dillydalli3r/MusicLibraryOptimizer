@@ -18,7 +18,8 @@ integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
 Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.2.0`) + command-line app (`mlo`) +
 optional interactive console menu. **v1.2.0 adds cover resize/crop (now with
 Force Exact `1000×1000`), per-format overrides, Enhanced LRC (now with
-`[00:00.00]` compat), black spectrum icon (white ascending bars), and a reorganized
+`[00:00.00]` compat), black spectrum icon (7 white ascending bars, variable
+heights — slow start then shoot up like a real spectrum), and a reorganized
 Settings dialog (PySide6/Qt revamp removed — stable Tkinter is now the GUI).**
 
 ## Quick Start
@@ -701,9 +702,9 @@ mlo/                            Core package — all processing logic
     cliapp.py                   Non-interactive CLI + PATH installer
 legacy/                         The v1.0.x Tkinter GUI (kept for reference)
     app_tkinter_v1_0_9.py       legacy GUI snapshot
-assets/                         Application icons (black bg, white ascending spectrum)
-    icon_256.png / icon_64.png  pre-rendered PNGs (main)
-    icon_window_256.png         window-only transparent white bars
+assets/                         Application icons (black #0d0d0d bg, 7 white ascending bars)
+    icon_256.png / icon_64.png  pre-rendered PNGs (main, variable heights 0.30→0.97)
+    icon_window_256.png         window-only transparent white bars (same 7-bar spectrum)
 tools/                          Dev helpers & tests
     make_icon.py                Icon generator (Pillow)
     make_test_library.py        Synthetic music library builder
