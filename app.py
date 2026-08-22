@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.1 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.2 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.3.1 features: cover resize/crop,
+stable Tkinter engine with all v1.3.2 features: cover resize/crop,
 per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
 customizable pattern, etc.
 
@@ -4046,4 +4046,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 

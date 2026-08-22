@@ -332,12 +332,35 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
                 discs = {1: [os.path.join(album_dir, f) for f in aud]}
             else:
                 return []
-    known = {}
+    # Build lookup maps: exact, stem-insensitive, and normalized (handles
+    # Unicode dashes, disc prefix, and .wav vs .flac)
+    known_exact = {}
+    known_stem = {}
+    known_norm = {}
     for d, paths in discs.items():
         for p in paths:
-            known[os.path.basename(p).lower()] = d
+            base = os.path.basename(p)
+            known_exact[base.lower()] = d
+            # stem without extension, ascii dashes, lower
+            stem = os.path.splitext(_ascii_dashes(base))[0].lower()
+            known_stem[stem] = d
+            norm = _norm_name(base)
+            known_norm[norm] = d
 
     notes = []
+    # Trivial single-disc single-cue: rename directly to CD-1.cue (no FILE check)
+    # This covers cases like a.cue → CD-1.cue where FILE entries are .wav vs .flac
+    cues_all = [f for f in sorted(os.listdir(album_dir)) if f.lower().endswith(".cue") and not _is_expected_disc_file(f, pattern, ".cue")]
+    if len(discs) == 1 and len(cues_all) == 1:
+        sole_disc = next(iter(discs))
+        sole_cue = cues_all[0]
+        dst = os.path.join(album_dir, _disc_expected_name(pattern, sole_disc, ".cue"))
+        if not os.path.exists(dst):
+            _rename(os.path.join(album_dir, sole_cue), dst, notes)
+            if log_fn and notes:
+                for old, new in notes:
+                    log_fn(f"cue: {old} -> {new}")
+            return notes
     for f in sorted(os.listdir(album_dir)):
         if not f.lower().endswith(".cue"):
             continue
@@ -350,8 +373,14 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
             continue
         file_discs = set()
         for m in CUE_FILE_RE.finditer(text):
-            base = m.group(1).replace("/", "\\").split("\\")[-1].lower()
-            d = known.get(base)
+            raw = m.group(1).replace("/", "\\").split("\\")[-1]
+            # Try exact, then stem, then normalized (most lenient)
+            d = known_exact.get(raw.lower())
+            if d is None:
+                stem = os.path.splitext(_ascii_dashes(raw))[0].lower()
+                d = known_stem.get(stem)
+            if d is None:
+                d = known_norm.get(_norm_name(raw))
             if d is not None:
                 file_discs.add(d)
         if len(file_discs) == 1:
@@ -451,17 +480,51 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
 # ----------------------------------------------------------------------
 # CUE FILE-name correction (conservative, evidence-based)
 # ----------------------------------------------------------------------
+# Unicode dashes that appear in filenames (especially "Suite‐Pee" U+2010)
+_UNICODE_DASHES = ("\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212", "\uFE58", "\uFE63", "\uFF0D")
+
+def _ascii_dashes(s):
+    for ch in _UNICODE_DASHES:
+        s = s.replace(ch, "-")
+    return s
+
+def _strip_disc_prefix(name):
+    """Strip leading disc prefix 'D-' from D-TT filenames, leaving 'TT Title'."""
+    base = os.path.basename(name)
+    # D-TT like "1-01 Title" or "1 - 01 Title" -> strip the "1-"
+    m = re.match(r"^\d{1,2}\s*-\s*", _ascii_dashes(base))
+    if m:
+        # Only strip if what remains starts with a track number (TT)
+        rest = base[m.end():]
+        if re.match(r"^\d{1,3}(?:\s*[-._\s]|\b)", rest):
+            return rest
+    return base
+
 def _norm_name(s):
     """Normalize a filename for comparison: lowercase, strip extension
-    separators/underscores/double spaces. Never removes digits."""
+    separators/underscores/double spaces. Never removes digits.
+    Handles Unicode dashes and strips disc prefix so '1-01 Title' matches '01 Title'."""
+    # Normalize dashes first, then strip disc prefix for comparison
+    s = _ascii_dashes(s)
+    s = _strip_disc_prefix(s)
     s = os.path.splitext(os.path.basename(s))[0].lower()
     s = re.sub(r"[\s_\-\.]+", " ", s).strip()
     return re.sub(r"\s+", " ", s)
 
 
 def _track_num_of(name):
-    """Leading track number 'NN' from 'NN - Title.ext' / 'NN. Title'."""
-    m = re.match(r"^(\d{1,3})(?:\s*[-._\s])", os.path.basename(name))
+    """Track number from filename.
+    For D-TT like '1-01 Title.flac' returns 1 (the TT, not the disc).
+    For '01 - Title.flac' returns 1. Handles Unicode dashes."""
+    base = _ascii_dashes(os.path.basename(name))
+    # D-TT: disc-track
+    m = re.match(r"^\d{1,2}\s*-\s*(\d{1,3})(?:\s*[-._\s]|\b)", base)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    m = re.match(r"^(\d{1,3})(?:\s*[-._\s])", base)
     return int(m.group(1)) if m else None
 
 
