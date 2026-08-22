@@ -60,8 +60,8 @@ def build_master():
     # 7 bars centered, varying heights like a spectrum, rounded tops
     bar_layer = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     bd = ImageDraw.Draw(bar_layer)
-    # normalized bar heights (0..1) - classic spectrum shape
-    heights = [0.32, 0.55, 0.78, 0.95, 0.72, 0.48, 0.30]
+    # normalized bar heights (0..1) - ascending left-to-right (keep going up)
+    heights = [0.28, 0.42, 0.56, 0.68, 0.78, 0.88, 0.96]
     n = len(heights)
     # layout: total width 62% of icon, centered
     total_w = big * 0.62
@@ -98,7 +98,7 @@ def build_window_master():
     big = SIZE * S
     bar_layer = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     bd = ImageDraw.Draw(bar_layer)
-    heights = [0.32, 0.55, 0.78, 0.95, 0.72, 0.48, 0.30]
+    heights = [0.28, 0.42, 0.56, 0.68, 0.78, 0.88, 0.96]
     n = len(heights)
     total_w = big * 0.70  # slightly wider for window small icon
     gap = total_w * 0.10 / (n - 1)
