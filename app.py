@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.6 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.7 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.3.6 features: cover resize/crop,
+stable Tkinter engine with all v1.3.7 features: cover resize/crop,
 per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
 customizable pattern, etc.
 
@@ -1484,9 +1484,9 @@ class SetupWizard(tk.Toplevel):
             "Most Aggressive — LOSSLESS",
             "Maximum lossless music compression: FLAC 8 • no seektables • "
             "image pipeline off (so only music is touched). Slowest encode, "
-            "smallest FLAC files, zero quality loss.",
+            "smallest FLAC files, zero quality loss. All effort max.",
             {"flac_level": 8, "add_seektables": False, "reencode_images": False,
-             "jpegxl_effort": 9, "png_optimization_level": 4,
+             "jpegxl_effort": 10, "png_optimization_level": 6,
              "worker_limit": 0},
         ),
         (
@@ -1512,12 +1512,12 @@ class SetupWizard(tk.Toplevel):
         ),
         (
             "Most Aggressive — LOSSLESS",
-            "Maximum lossless cover savings: JPEG XL effort 9 • rename to "
+            "Maximum lossless cover savings: JPEG XL effort 10 (max) • rename to "
             "cover • forced exact 1000×1000 (always crop → 1:1 then LANCZOS) "
-            "• progressive JPEG • PNG level 6 • alpha stripping. Still lossless "
+            "• progressive JPEG • PNG level 6 (max) • alpha stripping. Still lossless "
             "before the JXL step; originals are replaced atomically.",
             {"reencode_images": True, "reencode_to_jxl": True,
-             "jpegxl_effort": 9, "cover_resize_enabled": True,
+             "jpegxl_effort": 10, "cover_resize_enabled": True,
              "cover_target_size": 1000, "cover_force_exact_size": True,
              "cover_crop_enabled": True, "jpeg_progressive": True,
              "png_optimization_level": 6, "rename_to_cover": True,
@@ -4311,6 +4311,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

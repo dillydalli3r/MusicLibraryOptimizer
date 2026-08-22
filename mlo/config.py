@@ -29,16 +29,16 @@ DEFAULT_CONFIG = {
     "rename_to_cover": True,
     "remove_alpha": True,
     "jpeg_progressive": True,
-    "png_optimization_level": 2,
+    "png_optimization_level": 6,
     "force_reencode_images": False,
-    # Cover art — resize / crop (new in v1.2.0)
-    "cover_resize_enabled": False,
+    # Cover art — resize / crop (new in v1.2.0) — defaults now enforce exactly 1000x1000
+    "cover_resize_enabled": True,
     "cover_target_size": 1000,
     "cover_crop_enabled": True,
     "cover_crop_threshold": 0.05,
-    "cover_force_exact_size": False,
-    "cover_enforce_size": False,
-    "cover_enforce_square": False,
+    "cover_force_exact_size": True,
+    "cover_enforce_size": True,
+    "cover_enforce_square": True,
     "cover_jpeg_enabled": True,
     "cover_png_enabled": True,
     "cover_jxl_enabled": True,
@@ -103,11 +103,11 @@ DEFAULT_CONFIG = {
     "audit_cutoff_allow": 0,
     # For MEDIA=CD rips, verify tracks against the CRC-32 checksums printed
     # in the .log and write AUDIT=REAL/FAKE from that (authoritative over
-    # AudioAuditor for those files). When audit_cd_require_both is True,
-    # BOTH the .log CRC and AudioAuditor must be REAL for the final AUDIT
-    # to be REAL; if either is FAKE, the result is FAKE.
+    # AudioAuditor for those files). When audit_cd_require_both is True
+    # (now the default), BOTH the .log CRC and AudioAuditor must be REAL
+    # for the final AUDIT to be REAL; if either is FAKE, the result is FAKE.
     "audit_verify_cd_checksums": True,
-    "audit_cd_require_both": False,
+    "audit_cd_require_both": True,
     "audit_clipping": True,
     "audit_mqa": True,
     "audit_ai": True,
