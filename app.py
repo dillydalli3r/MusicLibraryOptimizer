@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.3.0 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.3.1 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
-stable Tkinter engine with all v1.3.0 features: cover resize/crop,
+stable Tkinter engine with all v1.3.1 features: cover resize/crop,
 per-format overrides, Enhanced/Extended LRC, worker-limit, CD-N rename,
 customizable pattern, etc.
 
@@ -2153,6 +2153,8 @@ class App(tk.Tk):
         ttk.Button(toolbar, text="Refresh", style="Small.TButton",
                    command=lambda: self._refresh_library(regrade=True)).pack(
             side=tk.LEFT, padx=(12, 0))
+        ttk.Button(toolbar, text="Select All", style="Small.TButton",
+                   command=self._select_all).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(toolbar, text="Clear Selection", style="Small.TButton",
                    command=self._clear_selection).pack(side=tk.LEFT, padx=(8, 0))
 
@@ -3028,6 +3030,28 @@ class App(tk.Tk):
 
     def _clear_selection(self):
         self._checked.clear()
+        if self._root_item is not None:
+            self._apply_check_state(self._root_item)
+        self._update_selection_label()
+
+    def _select_all(self):
+        """Check every item currently visible in the tree (artists/albums/tracks)."""
+        # Mark every known path as checked; _rebuild_tree will propagate
+        # via _checked dict, but for instant feedback we also update the
+        # visible text glyphs directly.
+        for path in list(self._item_paths.values()):
+            if path:
+                self._checked[path] = True
+        # Also ensure any not-yet-inserted album paths (filtered out? we select visible only)
+        # For visible only, we iterate tree items
+        def _check_vis(item):
+            p = self._item_paths.get(item)
+            if p:
+                self._checked[p] = True
+            for child in self.library_tree.get_children(item):
+                _check_vis(child)
+        for top in self.library_tree.get_children(""):
+            _check_vis(top)
         if self._root_item is not None:
             self._apply_check_state(self._root_item)
         self._update_selection_label()
@@ -4022,3 +4046,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.3.0
+# Music Library Optimizer v1.3.1
 
 > ## ⚠️ VIBE CODED
 >
@@ -15,19 +15,19 @@ storage space and formatting. It also grades the library for tag/lyrics/cover
 compliance (now with **cover size & squareness enforcement**) and audits audio
 integrity (fake-lossless detection via AudioAuditor). Mostly written in Python.
 
-Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.0`) + command-line app (`mlo`) +
-optional interactive console menu. **v1.3.0 adds intuitive Setup presets,
+Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.3.1`) + command-line app (`mlo`) +
+optional interactive console menu. **v1.3.1 adds intuitive Setup presets,
 customizable `CD-{n}` autorename, CUE `FILE` correction, CD-only checksum audit,
 cover track/album fail, TAGS `A|AA` adjacent, tighter library viewer, variable
 ascending spectrum icon (PySide6/Qt revamp removed — stable Tkinter is now the GUI).**
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.0_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.3.1_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.3.0_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.3.1_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -46,7 +46,7 @@ PATH (the system scope requests admin elevation automatically). See
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
 
-## New in v1.3.0
+## New in v1.3.1
 
 - **Setup Wizard — intuitive & sensible presets** — `Guide` (status bar → Guide) now has two groups: **Music Files** (Balanced / Most Aggressive LOSSLESS / Lightweight) and **Cover Images** (Balanced / Most Aggressive LOSSLESS / Compatibility). Each preset lists exactly what it changes (e.g. FLAC 8 vs 5, JXL effort 9 vs 7, forced exact `1000×1000`) in tooltips + live summary; library folder picker validates live; nothing saved until **Save**.
 - **Autorename .cue/.log → `CD-1.cue/log … CD-11.cue/log`** — `Settings → CD Rips → Auto-Rename to CD-N` (default on) deterministically renames multi-disc cues/logs using only content-derived evidence (FILE entries for cues; explicit disc number / single-disc trivial / TOC duration match for logs). Ambiguous cases are left untouched instead of guessed. `Settings → CD Rips → Rename pattern` customizes the scheme (default `CD-{n}`, e.g. `Disc {n}` → `Disc 1.log`) — uses `{n}` placeholder; grading checks the same pattern. **`.log` contents are never touched** — only filenames.
@@ -709,7 +709,7 @@ You can also manually check anytime via **About** → **Check for Updates**.
 ## Project layout
 
 ```
-app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.0
+app.py                          GUI entry point (Tkinter, dark-themed) — v1.3.1
                                  (PySide6/Qt `gui/` revamp removed; Tkinter is now primary)
 mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
 mlo/                            Core package — all processing logic
@@ -717,7 +717,7 @@ mlo/                            Core package — all processing logic
     __main__.py                 python -m mlo entry
     paths.py                    Locations & constants (exe-aware)
     deps.py                     Optional dependency detection (mutagen/Pillow/tqdm)
-    config.py                   config.json load/save & defaults (v1.3.0 keys)
+    config.py                   config.json load/save & defaults (v1.3.1 keys)
     ui.py                       Console output helpers
     stats.py                    Run stats, byte accounting, progress hooks
     report.py                   Result report printing
@@ -747,7 +747,7 @@ tools/                          Dev helpers & tests
 docs/
     archive/                    Historical release notes
         RELEASE_NOTES_v1.1.0.md v1.1.0 detailed notes (archived)
-RELEASE_NOTES.md                v1.3.0 + v1.2.0 + v1.1.0 summary (current)
+RELEASE_NOTES.md                v1.3.1 + v1.2.0 + v1.1.0 summary (current)
 config.json                     Persisted settings (created on first save, ignored)
 config.example.json             Example/default config (tracked)
 app_icon.ico                    Application icon (256px ICO, black #0d0d0d bg)
@@ -786,7 +786,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 iscc "Music Library Optimizer.iss"
 ```
 
-Output: `dist/MusicLibraryOptimizer_Setup_v1.3.0_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.0_portable_x64.exe` + `dist/mlo.exe`
+Output: `dist/MusicLibraryOptimizer_Setup_v1.3.1_x64.exe` + `dist/MusicLibraryOptimizer_v1.3.1_portable_x64.exe` + `dist/mlo.exe`
 
 ## Rebuilding the exe (without installer)
 
@@ -810,3 +810,4 @@ The exe reads `config.json` and `.dependencies/` from its own folder.
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+

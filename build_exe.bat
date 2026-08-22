@@ -1,6 +1,6 @@
 @echo off
 rem ============================================================
-rem  Music Library Optimizer v1.3.0 - executable builder
+rem  Music Library Optimizer v1.3.1 - executable builder
 rem  Produces: Music Library Optimizer.exe (GUI) + mlo.exe (CLI)
 rem  Requires: pip install pyinstaller mutagen pillow
 rem  GUI: Tkinter (stdlib, no extra install) + optional Pillow for cover resize
@@ -26,3 +26,4 @@ exit /b 0
 echo BUILD FAILED
 pause
 exit /b 1
+
