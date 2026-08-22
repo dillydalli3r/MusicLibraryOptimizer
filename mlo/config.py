@@ -136,6 +136,13 @@ DEFAULT_CONFIG = {
     "library_sort": "name",
     "library_columns": {},
 
+    # v1.1.0 PySide6 GUI: theme ("dark" | "light" | "system"), accent
+    # color ("" = theme default, else #rrggbb), and whether the library
+    # tree also lists non-audio files inside each album.
+    "theme": "dark",
+    "accent_color": "",
+    "library_show_all_files": False,
+
     # First run / updates
     "first_run_done": False,
     "last_update_check": 0,

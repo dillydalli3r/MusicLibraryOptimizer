@@ -16,3 +16,5 @@ config.json
 # OS / editor
 Thumbs.db
 .DS_Store
+# CLI executable (built)
+mlo.exe

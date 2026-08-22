@@ -24,7 +24,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          pip install pyinstaller mutagen pillow
+          pip install pyinstaller mutagen pillow PySide6
 
       - name: Download pinned dependencies
         shell: pwsh
@@ -98,21 +98,28 @@ jobs:
             Install-From (Find-Dir "$env:TEMP\ffmpeg" @("ffmpeg.exe","ffprobe.exe")) @("ffmpeg.exe","ffprobe.exe") ".dependencies\ffmpeg v2026.8.19"
           } catch { Write-Warning "ffmpeg: $_" }
 
-      - name: Build executable
+      - name: Build GUI executable
         run: |
           python -m PyInstaller --noconfirm --clean --onefile --windowed `
             --name "Music Library Optimizer" --icon app_icon.ico `
             --hidden-import mutagen.aac app.py
 
-      - name: Verify executable
+      - name: Build CLI executable
         run: |
-          $exe = "dist\Music Library Optimizer.exe"
-          if (Test-Path $exe) {
-            $size = (Get-Item $exe).Length / 1MB
-            Write-Host "Built $exe ($([math]::Round($size, 1)) MB)"
-          } else {
-            Write-Error "Executable not found at $exe"
-            exit 1
+          python -m PyInstaller --noconfirm --clean --onefile --console `
+            --name mlo --icon app_icon.ico `
+            --hidden-import mutagen.aac mlo_cli.py
+
+      - name: Verify executables
+        run: |
+          foreach ($exe in @("dist\Music Library Optimizer.exe", "dist\mlo.exe")) {
+            if (Test-Path $exe) {
+              $size = (Get-Item $exe).Length / 1MB
+              Write-Host "Built $exe ($([math]::Round($size, 1)) MB)"
+            } else {
+              Write-Error "Executable not found at $exe"
+              exit 1
+            }
           }
 
       - name: Build Inno Setup installer
@@ -162,5 +169,6 @@ jobs:
           files: |
             dist/MusicLibraryOptimizer_v*_portable_x64.exe
             dist/MusicLibraryOptimizer_Setup_*_x64.exe
+            dist/mlo.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

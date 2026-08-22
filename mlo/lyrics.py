@@ -56,6 +56,19 @@ def _split_merged_ts(line):
     return out
 
 
+def _part_stamp(part):
+    """The leading timestamp of a _split_merged_ts part, if any."""
+    m = _TS_TOKEN_RE.match(part)
+    return m.group(0) if m else None
+
+
+def _stamp_only(part):
+    """True when a _split_merged_ts part is a bare timestamp that labels
+    no text of its own."""
+    m = _TS_TOKEN_RE.match(part)
+    return m is not None and not part[m.end():].strip()
+
+
 def _reformat_ts(m, precision=2):
     """Reformat a [mm:ss.xxx] timestamp to the requested precision,
     carrying correctly: [01:59.999] at precision 2 becomes [02:00.00]."""
@@ -89,8 +102,14 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
     - POSIX newlines
     - normalized timestamps
     - no space directly after timestamps
+    - one line per timestamp: stacked timestamps are split up
+    - a [00:00.00] stacked in front of other stamps is dropped (it is
+      a start-of-file marker that labels no text)
+    - timestamp-only lines lend their stamps to the next untimed line
     - no LRC metadata lines
     - no duplicate blank lines
+
+    The result is idempotent: cleaning already-clean lyrics is a no-op.
     """
     if not text:
         return text
@@ -102,19 +121,63 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
     )
     text = SPACE_AFTER_TS_RE.sub(r"\1", text)
 
+    zero_ts = f"[00:00.{'0' * precision}]"
     lines = []
+    pending_stamps = []
 
     for ln in text.split("\n"):
         s = ln.strip()
 
         if not s:
             lines.append("")
-        elif strip_metadata and LRC_META_RE.match(s):
+            pending_stamps = []
             continue
-        else:
-            # Split merged "[a][b]text" lines (ESLyrics can't parse them).
-            for part in _split_merged_ts(s):
-                lines.append(part)
+
+        if strip_metadata and LRC_META_RE.match(s):
+            continue
+
+        # Split merged "[a][b]text" lines (ESLyrics can't parse them).
+        parts = _split_merged_ts(s)
+
+        # A [00:00.00] stacked directly in front of other timestamps is
+        # a start-of-file marker that labels no text of its own.
+        while (len(parts) > 1 and _stamp_only(parts[0])
+               and _part_stamp(parts[0]) == zero_ts):
+            parts = parts[1:]
+
+        # Timestamp-only line: hold the stamps for the next untimed
+        # text line (dropped for good at a blank line, at EOF, or when
+        # the next line carries timestamps of its own).
+        if parts and all(_stamp_only(p) for p in parts):
+            pending_stamps.extend(_part_stamp(p) for p in parts)
+            continue
+
+        if pending_stamps and not _TS_TOKEN_RE.search(s):
+            # Untimed text right after stray stamps: each stamp labels
+            # that text as a line of its own.
+            for ts in pending_stamps:
+                lines.append(f"{ts}{s}")
+            pending_stamps = []
+            continue
+
+        # Whatever this line is, it is timed: stray stamps die here.
+        pending_stamps = []
+
+        # Stamps stacked in front of a text part each label that text
+        # as a line of their own; a trailing run labels nothing and is
+        # dropped.
+        stacked = []
+        for part in parts:
+            if _stamp_only(part):
+                stacked.append(_part_stamp(part))
+                continue
+            if stacked:
+                m = _TS_TOKEN_RE.match(part)
+                body = part[m.end():].rstrip() if m else part.rstrip()
+                for ts in stacked:
+                    lines.append(f"{ts}{body}")
+                stacked = []
+            lines.append(part.rstrip())
 
     cleaned = lines
     if collapse_blank_lines:
@@ -196,12 +259,18 @@ def _process_lyrics_for_audio(audio_path, cfg):
     lyrics_format = cfg.get("lyrics_format", "EMBEDDED").upper()
     force = cfg.get("force_lyrics", False)
 
+    # set_lyrics / delete_lyrics mutate the in-memory tag even when the
+    # save fails; remember to re-open the file from disk before the
+    # INSTRUMENTAL decision below reflects anything but persisted state.
+    lyrics_touched = False
+
     # Clean embedded lyrics (no trailing newline / blank lines).
     if force or cfg.get("optimize_embedded_lyrics", True):
         cur = af.get_lyrics()
         if cur:
             cleaned = _format_for_storage(cur, cfg, optimize=True)
             if cleaned != cur:
+                lyrics_touched = True
                 if af.set_lyrics(cleaned):
                     modified = True
 
@@ -223,76 +292,102 @@ def _process_lyrics_for_audio(audio_path, cfg):
         except Exception as e:
             return ("fail", 0, 0, f"lrc clean: {e}")
 
-    # LRC <-> embedded conversion, per the configured format.
-    if lyrics_format == "EMBEDDED" and lrc_exists:
-        # Copy LRC -> embedded, then drop the .lrc sidecar.
+    # Post-cleaning state used by the conversion step below. The
+    # optimize_* flags gate in-place cleaning only; whatever a
+    # conversion writes is always canonical, so the graded format
+    # check passes afterwards.
+    embedded_raw = af.get_lyrics()
+    embedded_canonical = (
+        _format_for_storage(embedded_raw, cfg, optimize=True)
+        if embedded_raw and str(embedded_raw).strip() else None
+    )
+
+    lrc_raw = None
+    if lrc_exists:
         try:
             with open(lrc_path, "r", encoding="utf-8", errors="replace") as f:
-                lrc_content = f.read()
+                lrc_raw = f.read()
         except Exception as e:
             return ("fail", 0, 0, f"lrc read: {e}")
 
-        cleaned = _format_for_storage(
-            lrc_content, cfg, optimize=cfg.get("optimize_lrc", True)
-        )
-
-        if af.set_lyrics(cleaned):
+        if not lrc_raw.strip() and lyrics_format == "EMBEDDED":
+            # Empty sidecar with lyrics living in the tag: remove the
+            # stray file instead of embedding nothing.
             try:
                 os.remove(lrc_path)
+                lrc_exists = False
                 modified = True
-            except OSError as e:
-                return ("fail", 0, 0, f"lrc delete: {e}")
-        else:
-            return ("fail", 0, 0, f"embed lyrics: {af.error}")
+            except OSError:
+                pass
 
-    elif lyrics_format == "LRC":
-        cur = af.get_lyrics()
-        if cur:
-            # Copy embedded -> LRC, then drop the embedded tag.
-            final = _format_for_storage(
-                cur, cfg, optimize=cfg.get("optimize_lrc", True)
-            )
+    lrc_canonical = (
+        _format_for_storage(lrc_raw, cfg, optimize=True)
+        if lrc_raw and lrc_raw.strip() else None
+    )
 
-            try:
-                with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(final)
+    # Conversion between LRC and embedded lyrics.
+    if lyrics_format == "EMBEDDED" and lrc_canonical:
+        if embedded_canonical != lrc_canonical:
+            # Embed first; only delete the sidecar once the lyrics are
+            # safely inside the tag (a failed write must never destroy
+            # the only copy).
+            lyrics_touched = True
+            if not af.set_lyrics(lrc_canonical):
+                return ("fail", 0, 0, f"embed lyrics: {af.error}")
+        try:
+            os.remove(lrc_path)
+            lrc_exists = False
+            modified = True
+        except OSError as e:
+            return ("fail", 0, 0, f"lrc delete: {e}")
 
-                af.delete_lyrics()
-                modified = True
-
-            except Exception as e:
-                return ("fail", 0, 0, f"lrc write: {e}")
+    elif lyrics_format == "LRC" and embedded_canonical:
+        try:
+            with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(embedded_canonical)
+        except Exception as e:
+            return ("fail", 0, 0, f"lrc write: {e}")
+        lyrics_touched = True
+        if not af.delete_lyrics():
+            return ("fail", 0, 0, f"delete embedded lyrics: {af.error}")
+        lrc_exists = True
+        modified = True
 
     elif lyrics_format == "BOTH":
-        # Keep BOTH copies: if embedded lyrics exist, make sure an .lrc is
-        # written; if only an .lrc exists, copy it to embedded.
-        cur = af.get_lyrics()
-        if cur:
-            if not lrc_exists:
-                final = _format_for_storage(
-                    cur, cfg, optimize=cfg.get("optimize_lrc", True)
-                )
-                try:
-                    with open(lrc_path, "w", encoding="utf-8",
-                              newline="\n") as f:
-                        f.write(final)
-                    modified = True
-                except Exception as e:
-                    return ("fail", 0, 0, f"lrc write: {e}")
-        elif lrc_exists:
-            try:
-                with open(lrc_path, "r", encoding="utf-8",
-                          errors="replace") as f:
-                    lrc_content = f.read()
-            except Exception as e:
-                return ("fail", 0, 0, f"lrc read: {e}")
-            cleaned = _format_for_storage(
-                lrc_content, cfg, optimize=cfg.get("optimize_lrc", True)
-            )
-            if af.set_lyrics(cleaned):
+        # Keep lyrics in both places, reconciled to one canonical text
+        # (the embedded tag wins a disagreement - players read it).
+        try:
+            if lrc_canonical and not embedded_canonical:
+                lyrics_touched = True
+                if not af.set_lyrics(lrc_canonical):
+                    return ("fail", 0, 0, f"embed lyrics: {af.error}")
                 modified = True
 
+            elif embedded_canonical and lrc_canonical != embedded_canonical:
+                with open(lrc_path, "w", encoding="utf-8",
+                          newline="\n") as f:
+                    f.write(embedded_canonical)
+                lrc_exists = True
+                modified = True
+
+            elif embedded_canonical and not lrc_canonical:
+                with open(lrc_path, "w", encoding="utf-8",
+                          newline="\n") as f:
+                    f.write(embedded_canonical)
+                lrc_exists = True
+                modified = True
+
+        except Exception as e:
+            return ("fail", 0, 0, f"both sync: {e}")
+
     notes = []
+
+    # set_lyrics / delete_lyrics mutate the in-memory tag even when the
+    # save fails, so re-read from disk before deciding on INSTRUMENTAL.
+    if lyrics_touched:
+        af = AudioFile(audio_path)
+        if af.audio is None:
+            return ("fail", 0, 0, f"reload: {af.error}")
 
     # INSTRUMENTAL=1 with lyrics present is contradictory: flip it to 0.
     inst = af.get_tag("INSTRUMENTAL")

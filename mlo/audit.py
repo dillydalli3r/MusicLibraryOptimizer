@@ -345,10 +345,22 @@ def run_audit_library(config):
             _pbar_update(pbar, counts, kind="fail")
             continue
 
-        missing = {os.path.normcase(p) for p in batch}
+        # Files the CLI silently dropped (unsupported/renamed). Paths
+        # are compared via realpath so 8.3 short names don't cause
+        # phantom misses when the CLI echoes back the long form (or
+        # vice versa).
+        def canon(p):
+            if not p:
+                return ""
+            try:
+                return os.path.normcase(os.path.realpath(p))
+            except OSError:
+                return os.path.normcase(p)
+
+        missing = {canon(p) for p in batch}
         for item in items:
             path = item.get("filePath") or ""
-            missing.discard(os.path.normcase(path))
+            missing.discard(canon(path))
             severity, reason = _classify(item)
             cli_status = str(item.get("status", "")).strip()
 

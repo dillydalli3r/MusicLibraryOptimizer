@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.0.9
+# Music Library Optimizer v1.1.0
 
 > ## ⚠️ VIBE CODED
 >
@@ -14,27 +14,63 @@ optimizing both storage space and formatting. It also grades the library
 for tag/lyrics/cover compliance and audits audio integrity (fake-lossless
 detection via AudioAuditor). Mostly written in Python.
 
-Desktop GUI (dark theme) + optional console menu.
+Desktop GUI (PySide6/Qt, themed) + command-line app (`mlo`) +
+optional interactive console menu.
 
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.0.9_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.1.0_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.0.9_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.1.0_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
 
-**From source:** `Music Library Optimizer.bat` or `python app.py`
-(requires `pip install mutagen`, optionally `Pillow` and `tqdm`).
+**Command line:** the release also ships `mlo.exe` - run it directly,
+or `mlo install --user` / `mlo install --system` to put `mlo` on your
+PATH (the system scope requests admin elevation automatically). See
+[CLI (mlo)](#cli-mlo) below.
 
-**Console menu:** `python -m mlo`
+**From source:** `Music Library Optimizer.bat` or `python app.py`
+(requires `pip install PySide6 mutagen`, optionally `Pillow` and `tqdm`).
+
+**Console menu:** `python -m mlo` or `mlo menu`
 
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.1.0
+
+- **New GUI (PySide6/Qt):** every screen restyled - sidebar navigation,
+  animated toggles, colored console, responsive library tree with real
+  tri-state checkboxes, and worker threads for scans/runs (Refresh can
+  no longer trip over itself).
+- **Themes:** Dark, Light, Follow-system plus eight accent colors or a
+  custom picker. The **native window title bar** is recolored to match
+  (caption, title text, accent-tinted border).
+- **CLI version of the app** (`mlo.exe`) with run/config/deps/menu/gui
+  commands and a **PATH self-installer** (`--user` / `--system` with
+  automatic UAC elevation). Shares `config.json` and `.dependencies`
+  with the GUI.
+- **Lyrics formatter hardened:** stacked timestamps expand one line per
+  timestamp, a `[00:00.00]` stacked against another timestamp is treated
+  as a start marker and dropped, timestamp-only fragments lend their
+  stamps to the next untimed line, and the EMBEDDED consolidation only
+  deletes an LRC after the lyrics are safely inside the tag. `BOTH`
+  format now reconciles both sides (embedded wins a disagreement).
+- **Library toolbar:** **Unselect All** button, **Show: Audio files /
+  All files** view switch, and right-click **Open in Mp3tag / Picard**
+  acts on the whole checked selection.
+- New app icon; the v1.0.x Tkinter GUI is preserved under `legacy/`.
+
+## New in v1.0.10
+
+- **Open selected tracks in Mp3tag** now uses the checked selection
+  (not just the right-clicked row); "Clear Sel" renamed to
+  **Unselect All**.
 
 ## New in v1.0.9
 
@@ -530,13 +566,45 @@ Row colors combine grading and audit state:
   automatically after saving.
 - **Enqueue in foobar2000** — sends the folder to foobar2000 via `/add`.
 - **Open in Mp3tag / Open in Picard** — launch the external tagger with
-  that folder loaded.
+  the **whole checked selection** loaded (the right-clicked folder when
+  nothing is checked).
 
 The toolbar also has **Enqueue in foobar2000**, **Mp3tag** and
-**Picard** buttons that act on every checked folder in the tree. All
+**Picard** buttons that act on every checked folder in the tree, plus
+**Refresh**, **Unselect All**, a **Show: Audio files / All files**
+switch (lists each album's non-audio contents) and a **Compact** toggle
+that hides the column headers. All
 three apps are auto-detected via the registry (App Paths), common
 install locations, or PATH; the first manual locate is remembered in
 `config.json` (`foobar2000_path` / `mp3tag_path` / `picard_path`).
+
+## CLI (mlo)
+
+```
+mlo run 1,2,3       run scripts by number (or names, or 'all')
+mlo lyrics          single-script shortcuts: lyrics cues flac grade
+mlo audit           ... images audit dr autotag - all accept the flags below
+mlo all             run the scripts in your configured Run All order
+mlo config          show all settings
+mlo config key val  set a setting (e.g. music_folder)
+mlo deps            list toolchain versions; mlo deps --install [all]
+mlo install --user      put mlo on the current user's PATH (no admin)
+mlo install --system    machine-wide PATH (UAC elevation requested)
+mlo uninstall --user | --system
+mlo menu            interactive console menu
+mlo gui             launch the desktop GUI
+```
+
+Run options: `--folder DIR` overrides the music folder, `--targets P... P...`
+restricts processing to given files/dirs, `--force` re-processes
+everything, `--thorough` enables the deep audio audit.
+
+The installer copies the CLI to `%LocalAppData%\Programs\Music Library
+Optimizer` (user) or `C:\Program Files\Music Library Optimizer` (system)
+and updates the matching PATH in the registry. A `mlo-home.txt` marker
+next to the installed copy points back at the folder holding
+`config.json` and `.dependencies`, so GUI and CLI always share settings
+and the downloaded toolchain.
 
 ## Auto-Updates
 
@@ -550,7 +618,17 @@ You can also manually check anytime via **About** → **Check for Updates**.
 ## Project layout
 
 ```
-app.py                          GUI entry point (dark desktop theme)
+app.py                          GUI entry point (PySide6, themed)
+mlo_cli.py                      CLI entry point (argparse; builds mlo.exe)
+gui/                            PySide6 interface
+    theme.py                    Palettes, full-app QSS, accents, DWM title bar
+    widgets.py                  Animated toggle switch & small parts
+    console.py                  ANSI-colored console view
+    workers.py                  Script runner thread + ANSI stdout capture
+    library.py                  Library scan/grade threads + album tree
+    dialogs.py                  Settings / Custom Run / Grade Details / Tag editor
+    deps_dialog.py              Toolchain download manager
+    main_window.py              Window assembly (sidebar, top bar, status bar)
 mlo/                            Core package — all processing logic
     paths.py                    Locations & constants (exe-aware)
     deps.py                     Optional dependency detection
@@ -568,6 +646,9 @@ mlo/                            Core package — all processing logic
     audit.py                    AudioAuditor CLI integration (script 6)
     loudness.py                 DR (simple-dr-meter) + ReplayGain (rsgain)
     cli.py                      Interactive console menu
+    cliapp.py                   Non-interactive CLI + PATH installer
+legacy/                         The v1.0.x Tkinter GUI (kept for reference)
+tools/                          Icon generator, test-library builder, tests
     updater.py                  Auto-update checker (GitHub Releases)
 config.json                     Persisted settings (created on first save)
 app_icon.ico                    Application icon

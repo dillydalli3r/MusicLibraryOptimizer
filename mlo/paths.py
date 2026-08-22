@@ -6,10 +6,30 @@ config.json and the .dependencies toolchain live next to the executable.
 import os
 import sys
 
-if getattr(sys, "frozen", False):
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
-else:
-    SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Marker written next to a PATH-installed CLI; first line is the folder
+# that holds config.json and .dependencies.
+HOME_MARKER = "mlo-home.txt"
+
+
+def _resolve_script_dir():
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    marker = os.path.join(base, HOME_MARKER)
+    if os.path.isfile(marker):
+        try:
+            with open(marker, "r", encoding="utf-8-sig") as f:
+                home = f.readline().strip()
+            if home and os.path.isdir(home):
+                return home
+        except OSError:
+            pass
+    return base
+
+
+SCRIPT_DIR = _resolve_script_dir()
 
 
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")

@@ -381,6 +381,128 @@ class AudioFile:
             return {}
         return out
 
+    def set_any_tag(self, key, value):
+        """Write an arbitrary tag key (raw container key).
+
+        Used by the GUI tag editor: flac/ogg/opus take raw vorbis
+        comment names, mp3 takes "TXXX:desc" custom frames or plain
+        frame IDs, mp4 takes "----:mean:name" freeform atoms or plain
+        atom names.
+        """
+        self._invalidate_cache()
+        if self.audio is None:
+            return False
+        value = str(value)
+
+        try:
+            if self.kind in ("flac", "ogg", "opus"):
+                if self.audio.tags is None:
+                    if hasattr(self.audio, "add_tags"):
+                        self.audio.add_tags()
+                    else:
+                        return False
+                self.audio.tags[str(key)] = value
+                self.audio.save()
+                return True
+
+            elif self.kind == "mp3":
+                if self.audio.tags is None:
+                    self.audio.add_tags()
+                if str(key).startswith("TXXX:"):
+                    desc = str(key)[5:]
+                    for frame in list(self.audio.tags.getall("TXXX")):
+                        if frame.desc == desc:
+                            try:
+                                del self.audio.tags[frame.HashKey]
+                            except Exception:
+                                pass
+                    self.audio.tags.add(
+                        TXXX(encoding=Encoding.UTF8, desc=desc, text=[value])
+                    )
+                else:
+                    self.audio.tags.delall(str(key))
+                    frame_cls = Frames.get(str(key))
+                    if frame_cls is None:
+                        frame_cls = type(
+                            str(key), (TextFrame,), {"FrameID": str(key)})
+                    self.audio.tags.add(
+                        frame_cls(encoding=Encoding.UTF8, text=[value])
+                    )
+                self.audio.save()
+                return True
+
+            elif self.kind == "mp4":
+                if str(key).startswith("----:"):
+                    _, mean, name = str(key).split(":", 3)
+                    fmt = getattr(MP4FreeForm, "FORMAT_UTF8", 1)
+                    try:
+                        self.audio[str(key)] = [
+                            MP4FreeForm(value.encode("utf-8"), dataformat=fmt)
+                        ]
+                    except TypeError:
+                        self.audio[str(key)] = [
+                            MP4FreeForm(value.encode("utf-8"))
+                        ]
+                else:
+                    self.audio[str(key)] = [value]
+                self.audio.save()
+                return True
+
+        except Exception as e:
+            self.error = f"set_any_tag: {e}"
+            return False
+        return False
+
+    def delete_any_tag(self, key):
+        """Remove an arbitrary tag key (raw container key). MP4 atoms
+        are matched case-insensitively over the full key list."""
+        self._invalidate_cache()
+        if self.audio is None:
+            return False
+
+        try:
+            if self.kind in ("flac", "ogg", "opus"):
+                if self.audio.tags is None:
+                    return True
+                target = str(key).lower()
+                changed = False
+                for k in list(self.audio.tags.keys()):
+                    if str(k).lower() == target:
+                        del self.audio.tags[k]
+                        changed = True
+                if changed:
+                    self.audio.save()
+                return True
+
+            elif self.kind == "mp3":
+                if self.audio.tags is None:
+                    return True
+                if str(key).startswith("TXXX:"):
+                    desc = str(key)[5:]
+                    for frame in list(self.audio.tags.getall("TXXX")):
+                        if frame.desc == desc:
+                            try:
+                                del self.audio.tags[frame.HashKey]
+                            except Exception:
+                                pass
+                else:
+                    self.audio.tags.delall(str(key))
+                self.audio.save()
+                return True
+
+            elif self.kind == "mp4":
+                target = str(key).lower()
+                for k in list(self.audio.keys()):
+                    if str(k).lower() == target:
+                        del self.audio[k]
+                self.audio.save()
+                return True
+
+        except Exception as e:
+            self.error = f"delete_any_tag: {e}"
+            return False
+        return False
+
     # ------------------------------------------------------------------
     # Tag write / delete, used for SOURCE normalization
     # ------------------------------------------------------------------

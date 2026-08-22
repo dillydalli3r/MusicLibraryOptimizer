@@ -201,7 +201,9 @@ def print_combined_results(per_script, title="COMBINED RESULTS"):
             tot_errors += s.get("error_count", 0)
             rows.append([
                 name,
-                f"{s.get('total_scanned', 0)} albums",
+                f"{s.get('total_scanned', 0)} "
+                + ("files" if s.get("audit_status_counts") is not None
+                   else "albums"),
                 "—",
                 c(str(passed), Color.GREEN),
                 "—",
