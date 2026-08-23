@@ -624,8 +624,10 @@ def _process_image_to_jxl(args):
                                     if re_en and tgt > 0 and (_w > tgt or _h > tgt):
                                         _cover_needs = True
                             except Exception:
-                                # If we can't inspect, assume needs re-encode when enabled
-                                _cover_needs = True
+                                # If PIL can't open JXL (e.g. omu PNG-JXL that djxl also fails),
+                                # don't assume it needs cover — let the tag/effort check decide.
+                                # Previously this incorrectly forced a decode attempt that then fails.
+                                pass
                 except Exception:
                     pass
             if not _cover_needs:
@@ -928,7 +930,7 @@ def _process_jpeg_in_place(args):
                             if re_en and tgt_cov > 0 and (_w > tgt_cov or _h > tgt_cov):
                                 _cover_needs = True
                     except Exception:
-                        _cover_needs = True
+                        pass
         except Exception:
             pass
     if not force and not _cover_needs:
@@ -1122,7 +1124,7 @@ def _process_png_in_place(args):
                             if re_en and tgt_cov > 0 and (_w > tgt_cov or _h > tgt_cov):
                                 _cover_needs = True
                     except Exception:
-                        _cover_needs = True
+                        pass
         except Exception:
             pass
     if not force and not _cover_needs:
@@ -1345,7 +1347,7 @@ def _process_jxl_in_place(args):
                                 if re_en and tgt_cov > 0 and (_w > tgt_cov or _h > tgt_cov):
                                     _cover_needs = True
                         except Exception:
-                            _cover_needs = True
+                            pass
             except Exception:
                 pass
         if not force and not _cover_needs:
