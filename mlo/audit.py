@@ -72,6 +72,65 @@ DETECTOR_NO_FLAGS = {
 }
 
 
+def verify_integrity(filepath, ffmpeg_exe=None, flac_exe=None):
+    """Verify audio file integrity like foobar2000's Verify Integrity.
+
+    For FLAC: runs `flac -t` (test) which checks frame CRCs and stream integrity.
+    For all types: runs `ffmpeg -v error -i file -f null -` to catch decoding errors,
+    truncated files, and sync errors (similar to foobar2000's decoder check).
+
+    Returns (ok: bool, error: str | None). True when no errors detected.
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    # Try flac -t for FLAC files (most thorough for FLAC)
+    if ext == ".flac" and flac_exe and os.path.isfile(flac_exe):
+        try:
+            proc = run_tool([flac_exe, "-t", filepath],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace", timeout=60)
+            # flac -t returns 0 on success, non-zero on error; stderr contains details
+            if proc.returncode == 0:
+                # Also check ffmpeg as second opinion for FLAC (catches more)
+                pass
+            else:
+                err = (proc.stderr or proc.stdout or "").strip().splitlines()
+                err = err[-1] if err else f"flac -t rc={proc.returncode}"
+                return False, err[:200]
+        except subprocess.TimeoutExpired:
+            return False, "flac -t timeout"
+        except Exception as e:
+            return False, str(e)[:200]
+
+    # ffmpeg check for all audio types (including FLAC as second check)
+    if ffmpeg_exe and os.path.isfile(ffmpeg_exe):
+        try:
+            proc = run_tool([ffmpeg_exe, "-v", "error", "-i", filepath, "-f", "null", "-"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace", timeout=60)
+            err = (proc.stderr or "").strip()
+            if proc.returncode != 0 or err:
+                # ffmpeg prints errors to stderr; empty stderr means ok
+                # Filter out non-error warnings
+                if err and "error" in err.lower():
+                    return False, err.splitlines()[0][:200]
+                if proc.returncode != 0:
+                    return False, (err or f"ffmpeg rc={proc.returncode}")[:200]
+            return True, None
+        except subprocess.TimeoutExpired:
+            return False, "ffmpeg timeout"
+        except Exception as e:
+            return False, str(e)[:200]
+
+    # Fallback: try mutagen load to at least verify the file can be parsed
+    try:
+        af = AudioFile(filepath)
+        if af.audio is None:
+            return False, af.error or "unreadable"
+        return True, None
+    except Exception as e:
+        return False, str(e)[:200]
+
+
 def _audit_batch(cli, paths, config):
     """Run one AudioAuditorCLI analyze batch; returns parsed items."""
     cmd = [
@@ -102,7 +161,7 @@ def _audit_batch(cli, paths, config):
             cmd,
             input="\n".join(paths) + "\n",
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=120,
+            timeout=30,
         )
     except subprocess.TimeoutExpired:
         # Fallback: use `info` per file (slow but reliable, and `info` still works for 2.0.0)
@@ -369,6 +428,50 @@ def run_audit_library(config):
                         log(f"  {c('–', Color.GREY)} {os.path.basename(p)} "
                             f"{c(unverified_cd[p], Color.GREY)}")
 
+    # ------------------------------------------------------------------
+    # Integrity check (foobar2000 Verify Integrity style) — optional but on
+    # by default. Uses `flac -t` for FLAC and `ffmpeg -v error` for all
+    # types to catch truncated files, frame CRC mismatches, and sync errors.
+    # Failures here make the final AUDIT FAKE, just like a fake lossless
+    # detection, and are all configurable via Settings → Audit.
+    # ------------------------------------------------------------------
+    integrity_failed = {}
+    integrity_ok = set()
+    if config.get("audit_integrity", True):
+        ffmpeg_exe = (tools.get("ffmpeg") or {}).get("ffmpeg_exe")
+        flac_exe = (tools.get("flac") or {}).get("flac_exe")
+        # Only verify files that would be audited anyway (respect force/skip later)
+        # But run it now so we can fail fast and avoid an expensive AudioAuditor run
+        # on a file that is already corrupt.
+        def _check_one(p):
+            ok, err = verify_integrity(p, ffmpeg_exe, flac_exe)
+            return p, ok, err
+
+        cw = worker_count(config, default=8, maximum=16, items=len(files))
+        with ThreadPoolExecutor(max_workers=cw) as ex:
+            futs = {ex.submit(_check_one, p): p for p in files}
+            from concurrent.futures import as_completed as _as_comp
+            for fut in _as_comp(futs):
+                p, ok, err = fut.result()
+                if not ok:
+                    integrity_failed[p] = err or "integrity check failed"
+                else:
+                    integrity_ok.add(p)
+
+        if integrity_failed:
+            n_fail = len(integrity_failed)
+            log(c(f"Integrity: {n_fail} file(s) failed verification (foobar2000 style) — will be AUDIT=FAKE", Color.RED))
+            for p in sorted(integrity_failed)[:10]:
+                try:
+                    rel = os.path.relpath(p, folder)
+                except ValueError:
+                    rel = os.path.basename(p)
+                log(f"  {c('✕', Color.RED)} {rel} {c(integrity_failed[p][:80], Color.RED)}")
+            if n_fail > 10:
+                log(f"  … and {n_fail - 10} more")
+        else:
+            log("Integrity: all files passed verification")
+
     # When require_both is False, CD rips are excluded from AudioAuditor;
     # when True, they are included and the final verdict is the AND of both
     # sources (both must be REAL, otherwise FAKE). Checksum tags were already
@@ -425,6 +528,14 @@ def run_audit_library(config):
         if cd_files:
             log(f"CD rips ({len(cd_files)} track(s)) will be verified via BOTH "
                 f".log checksums AND AudioAuditor (both must be REAL).")
+
+    # Integrity failures that were skipped due to already having an AUDIT tag
+    # still need to be handled — if a file is corrupt, its AUDIT must be FAKE
+    # even if it already says REAL. Respect per-filetype toggle.
+    if config.get("audit_integrity", True) and integrity_failed:
+        for p, err in list(integrity_failed.items()):
+            if p not in todo and p in files and should_write_audio_tag(config, "AUDIT", filepath=p):
+                todo.append(p)
 
     log(f"auditing {len(todo)} file(s) · fast scan "
         f"{'off (--thorough)' if thorough else 'on'}")
@@ -522,6 +633,14 @@ def run_audit_library(config):
                         reason = ""
                 # Ensure status counts reflect the AA side already counted;
                 # the final tag is what grading will use.
+
+            # Integrity check (foobar2000 Verify Integrity style) — if enabled
+            # and this file failed integrity (truncated, CRC mismatch, sync error),
+            # the final AUDIT must be FAKE regardless of the other sources.
+            if config.get("audit_integrity", True) and path in integrity_failed:
+                tag_value = "FAKE"
+                severity = "fail"
+                reason = f"integrity check failed: {integrity_failed[path]}"
 
             # Persist the verdict into the file's AUDIT tag (respects per-filetype).
             if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=path):

@@ -204,6 +204,7 @@ CONFIG_FIELDS = [
     ("audit_cutoff_allow", "Audit Cutoff Allowance (Hz, 0=default)", "int", (0, 24000)),
     ("audit_verify_cd_checksums", "Verify CD Rips vs .log Checksums", "bool", None),
     ("audit_cd_require_both", "CD: Require Both Log & AudioAuditor = REAL", "bool", None),
+    ("audit_integrity", "Verify File Integrity (like foobar2000 Verify Integrity: FLAC CRC, MP3 sync, ffmpeg decode)", "bool", None),
     ("audit_clipping", "Audit Clipping Detection", "bool", None),
     ("audit_mqa", "Audit MQA Detection", "bool", None),
     ("audit_ai", "Audit AI Detection", "bool", None),
@@ -798,6 +799,12 @@ FIELD_DESCRIPTIONS = {
         "CD rip to be REAL. If either is FAKE, the final AUDIT is FAKE. "
         "When off (default), the .log CRC alone decides for CD rips and "
         "AudioAuditor is not run on them.",
+    "audit_integrity":
+        "Audit: verify file integrity like foobar2000 Verify Integrity "
+        "(FLAC frame CRCs via flac -t, plus ffmpeg decode for all types). "
+        "When on (default), a file that fails integrity (truncated, CRC "
+        "mismatch, sync error) is always AUDIT=FAKE, regardless of the "
+        "other detectors.",
     "audit_clipping":
         "Audit: detect clipped samples (--no-clipping when off). "
         "Loud modern masters often clip at the true-peak ceiling and are "

@@ -239,6 +239,7 @@ DEFAULT_CONFIG = {
     # for the final AUDIT to be REAL; if either is FAKE, the result is FAKE.
     "audit_verify_cd_checksums": True,
     "audit_cd_require_both": True,
+    "audit_integrity": True,
     "audit_clipping": True,
     "audit_mqa": True,
     "audit_ai": True,
