@@ -2731,19 +2731,15 @@ class App(tk.Tk):
         self.library_tree.configure(columns=tuple(TREE_COLUMNS))
         # First column (tree): label as FOLDER / TRACK so empty header is not confusing
         self.library_tree.heading("#0", text="  FOLDER / TRACK", anchor="w")
-        # TAGS is the primary stretch column so long genre strings are fully visible;
-        # horizontal scrollbar (below) lets the user pan to see the full FAILED column.
-        self.library_tree.column("#0", width=260, minwidth=180, stretch=False, anchor="w")
+        # All columns are user-resizable and stay where dragged — no stretchy column
+        # that snaps back. Horizontal scrollbar lets the user pan to see TAGS/FAILED.
+        self.library_tree.column("#0", width=260, minwidth=160, stretch=False, anchor="w")
         for col_id, (heading, width, _default) in TREE_COLUMNS.items():
             self.library_tree.heading(col_id, text=heading, anchor="w")
-            # Only TAGS stretches — it must utilize all available space; FAILED is fixed
-            # so the horizontal scrollbar appears when the window is narrower than the
-            # total column width (allows viewing full tags via horizontal pan).
-            is_tags = col_id == "tags"
-            minw = 200 if is_tags else 40
-            stretch = is_tags
+            # No stretchy column — every column keeps the width the user drags it to
+            minw = 60 if col_id in ("grade", "audit", "checks", "tracks") else (180 if col_id == "tags" else (140 if col_id == "failed" else 50))
             self.library_tree.column(col_id, width=width, minwidth=minw, anchor="w",
-                                     stretch=stretch)
+                                     stretch=False)
 
         # Row states: green = graded pass, purple = audited only,
         # blue = graded + audited, yellow = warnings/mixed, red = failing.
