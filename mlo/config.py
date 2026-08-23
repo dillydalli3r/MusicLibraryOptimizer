@@ -257,6 +257,8 @@ DEFAULT_CONFIG = {
     "audit_cd_require_both": True,
     "audit_integrity": True,
     "audit_fail_on_unscorable_log": True,
+    "audit_verify_log_checksum": True,
+    "audit_require_accuraterip": True,
     "audit_batch_size": 250,
     "audit_batch_timeout_s": 30,
     "audit_per_file_timeout_s": 30,

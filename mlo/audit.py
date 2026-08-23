@@ -874,12 +874,252 @@ def run_audit_library(config):
                     flagged.append((rel, "unscorable .log (LOG_GRADE missing)"))
                     issue_counts["unscorable .log"] = issue_counts.get("unscorable .log", 0) + 1
                     stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
+                    file_status_map[canon_fp] = "Fake"
+                    file_severity_map[canon_fp] = "fail"
                     # Write AUDIT=FAKE if allowed (makes next run stay failed until log fixed)
                     if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
                         try:
                             _write_audit_tag(fp, "FAKE")
                         except Exception:
                             pass
+
+    # --------------------------------------------------------------
+    # Audit FAIL on invalid .log SHA256 checksum (EAC 1.0b1+ logs)
+    # --------------------------------------------------------------
+    if config.get("audit_verify_log_checksum", True) and cd_candidate_dirs:
+        from .discs import check_log_checksum, album_discs as _ad_chk, _disc_pattern_for as _pat_chk, _disc_expected_name as _exp_chk
+        checksum_failed = {}  # album_dir -> list of (log_path, detail)
+        for d in cd_candidate_dirs:
+            try:
+                discs_here = _ad_chk(d)
+            except Exception:
+                discs_here = {}
+            pat = _pat_chk(config)
+            logs_to_check = []
+            if discs_here:
+                for disc_n in discs_here:
+                    lp = os.path.join(d, _exp_chk(pat, disc_n, ".log"))
+                    if os.path.isfile(lp):
+                        logs_to_check.append((lp, discs_here[disc_n]))
+                    else:
+                        # Fallback orphan present but not at expected name
+                        pass
+                # Also include any extra .log not at expected pattern (orphan)
+                try:
+                    for f in os.listdir(d):
+                        if f.lower().endswith(".log"):
+                            full = os.path.join(d, f)
+                            if full not in [x[0] for x in logs_to_check]:
+                                # Orphan log -> applies to all tracks of album
+                                all_tr = [os.path.join(d, xf) for xf in os.listdir(d) if xf.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                                logs_to_check.append((full, all_tr))
+                except OSError:
+                    pass
+            else:
+                try:
+                    for f in os.listdir(d):
+                        if f.lower().endswith(".log"):
+                            full = os.path.join(d, f)
+                            all_tr = [os.path.join(d, xf) for xf in os.listdir(d) if xf.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                            logs_to_check.append((full, all_tr))
+                except OSError:
+                    continue
+            for lp, trs in logs_to_check:
+                state, detail = check_log_checksum(lp)
+                # 'unsupported' (XLD/no checksum) and 'missing' (no checksum line) are not fails — only 'invalid' is a hard fail.
+                # Missing on an EAC log that declares a checksum but can't be parsed is treated as invalid for strictness,
+                # but XLD/unsupported is passed to avoid false-failing non-EAC collections.
+                if state == "invalid":
+                    checksum_failed.setdefault(d, []).append((lp, detail))
+                elif state == "missing":
+                    # EAC log claims no checksum line but should have one — treat as fail only if log is EAC
+                    # check_log_checksum already returns 'unsupported' for XLD; 'missing' here means EAC without checksum (old version)
+                    # We still fail it when strict (user asked fail if checksum verification failed) — but allow turn off via toggle.
+                    # To avoid failing ancient rips with no checksum ever, we only fail if the log text contains 'Exact Audio Copy V1.0' (version where checksum expected)
+                    try:
+                        from .discs import read_log_text as _rlt
+                        txt_tmp = _rlt(lp)
+                        if "Exact Audio Copy V1.0" in txt_tmp:
+                            checksum_failed.setdefault(d, []).append((lp, detail))
+                    except Exception:
+                        pass
+                # 'ok', 'unsupported', None are passes
+        if checksum_failed:
+            log(c(f"Audit FAIL on log checksum: {sum(len(v) for v in checksum_failed.values())} log(s) in {len(checksum_failed)} CD album(s) have invalid SHA256 checksum — marking their disc(s) as failed (audit_verify_log_checksum on)", Color.RED))
+            for d, lst in checksum_failed.items():
+                for lp, detail in lst:
+                    # Determine affected tracks for this log
+                    try:
+                        discs_here = _ad_chk(d)
+                        affected = None
+                        if discs_here:
+                            pat = _pat_chk(config)
+                            for dn, trs in discs_here.items():
+                                exp = os.path.join(d, _exp_chk(pat, dn, ".log"))
+                                if os.path.normcase(exp) == os.path.normcase(lp):
+                                    affected = trs
+                                    break
+                        if affected is None:
+                            # Orphan or single-disc: all album files
+                            affected = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                    except OSError:
+                        continue
+                    for fp in affected:
+                        if fp not in files:
+                            continue
+                        canon_fp = _canon2(fp)
+                        try:
+                            rel = os.path.relpath(fp, folder)
+                        except ValueError:
+                            rel = os.path.basename(fp)
+                        # Already Fake from earlier gates (unscorable / earlier checksum) — add secondary reason without double-moving counts/FAIL/flagged
+                        if file_status_map.get(canon_fp) == "Fake" and file_severity_map.get(canon_fp) == "fail":
+                            issue_counts["log checksum invalid"] = issue_counts.get("log checksum invalid", 0) + 1
+                            continue
+                        prev_status = file_status_map.get(canon_fp)
+                        prev_sev = file_severity_map.get(canon_fp)
+                        # Adjust status counts (move to Fake if not already)
+                        if canon_fp in file_status_map:
+                            if prev_status == "Real":
+                                status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                                if prev_sev == "warn":
+                                    warned = max(0, warned - 1)
+                            elif prev_status == "Unknown":
+                                status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                            elif prev_status not in ("Fake", "Corrupt", "Optimized"):
+                                status_counts[prev_status] = max(0, status_counts.get(prev_status, 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                            else:
+                                flagged.append((rel, f"log checksum invalid ({os.path.basename(lp)})"))
+                                issue_counts["log checksum invalid"] = issue_counts.get("log checksum invalid", 0) + 1
+                                file_status_map[canon_fp] = "Fake"
+                                file_severity_map[canon_fp] = "fail"
+                                continue
+                        else:
+                            if stats.get("skipped_count", 0) > 0:
+                                stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
+                            stats["total_scanned"] = stats.get("total_scanned", 0) + 1
+                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                        flagged.append((rel, f"log checksum invalid ({os.path.basename(lp)}: {detail or 'mismatch'})"))
+                        issue_counts["log checksum invalid"] = issue_counts.get("log checksum invalid", 0) + 1
+                        stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
+                        file_status_map[canon_fp] = "Fake"
+                        file_severity_map[canon_fp] = "fail"
+                        if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
+                            try:
+                                _write_audit_tag(fp, "FAKE")
+                            except Exception:
+                                pass
+
+    # --------------------------------------------------------------
+    # Audit FAIL on AccurateRip mismatch (any track not accurately ripped)
+    # --------------------------------------------------------------
+    if config.get("audit_require_accuraterip", True) and cd_candidate_dirs:
+        from .discs import check_accuraterip as _chk_ar, album_discs as _ad_ar, _disc_pattern_for as _pat_ar, _disc_expected_name as _exp_ar
+        ar_failed = {}  # album_dir -> list of (log_path, reason)
+        for d in cd_candidate_dirs:
+            try:
+                discs_here = _ad_ar(d)
+            except Exception:
+                discs_here = {}
+            pat = _pat_ar(config)
+            logs_to_check_ar = []
+            if discs_here:
+                for disc_n in discs_here:
+                    lp = os.path.join(d, _exp_ar(pat, disc_n, ".log"))
+                    if os.path.isfile(lp):
+                        logs_to_check_ar.append((lp, discs_here[disc_n]))
+                try:
+                    for f in os.listdir(d):
+                        if f.lower().endswith(".log"):
+                            full = os.path.join(d, f)
+                            if full not in [x[0] for x in logs_to_check_ar]:
+                                all_tr = [os.path.join(d, xf) for xf in os.listdir(d) if xf.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                                logs_to_check_ar.append((full, all_tr))
+                except OSError:
+                    pass
+            else:
+                try:
+                    for f in os.listdir(d):
+                        if f.lower().endswith(".log"):
+                            full = os.path.join(d, f)
+                            all_tr = [os.path.join(d, xf) for xf in os.listdir(d) if xf.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                            logs_to_check_ar.append((full, all_tr))
+                except OSError:
+                    continue
+            for lp, trs in logs_to_check_ar:
+                ok, reason, per = _chk_ar(lp)
+                if ok is False:
+                    ar_failed.setdefault(d, []).append((lp, reason))
+                # ok True / None is pass (None = couldn't read, not strict)
+        if ar_failed:
+            log(c(f"Audit FAIL on AccurateRip: {sum(len(v) for v in ar_failed.values())} log(s) in {len(ar_failed)} CD album(s) not accurately ripped — marking their disc(s) as failed (audit_require_accuraterip on)", Color.RED))
+            for d, lst in ar_failed.items():
+                for lp, reason in lst:
+                    try:
+                        discs_here = _ad_ar(d)
+                        affected = None
+                        if discs_here:
+                            pat = _pat_ar(config)
+                            for dn, trs in discs_here.items():
+                                exp = os.path.join(d, _exp_ar(pat, dn, ".log"))
+                                if os.path.normcase(exp) == os.path.normcase(lp):
+                                    affected = trs
+                                    break
+                        if affected is None:
+                            affected = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                    except OSError:
+                        continue
+                    for fp in affected:
+                        if fp not in files:
+                            continue
+                        canon_fp = _canon2(fp)
+                        # If already Fake from earlier gates, add reason without double-moving counts
+                        already_fake = file_status_map.get(canon_fp) == "Fake" and file_severity_map.get(canon_fp) == "fail"
+                        prev_status = file_status_map.get(canon_fp)
+                        prev_sev = file_severity_map.get(canon_fp)
+                        try:
+                            rel = os.path.relpath(fp, folder)
+                        except ValueError:
+                            rel = os.path.basename(fp)
+                        if already_fake:
+                            issue_counts["not accurately ripped"] = issue_counts.get("not accurately ripped", 0) + 1
+                            continue
+                        if canon_fp in file_status_map:
+                            if prev_status == "Real":
+                                status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                                if prev_sev == "warn":
+                                    warned = max(0, warned - 1)
+                            elif prev_status == "Unknown":
+                                status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                            elif prev_status not in ("Fake", "Corrupt", "Optimized"):
+                                status_counts[prev_status] = max(0, status_counts.get(prev_status, 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                            else:
+                                flagged.append((rel, f"not accurately ripped ({os.path.basename(lp)})"))
+                                issue_counts["not accurately ripped"] = issue_counts.get("not accurately ripped", 0) + 1
+                                file_status_map[canon_fp] = "Fake"
+                                file_severity_map[canon_fp] = "fail"
+                                continue
+                        else:
+                            if stats.get("skipped_count", 0) > 0:
+                                stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
+                            stats["total_scanned"] = stats.get("total_scanned", 0) + 1
+                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                        flagged.append((rel, f"not accurately ripped ({os.path.basename(lp)}: {reason or 'AR mismatch'})"))
+                        issue_counts["not accurately ripped"] = issue_counts.get("not accurately ripped", 0) + 1
+                        stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
+                        file_status_map[canon_fp] = "Fake"
+                        file_severity_map[canon_fp] = "fail"
+                        if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
+                            try:
+                                _write_audit_tag(fp, "FAKE")
+                            except Exception:
+                                pass
 
     stats["grade_dist"]["PASS"] = status_counts["Real"]
     stats["summary_pass"] = max(0, status_counts["Real"] - warned)

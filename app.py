@@ -217,6 +217,8 @@ CONFIG_FIELDS = [
     ("audit_cd_require_both", "CD: Require Both Log & AudioAuditor = REAL", "bool", None),
     ("audit_integrity", "Verify File Integrity (like foobar2000 Verify Integrity: FLAC CRC, MP3 sync, ffmpeg decode)", "bool", None),
     ("audit_fail_on_unscorable_log", "Fail CD Audit if .log Unscorable", "bool", None),
+    ("audit_verify_log_checksum", "Verify .log Checksum (SHA256 at bottom)", "bool", None),
+    ("audit_require_accuraterip", "Require AccurateRip Match for All Tracks", "bool", None),
     ("audit_batch_size", "Audit Batch Size (50-500)", "int", (50, 500)),
     ("audit_batch_timeout_s", "Audit Batch Timeout (s)", "int", (10, 120)),
     ("audit_per_file_timeout_s", "Audit Per-File Timeout (s)", "int", (10, 60)),
@@ -859,6 +861,10 @@ FIELD_DESCRIPTIONS = {
         "graded (no score, unsupported format, or scoring timeout) makes the "
         "whole disc AUDIT=FAKE. Ensures every CD .log is gradeable; disable to "
         "keep old behaviour where unscoreable logs only emit [log] warning.",
+    "audit_verify_log_checksum":
+        "Audit: verify the SHA256 checksum at the bottom of EAC/XLD logs (==== Log checksum ... ====) via Logchecker. When on (default), a log whose checksum is invalid or missing makes the disc AUDIT=FAKE. Disable to ignore log checksum.",
+    "audit_require_accuraterip":
+        "Audit: require every track to be Accurately Ripped (AR confidence ≥1, present in DB). When on (default), if even one track is 'Track not present', 'Cannot be verified', or 'Rip may not be accurate' (Logchecker Details), the whole disc AUDIT=FAKE. Disable to allow non-AR rips.",
     "audit_batch_size":
         "AudioAuditor batch size: paths per CLI invocation. 250 default (CLI supports up to 50000); smaller batches give finer progress.",
     "audit_batch_timeout_s":
@@ -1455,6 +1461,7 @@ class ConfigDialog(tk.Toplevel):
                 "audit_thorough", "audit_cutoff_allow",
                 "audit_verify_cd_checksums", "audit_cd_require_both",
                 "audit_integrity", "audit_fail_on_unscorable_log",
+                "audit_verify_log_checksum", "audit_require_accuraterip",
             ]),
             ("Auditing — Detectors", [
                 "audit_clipping", "audit_scaled_clipping", "audit_mqa",

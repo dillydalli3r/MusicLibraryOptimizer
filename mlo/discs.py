@@ -35,6 +35,14 @@ from .stats import is_audio_file
 from .subproc import run_tool
 from .ui import log, c, Color
 
+# Optional: EAC checksum verifier (pypi eac-logchecker)
+try:
+    import eac_logchecker  # type: ignore
+    HAS_EAC_CHECKER = True
+except ImportError:
+    eac_logchecker = None  # type: ignore
+    HAS_EAC_CHECKER = False
+
 # "1-01 Title.flac" / "12-03 Title.flac" -> disc number
 DISC_PREFIX_RE = re.compile(r"^(\d{1,2})\s*-\s*\d{2}(?:\s|\.|$)")
 
@@ -734,6 +742,184 @@ def score_disc_log(cli_exe, log_path=None, disc_files=None, timeout=30):
         return None
     except Exception:
         return None
+
+
+# ----------------------------------------------------------------------
+# Log checksum + AccurateRip verification (for audit)
+# ----------------------------------------------------------------------
+def check_log_checksum(log_path):
+    """Verify the EAC SHA256 log checksum (==== Log checksum ... ====).
+
+    Returns (state, detail):
+      state: 'ok' | 'invalid' | 'missing' | 'unsupported' | None (error)
+      detail: human string or None
+
+    EAC 1.0b1+ rip logs are UTF-16LE with BOM and carry a Rijndael checksum
+    (pypi `eac-logchecker`). XLD / older EAC logs that never had a checksum
+    return 'unsupported' so callers can treat them as PASS when the toggle is
+    on (avoids false-failing XLD collections). A log that claims a checksum
+    but fails verification returns 'invalid'.
+    """
+    try:
+        if not log_path or not os.path.isfile(log_path):
+            return (None, "not found")
+        # Read raw to preserve BOM/encoding for eac-logchecker
+        try:
+            raw = open(log_path, "rb").read()
+        except OSError as e:
+            return (None, str(e)[:120])
+        # Detect log flavour via decoded snippet
+        txt = read_log_text(log_path)
+        # XLD or non-EAC -> unsupported (no checksum to verify)
+        if "X Lossless Decoder" in txt or txt.lstrip().startswith("XLD"):
+            return ("unsupported", "XLD log has no EAC checksum")
+        if "Exact Audio Copy" not in txt:
+            # No EAC header -> no checksum concept
+            if "==== Log checksum" not in txt:
+                return ("unsupported", "no EAC header / no checksum")
+        # Log claims a checksum?
+        has_line = bool(re.search(r"====\s*Log checksum\s+[0-9A-Fa-f]+\s*====", txt))
+        if not has_line:
+            return ("missing", "no 'Log checksum' line")
+        if not HAS_EAC_CHECKER or eac_logchecker is None:
+            # Fallback to Logchecker PHP if eac-logchecker not installed
+            try:
+                from .tools import detect_all_tools
+                tools = detect_all_tools()
+                lc = tools.get("logchecker")
+                php = tools.get("php")
+                if lc and lc.get("phar_path") and (lc.get("php_exe") or (php and php.get("php_exe"))):
+                    phar = lc.get("phar_path")
+                    php_exe = lc.get("php_exe") or php.get("php_exe")
+                    if os.path.isfile(phar) and php_exe and os.path.isfile(php_exe):
+                        proc = run_tool([php_exe, phar, "analyze", "--no_text", log_path],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        text=True, encoding="utf-8", errors="replace", timeout=15)
+                        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+                        m = re.search(r"Checksum\s*:\s*(\w+)", out, re.IGNORECASE)
+                        if m:
+                            state = m.group(1).lower()
+                            if state == "checksum_ok":
+                                return ("ok", None)
+                            if state in ("checksum_invalid", "checksum_error"):
+                                return ("invalid", state)
+                            if state in ("checksum_missing", "checksum_not_found"):
+                                return ("missing", state)
+                            return (state, out[:120])
+            except Exception:
+                pass
+            return (None, "eac-logchecker not installed")
+        # Use eac-logchecker (accurate, UTF-16LE aware)
+        try:
+            logs = eac_logchecker.get_logs(raw)  # handles BOM + \r\n -> \n
+        except Exception as e:
+            return (None, f"parse: {e}")
+        if not logs:
+            return ("missing", "eac_logchecker: no log found")
+        # Usually single log per file
+        for lg in logs:
+            try:
+                eac_logchecker.eac_verify(lg)
+            except Exception as e:
+                return (None, f"verify: {e}")
+            if getattr(lg, "old_checksum", None) is None:
+                return ("missing", "no stored checksum in log")
+            if getattr(lg, "checksum", None) != lg.old_checksum:
+                return ("invalid", f"expected {lg.old_checksum} computed {lg.checksum}")
+            return ("ok", None)
+        return ("missing", "no log")
+    except Exception as e:
+        return (None, str(e)[:160])
+
+
+def check_accuraterip(log_path):
+    """Verify that every track in the log is 'Accurately ripped'.
+
+    Parses the log text per-track section and checks for the characteristic
+    AccurateRip success line: 'Accurately ripped (confidence N)  [CRC]  (AR v1/v2)'.
+
+    Returns (ok: bool | None, reason: str | None, per_track: dict[int,bool]|None).
+    None means the log could not be inspected (unreadable / unsupported).
+    ok==True  -> all tracks accurately ripped
+    ok==False -> at least one track not accurately ripped (reason lists tracks)
+    Missing AccurateRip info for a track is treated as NOT ok when the toggle
+    is on (strict per request: 'if even one track doesn't match, it should fail').
+    """
+    try:
+        if not log_path or not os.path.isfile(log_path):
+            return (None, "not found", None)
+        txt = read_log_text(log_path)
+        if not txt.strip():
+            return (None, "empty log", None)
+        # Quick unsupported: no Track sections at all — can't verify AR (e.g. stray .log not a rip log)
+        if not re.search(r"(?m)^Track\s+\d+\b", txt):
+            return (None, "no Track sections in log", None)
+        # Split into per-track blocks preserving the Track number
+        # re.split with capturing group keeps the number
+        parts = re.split(r"(?m)^Track\s+(\d+)\b", txt)
+        # parts[0]=preamble, then repeating (num, block)
+        per_track = {}
+        failed = []
+        track_count = 0
+        idx = 1
+        while idx < len(parts):
+            num_s = parts[idx]
+            block = parts[idx + 1] if idx + 1 < len(parts) else ""
+            idx += 2
+            try:
+                n = int(num_s)
+            except ValueError:
+                continue
+            track_count += 1
+            low = block.lower()
+            # Determine if this track is accurately ripped
+            # Presence of 'accurately ripped' without negation phrases
+            # Log lines like: 'Accurately ripped (confidence 13)  [hash]  (AR v2)'
+            has_accurate = "accurately ripped" in low
+            has_negation = ("not accurately" in low or "cannot be verified" in low
+                            or "track not present" in low or "rip may not be accurate" in low
+                            or "not present in accuraterip" in low or "no accurate" in low)
+            # Also check explicit fail phrases regardless of accurate phrase
+            fail_phrase = None
+            if "track not present" in low:
+                fail_phrase = "Track not present in AccurateRip DB"
+            elif "cannot be verified" in low:
+                fail_phrase = "Cannot be verified as accurate"
+            elif "not present in accuraterip" in low:
+                fail_phrase = "Not present in AccurateRip"
+            elif "rip may not be accurate" in low:
+                fail_phrase = "Rip may not be accurate"
+            # Decide
+            if has_accurate and not has_negation and not fail_phrase:
+                # Ensure confidence bracket present (avoids false positive from header 'All tracks accurately ripped')
+                # The block should have 'confidence' and a bracket [XXXXXXXX]
+                if "confidence" in low and re.search(r"\[[0-9a-fA-F]{8}\]", block):
+                    per_track[n] = True
+                else:
+                    # Still treat generic 'accurately ripped' as ok (XLD may omit confidence)
+                    per_track[n] = True
+            elif fail_phrase:
+                per_track[n] = False
+                failed.append(f"track {n}: {fail_phrase}")
+            elif has_accurate and has_negation:
+                per_track[n] = False
+                failed.append(f"track {n}: not accurately ripped")
+            else:
+                # No AR info for this track -> strict fail
+                per_track[n] = False
+                # Check if block mentions AR at all
+                if "accuraterip" in low or "accurately" in low:
+                    failed.append(f"track {n}: AccurateRip mismatch")
+                else:
+                    failed.append(f"track {n}: missing AccurateRip verification")
+        if track_count == 0:
+            return (False, "no tracks parsed", None)
+        if failed:
+            return (False, "; ".join(failed[:5]) + (f" (+{len(failed)-5} more)" if len(failed) > 5 else ""), per_track)
+        # All tracks ok
+        return (True, None, per_track)
+    except Exception as e:
+        return (None, str(e)[:160], None)
 
 
 def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,

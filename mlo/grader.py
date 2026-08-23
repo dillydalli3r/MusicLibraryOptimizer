@@ -1254,6 +1254,87 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         except Exception:
             pass
 
+        # Log SHA256 checksum verification (EAC logs have Rijndael checksum)
+        if cfg.get("audit_verify_log_checksum", True):
+            try:
+                from .discs import check_log_checksum as _check_csum, read_log_text as _read_lt
+                # Re-collect log paths for this check (outside previous try's scope)
+                csum_logs = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".log")]
+                for lp in sorted(csum_logs):
+                    state, detail = _check_csum(lp)
+                    # 'unsupported' (XLD/no header) is not a failure — avoids false-failing XLD collections
+                    # 'missing' only fails when the log is EAC V1.0+ where checksum is expected
+                    should_fail = False
+                    if state == "invalid":
+                        should_fail = True
+                    elif state == "missing":
+                        try:
+                            txt_tmp = _read_lt(lp)
+                            if "Exact Audio Copy V1.0" in txt_tmp:
+                                should_fail = True
+                        except Exception:
+                            pass
+                    # Only count when checksum concept applies (skip XLD/unsupported)
+                    if state not in ("unsupported", None):
+                        total_checks += 1
+                        if should_fail:
+                            failed_checks += 1
+                            add_issue(f"Log checksum invalid ({os.path.basename(lp)}: {detail or 'mismatch'})", "album")
+                            # Also tag each track of the affected disc so FAILED shows per-track
+                            for tr in tracks:
+                                if not tr.get("unreadable") and "LOG_CHECKSUM" not in tr.get("issues", []):
+                                    # Mark disc tracks — for multi-disc only mark its disc's tracks
+                                    try:
+                                        from .discs import disc_of_filename as _dof_c, _disc_pattern_for as _pat_c, _disc_expected_name as _exp_c, album_discs as _ad_c
+                                        dnum = _dof_c(tr["file"])
+                                        discs_tmp = _ad_c(album_dir)
+                                        if discs_tmp:
+                                            exp = os.path.join(album_dir, _exp_c(_pat_c(cfg), dnum or 1, ".log"))
+                                            if os.path.normcase(exp) == os.path.normcase(lp):
+                                                tr["issues"].append("LOG_CHECKSUM")
+                                        else:
+                                            tr["issues"].append("LOG_CHECKSUM")
+                                    except Exception:
+                                        tr["issues"].append("LOG_CHECKSUM")
+            except Exception:
+                pass
+
+        # AccurateRip verification — every track must be 'Accurately ripped'
+        if cfg.get("audit_require_accuraterip", True):
+            try:
+                from .discs import check_accuraterip as _check_ar
+                ar_logs = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".log")]
+                for lp in sorted(ar_logs):
+                    ok, reason, per = _check_ar(lp)
+                    # Count AR check for every log (unsupported -> 'no Track sections' is False, but still counted)
+                    # Only EAC/XLD logs with tracks: ok True = pass, False = fail, None = unsupported -> not counted
+                    if ok is not None:
+                        total_checks += 1
+                        if ok is False:
+                            failed_checks += 1
+                            add_issue(f"Not accurately ripped ({os.path.basename(lp)}: {reason or 'AR mismatch'})", "album")
+                            for tr in tracks:
+                                if tr.get("unreadable"):
+                                    continue
+                                # Only fail tracks belonging to this log's disc when multi-disc
+                                try:
+                                    from .discs import disc_of_filename as _dof_ar, _disc_pattern_for as _pat_ar, _disc_expected_name as _exp_ar, album_discs as _ad_ar
+                                    dnum = _dof_ar(tr["file"])
+                                    discs_tmp = _ad_ar(album_dir)
+                                    if discs_tmp:
+                                        exp = os.path.join(album_dir, _exp_ar(_pat_ar(cfg), dnum or 1, ".log"))
+                                        if os.path.normcase(exp) == os.path.normcase(lp):
+                                            if "AR" not in tr.get("issues", []):
+                                                tr["issues"].append("AR")
+                                    else:
+                                        if "AR" not in tr.get("issues", []):
+                                            tr["issues"].append("AR")
+                                except Exception:
+                                    if "AR" not in tr.get("issues", []):
+                                        tr["issues"].append("AR")
+            except Exception:
+                pass
+
     elif media_summary == "Digital Media":
         # SOURCE requirements already checked per-track.
         pass
