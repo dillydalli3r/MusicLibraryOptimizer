@@ -757,17 +757,35 @@ def _process_image_to_jxl(args):
                     or os.path.getsize(decoded_png) == 0
                 ):
                     err = djxl_result.stderr.decode("utf-8", errors="replace").strip()
-                    # PNG-JXL that this djxl cannot decode (e.g. newer encoding or truncated) —
-                    # try to just update the XMP tags without re-encoding the pixels, if the
-                    # only reason to re-encode is version/effort. This satisfies the user's
-                    # request to re-encode when version/effort is newer/higher or Force is on.
+                    # Try ffmpeg as fallback for JXLs that djxl cannot decode (e.g. omu cover.jxl)
+                    # ffmpeg also uses libjxl but with different build options
                     try:
-                        # Try to just write the new tags to the original file
-                        _write_jxl_tags(src_path, effort, jxl_version, enabled)
-                        return (src_path, "modified", 0, 0, f"updated XMP tags only (cannot decode JXL pixels: {err[:40]})")
+                        from .tools import detect_all_tools as _detect
+                        _tools = _detect()
+                        _ffmpeg = (_tools.get("ffmpeg") or {}).get("ffmpeg_exe")
+                        if _ffmpeg:
+                            fb_tmp = src_path + ".ffmpeg.png"
+                            temp_files.append(fb_tmp)
+                            fb_res = run_tool([_ffmpeg, "-y", "-i", src_path, fb_tmp],
+                                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                            if fb_res.returncode == 0 and os.path.exists(fb_tmp) and os.path.getsize(fb_tmp) > 0:
+                                input_for_cjxl = fb_tmp
+                                # Continue to cover handling below (don't return)
+                            else:
+                                _safe_remove(fb_tmp)
+                                if fb_tmp in temp_files:
+                                    temp_files.remove(fb_tmp)
+                                raise RuntimeError(err)
+                        else:
+                            raise RuntimeError(err)
                     except Exception:
-                        pass
-                    return (src_path, "skipped", 0, 0, f"skipped (cannot decode JXL: {err[:80]})")
+                        # Fallback to XMP-only update when pixel decode truly impossible
+                        try:
+                            _write_jxl_tags(src_path, effort, jxl_version, enabled)
+                            return (src_path, "modified", 0, 0, f"updated XMP tags only (cannot decode JXL pixels: {err[:40]})")
+                        except Exception:
+                            pass
+                        return (src_path, "skipped", 0, 0, f"skipped (cannot decode JXL: {err[:80]})")
 
                 input_for_cjxl = decoded_png
 
