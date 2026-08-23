@@ -98,6 +98,18 @@ jobs:
             Install-From (Find-Dir "$env:TEMP\ffmpeg" @("ffmpeg.exe","ffprobe.exe")) @("ffmpeg.exe","ffprobe.exe") ".dependencies\ffmpeg v2026.8.19"
           } catch { Write-Warning "ffmpeg: $_" }
 
+      - name: Set version from tag
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          Write-Host "Setting version to $ver"
+          (Get-Content "mlo/__init__.py") -replace '__version__ = ".*"', "__version__ = `"$ver`"" | Set-Content "mlo/__init__.py" -Encoding utf8
+          (Get-Content "Music Library Optimizer.iss") -replace '#define AppVersion ".*"', "#define AppVersion `"$ver`"" | Set-Content "Music Library Optimizer.iss" -Encoding utf8
+          Write-Host "Updated mlo/__init__.py:"
+          Get-Content "mlo/__init__.py" | Select-String "__version__"
+          Write-Host "Updated ISS:"
+          Get-Content "Music Library Optimizer.iss" | Select-String "AppVersion"
+
       - name: Build GUI executable
         run: |
           python -m PyInstaller --noconfirm --clean --onefile --windowed `

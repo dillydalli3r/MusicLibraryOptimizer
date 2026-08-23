@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.6.1
+# Music Library Optimizer v1.6.2
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.3`) + command-line app (
 optional interactive console menu. **v1.5.0 fixes Grading Enforce not saving, moves [00:00.00] to Lyrics (on by default, works for standard+enhanced), adds fill-empty-SOURCE toggle (default keep empty), makes Thorough Audit on by default, fixes columns menu, widens TAGS to truly use all space, adds Guide max-effort preset and About Install Latest, and keeps PROGRAM off; v1.4.3 made grading require `ENCODER_PROGRAM` only when that format’s toggle is on (off by default, so existing libraries pass), and ensures optimization writes `PROGRAM` even when skipping re-encode; v1.4.2 made `PROGRAM` off by default and stopped deleting tags.**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.1_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.2_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.6.1_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.6.2_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -41,9 +41,13 @@ PATH (the system scope requests admin elevation automatically). See
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
 
+## New in v1.6.2
+
+- **In-app updater fixed + setup name fixed for v1.6.1** — `Music Library Optimizer.iss` `#define AppVersion` now `1.6.2` (was stale `1.5.6` → installer named `v1.5.6` for `v1.6.1` tag) and `.github/workflows/release.yml` now sets `__version__` + `ISS` from `${{ github.ref_name }}` before `PyInstaller`/`ISCC` so `Setup_v1.6.2_x64.exe`/`_portable` match the tag. `mlo/updater.py` hardened: `_find_installer` now prefers `setup` asset matching tag version (handles `v1.6.x` vs `v1.5.6` mis-name), `_download_installer` adds `Authorization` header when `GITHUB_TOKEN` present, retries `429/403/5xx` with `Retry-After`, validates `MZ` + `<html` guard, 500 MB cap, and `launch_installer_after_shutdown` now verifies `MZ` before helper, quotes `Installer` correctly, adds `ShellExecute` fallback via `os.startfile` if WMI `Win32_Process.Create` fails, and logs `Update helper launched…`.
+
 ## New in v1.6.1
 
-- **CD must be 16-bit 44.1 kHz — true CD-DA only** — `mlo/config.py` adds `grade_check_cd_format` + `audit_check_cd_format` (both `True` by default, in `Settings → Grading — CD` / `Auditing — Core`, in `v1.6.0 Strict` preset, and in `Grade Details` `✓/✗` + `Auditing checks`). `mlo/grader.py:_grade_album` now checks `audio.info.bits_per_sample`/`sample_rate` per `MEDIA=CD` track (`CD must be 16-bit 44.1 kHz (found …)` → `CD_FORMAT`), `mlo/audit.py:run_audit_library` marks `not 16-bit 44.1 kHz` as `AUDIT=FAKE` (via `mutagen` `info`, no `ffmpeg` needed). Helps detect fake rips from hi-res upsampled sources (the only true CD format).
+- **CD must be 16-bit 44.1 kHz — true CD-DA only** — `mlo/config.py` adds `grade_check_cd_format` + `audit_check_cd_format` (both `True` by default, in `Settings → Grading — CD` / `Auditing — Core`, in `v1.6.0 Strict` preset, and in `Grade Details` `✓/✗` + `Auditing checks`). `mlo/grader.py:_grade_album` now checks `audio.info.bits_per_sample`/`sample_rate` per `MEDIA=CD` track (`CD must be 16-bit 44.1 kHz (found …)` → `CD_FORMAT`), `mlo/audit.py:run_audit_library` marks `not 16-bit 44.1 kHz` as `AUDIT=FAKE` (via `mutagen` `info`, no `ffmpeg` needed, independent of `audit_verify_cd_checksums`). Helps detect fake rips from hi-res upsampled sources (the only true CD format).
 
 ## New in v1.6.0
 

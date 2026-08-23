@@ -3,6 +3,7 @@ import base64
 import ctypes
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -118,10 +119,22 @@ def _find_installer(data):
         exe_assets.append((name, asset.get("browser_download_url")))
     if not exe_assets:
         return None
-    # Prefer setup/installer
-    for name, url in exe_assets:
-        if "setup" in name.lower() or "installer" in name.lower():
-            return url
+    # Prefer setup/installer with highest version ( handles v1.6.1 vs v1.5.6 naming )
+    candidates = [(n, u) for n, u in exe_assets if "setup" in n.lower() or "installer" in n.lower()]
+    if candidates:
+        # Prefer the one with version matching the release tag if possible
+        tag = str(data.get("tag_name", "")).lstrip("vV")
+        for n, u in candidates:
+            if tag and tag in n:
+                return u
+        # Otherwise highest version by tuple
+        def _ver_key(n):
+            m = re.search(r"v?(\d+)\.(\d+)\.(\d+)", n)
+            if m:
+                return tuple(int(x) for x in m.groups())
+            return (0, 0, 0)
+        candidates.sort(key=lambda x: _ver_key(x[0]), reverse=True)
+        return candidates[0][1]
     # Fallback to single exe if only one, or any exe containing version
     return exe_assets[0][1]
 
@@ -177,18 +190,55 @@ def _download_installer(url):
         tempfile.gettempdir(),
         f"MusicLibraryOptimizer_Setup_{uuid.uuid4().hex}.exe",
     )
-    request = urllib.request.Request(url, headers={"User-Agent": _HEADERS["User-Agent"]})
+    # GitHub asset URLs redirect to S3 — follow redirects and handle rate limiting
+    headers = {"User-Agent": _HEADERS["User-Agent"], "Accept": "application/octet-stream"}
+    # Include token if available (helps with rate limits)
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+    request = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=120) as response, open(path, "wb") as out:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
+        # Use 3 retries for transient failures (429, 5xx)
+        last_err = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response, open(path, "wb") as out:
+                    total = 0
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        total += len(chunk)
+                        if total > 500 * 1024 * 1024:
+                            raise ValueError("installer too large (>500MB)")
+                break
+            except urllib.error.HTTPError as e:
+                last_err = e
+                if e.code in (429, 403, 500, 502, 503, 504) and attempt < 2:
+                    retry_after = e.headers.get("Retry-After")
+                    wait = int(retry_after) if retry_after and retry_after.isdigit() else (2 ** attempt)
+                    log(f"Download retry {attempt+1}/3 after HTTP {e.code} (wait {wait}s)", Color.YELLOW)
+                    time.sleep(wait)
+                    continue
+                raise
+            except Exception as e:
+                last_err = e
+                if attempt < 2 and "timed out" in str(e).lower():
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+        if last_err and not os.path.exists(path):
+            raise last_err
         if os.path.getsize(path) < 64 * 1024:
             raise ValueError("downloaded installer is unexpectedly small")
         with open(path, "rb") as exe:
             if exe.read(2) != b"MZ":
+                # Check if it's HTML error page
+                exe.seek(0)
+                head = exe.read(512).decode("utf-8", "replace")
+                if "<html" in head.lower():
+                    raise ValueError("GitHub returned HTML instead of exe (rate limited or asset not found)")
                 raise ValueError("downloaded file is not a Windows executable")
         return path
     except Exception:
@@ -382,7 +432,7 @@ def launch_installer_after_shutdown(installer_path, pids, timeout=180):
     All given PIDs (including the caller's own) are waited on: the caller
     exits right after spawning the helper, so its PID drops off the list
     almost immediately. The helper also deletes the downloaded installer
-    once setup has finished.
+    once setup has finished. Falls back to direct launch if WMI/PowerShell fails.
     """
     if not os.path.isfile(installer_path):
         raise FileNotFoundError(installer_path)
@@ -390,6 +440,17 @@ def launch_installer_after_shutdown(installer_path, pids, timeout=180):
     if os.name != "nt":
         subprocess.Popen([installer_path])
         return
+
+    # Ensure installer path is quoted correctly for PowerShell
+    abs_installer = os.path.abspath(installer_path)
+    # Verify file is still a valid exe before launching helper
+    try:
+        with open(abs_installer, "rb") as f:
+            if f.read(2) != b"MZ":
+                raise ValueError("installer is not a valid exe (missing MZ header)")
+    except Exception as e:
+        log(f"Installer verification failed: {e}", Color.RED)
+        raise
 
     script = os.path.join(
         tempfile.gettempdir(), f"mlo_update_wait_{uuid.uuid4().hex}.ps1"
@@ -410,7 +471,12 @@ while ((Get-Date) -lt $deadline) {
         if (Get-Process -Id $procId -ErrorAction SilentlyContinue) { $alive += $procId }
     }
     if ($alive.Count -eq 0) {
-        Start-Process -FilePath $Installer -Wait
+        try {
+            Start-Process -FilePath $Installer -Wait -ErrorAction Stop
+        } catch {
+            # Fallback: try ShellExecute (handles spaces/quotes better)
+            try { Start-Process -FilePath "`"$Installer`"" -Wait } catch {}
+        }
         Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
         exit 0
@@ -425,13 +491,22 @@ exit 2
     command = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-WindowStyle", "Hidden", "-File", script,
-        "-Installer", os.path.abspath(installer_path),
+        "-Installer", abs_installer,
         # Space-separated list: PowerShell 5.1 binds "-Pids a,b" as a
         # single int (commas are a thousands separator), so pass a string.
         "-Pids", " ".join(str(pid) for pid in pids),
         "-Timeout", str(int(timeout)),
     ]
-    _spawn_survivable(command)
+    try:
+        _spawn_survivable(command)
+        log(f"Update helper launched for {abs_installer} (waiting for {pids})", Color.GREEN)
+    except Exception as e:
+        log(f"Helper launch failed ({e}), trying direct start", Color.YELLOW)
+        # Fallback: try to launch directly via os.startfile (Windows) or Popen
+        try:
+            os.startfile(abs_installer)
+        except Exception:
+            subprocess.Popen([abs_installer], creationflags=_CREATE_NO_WINDOW | _DETACHED_PROCESS, close_fds=True)
 
 
 def maybe_auto_check(callback=None, force=False):
