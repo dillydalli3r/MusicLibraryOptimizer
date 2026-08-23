@@ -219,6 +219,7 @@ CONFIG_FIELDS = [
     ("force_dr_replaygain", "Force DR/ReplayGain", "bool", None),
     ("auto_advisory", "Auto Album Advisory", "bool", None),
     ("auto_instrumental", "Auto Instrumental Tag", "bool", None),
+    ("auto_zero_advisory_for_instrumental", "Auto-Zero Advisory for Instrumental (if INSTRUMENTAL=1 → ITUNESADVISORY/ALBUMITUNESADVISORY=0)", "bool", None),
     ("force_auto_tag", "Force Auto Tagging", "bool", None),
     # Interface / performance / updates
     ("auto_advance", "Auto-Advance Between Scripts", "bool", None),
@@ -845,6 +846,10 @@ FIELD_DESCRIPTIONS = {
     "auto_instrumental":
         "Auto Tagging: set INSTRUMENTAL from lyrics presence — 0 when the "
         "track has lyrics (embedded LYRICS or .lrc), otherwise 1.",
+    "auto_zero_advisory_for_instrumental":
+        "Auto Tagging: when INSTRUMENTAL=1 (no lyrics, cannot be explicit), "
+        "automatically set ITUNESADVISORY and ALBUMITUNESADVISORY to 0. "
+        "An instrumental track cannot be explicit.",
     "force_auto_tag":
         "Auto Tagging: rewrite tags even when already correct. The Force ▾ "
         "menu in the Library tab sets this per-run.",

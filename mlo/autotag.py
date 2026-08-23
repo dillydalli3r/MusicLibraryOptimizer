@@ -81,6 +81,7 @@ def run_auto_tagging(config):
     force = config.get("force_auto_tag", False)
     do_advisory = config.get("auto_advisory", True)
     do_instrumental = config.get("auto_instrumental", True)
+    do_zero_advisory_for_instrumental = config.get("auto_zero_advisory_for_instrumental", True)
 
     if config.get("targets") is not None:
         target_files = _collect_targets(config["targets"], AUDIO_EXTS)
@@ -156,6 +157,31 @@ def run_auto_tagging(config):
                             d["advisory"] = stripped
             except Exception:
                 pass
+
+        # Auto-zero ITUNESADVISORY for instrumental tracks (no lyrics -> cannot be explicit)
+        # This handles the case where INSTRUMENTAL=1 but advisory is 1/2 (explicit) - should be 0.
+        # Also handles ALBUMITUNESADVISORY via the subsequent derivation (if all tracks are 0, album becomes 0).
+        if do_zero_advisory_for_instrumental:
+            for d in info:
+                # Check if track is instrumental (final value after potential instrumental fix below, but also current)
+                # We check both the cached instrumental value and whether the track has no lyrics
+                # For tracks that are instrumental (1) or would be considered instrumental (no lyrics and not has_lyrics)
+                is_instrumental = (d["instrumental"] == "1")
+                # Also consider tracks that have no lyrics and are not marked as 0 - they are effectively instrumental
+                # But we only zero if explicitly marked as 1 to avoid overwriting manual 1/2 for non-instrumental tracks without lyrics
+                if is_instrumental and d["advisory"] != "0":
+                    if not should_write_audio_tag(config, "ITUNESADVISORY", filepath=d["af"].path):
+                        continue
+                    # Only zero if current advisory is 1 or 2 (explicit), or if advisory is missing/empty and we want to ensure 0
+                    # Respect per-type ADVISORY family
+                    if d["advisory"] in ("1", "2") or d["advisory"] == "":
+                        # Also check if the track truly has no lyrics (to avoid zeroing a track that is marked 1 but actually has lyrics due to stale tag)
+                        # But if INSTRUMENTAL=1, by definition it should have no lyrics, so we zero advisory
+                        if force or d["advisory"] != "0":
+                            if d["af"].set_tag("ITUNESADVISORY", "0"):
+                                modified += 1
+                                d["advisory"] = "0"
+                                notes.append("zero advisory for instrumental") if "zero advisory for instrumental" not in notes else None
 
         if do_advisory:
             advisory_value = _derive_advisory(

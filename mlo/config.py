@@ -282,6 +282,7 @@ DEFAULT_CONFIG = {
     # Auto Tagging (script 8)
     "auto_advisory": True,
     "auto_instrumental": True,
+    "auto_zero_advisory_for_instrumental": True,
     "force_auto_tag": False,
     "force_auto_tag_ui": False,
 
