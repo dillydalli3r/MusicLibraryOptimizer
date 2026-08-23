@@ -1121,6 +1121,95 @@ def run_audit_library(config):
                             except Exception:
                                 pass
 
+    # --------------------------------------------------------------
+    # Audit FAIL on Logchecker score below threshold
+    # --------------------------------------------------------------
+    if int(config.get("audit_log_score_threshold", 0) or 0) > 0 and cd_candidate_dirs and log_scores:
+        try:
+            thr_a = int(config.get("audit_log_score_threshold", 0) or 0)
+            thr_a = max(0, min(100, thr_a))
+        except Exception:
+            thr_a = 0
+        if thr_a > 0:
+            from .discs import album_discs as _ad_thr, _disc_pattern_for as _pat_thr, _disc_expected_name as _exp_thr
+            thr_failed = {}  # album_dir -> list disc nums
+            for d, scores in list(log_scores.items()):
+                for disc_n, sc in scores.items():
+                    try:
+                        if int(sc) < thr_a:
+                            thr_failed.setdefault(d, []).append((disc_n, sc))
+                    except Exception:
+                        continue
+            if thr_failed:
+                log(c(f"Audit FAIL on log score threshold: {sum(len(v) for v in thr_failed.values())} disc(s) in {len(thr_failed)} CD album(s) below {thr_a}/100 — marking their disc(s) as failed (audit_log_score_threshold on)", Color.RED))
+                for d, lst in thr_failed.items():
+                    for disc_n, sc in lst:
+                        try:
+                            discs_here = _ad_thr(d)
+                            affected = None
+                            if discs_here and disc_n in discs_here:
+                                affected = discs_here[disc_n]
+                            else:
+                                pat = _pat_thr(config)
+                                exp = os.path.join(d, _exp_thr(pat, disc_n, ".log"))
+                                if os.path.isfile(exp):
+                                    # Find tracks belonging to this disc via filename D-TT or all if single
+                                    if discs_here:
+                                        affected = discs_here.get(disc_n)
+                                    if not affected:
+                                        affected = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                                else:
+                                    affected = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                            if not affected:
+                                continue
+                        except OSError:
+                            continue
+                        for fp in affected:
+                            if fp not in files:
+                                continue
+                            canon_fp = _canon2(fp)
+                            try:
+                                rel = os.path.relpath(fp, folder)
+                            except ValueError:
+                                rel = os.path.basename(fp)
+                            if file_status_map.get(canon_fp) == "Fake" and file_severity_map.get(canon_fp) == "fail":
+                                issue_counts[f"log score < {thr_a}"] = issue_counts.get(f"log score < {thr_a}", 0) + 1
+                                continue
+                            prev_status = file_status_map.get(canon_fp)
+                            prev_sev = file_severity_map.get(canon_fp)
+                            if canon_fp in file_status_map:
+                                if prev_status == "Real":
+                                    status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
+                                    status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                                    if prev_sev == "warn":
+                                        warned = max(0, warned - 1)
+                                elif prev_status == "Unknown":
+                                    status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
+                                    status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                                elif prev_status not in ("Fake", "Corrupt", "Optimized"):
+                                    status_counts[prev_status] = max(0, status_counts.get(prev_status, 0) - 1)
+                                    status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                                else:
+                                    issue_counts[f"log score < {thr_a}"] = issue_counts.get(f"log score < {thr_a}", 0) + 1
+                                    file_status_map[canon_fp] = "Fake"
+                                    file_severity_map[canon_fp] = "fail"
+                                    continue
+                            else:
+                                if stats.get("skipped_count", 0) > 0:
+                                    stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
+                                stats["total_scanned"] = stats.get("total_scanned", 0) + 1
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                            flagged.append((rel, f"log score {sc} below threshold {thr_a}"))
+                            issue_counts[f"log score < {thr_a}"] = issue_counts.get(f"log score < {thr_a}", 0) + 1
+                            stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
+                            file_status_map[canon_fp] = "Fake"
+                            file_severity_map[canon_fp] = "fail"
+                            if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
+                                try:
+                                    _write_audit_tag(fp, "FAKE")
+                                except Exception:
+                                    pass
+
     stats["grade_dist"]["PASS"] = status_counts["Real"]
     stats["summary_pass"] = max(0, status_counts["Real"] - warned)
     stats["summary_total"] = stats["total_scanned"]

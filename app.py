@@ -209,6 +209,8 @@ CONFIG_FIELDS = [
     ("grader_cover_size_tolerance_px", "Grading: Cover Size Tolerance (px)", "int", (0, 5)),
     ("grader_strict_square_threshold", "Grading: Strict Square Threshold (0.00-0.05)", "str", None),
     ("grade_log_score_threshold", "CD Log Score Minimum to Pass (0-100)", "int", (0, 100)),
+    ("grade_check_log_checksum", "Grading: Verify .log SHA256 Checksum", "bool", None),
+    ("grade_check_accuraterip", "Grading: Require AccurateRip Match", "bool", None),
     # Audio Audit
     ("audit_thorough", "Thorough Audit (slower)", "bool", None),
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
@@ -219,6 +221,7 @@ CONFIG_FIELDS = [
     ("audit_fail_on_unscorable_log", "Fail CD Audit if .log Unscorable", "bool", None),
     ("audit_verify_log_checksum", "Verify .log Checksum (SHA256 at bottom)", "bool", None),
     ("audit_require_accuraterip", "Require AccurateRip Match for All Tracks", "bool", None),
+    ("audit_log_score_threshold", "Audit Log Score Minimum to Pass (0-100)", "int", (0, 100)),
     ("audit_batch_size", "Audit Batch Size (50-500)", "int", (50, 500)),
     ("audit_batch_timeout_s", "Audit Batch Timeout (s)", "int", (10, 120)),
     ("audit_per_file_timeout_s", "Audit Per-File Timeout (s)", "int", (10, 60)),
@@ -828,6 +831,10 @@ FIELD_DESCRIPTIONS = {
         "Grading: strict square threshold when Force Exact Size is on. 0.005 (0.5%) default; small values require near-perfect squares.",
     "grade_log_score_threshold":
         "Minimum Logchecker score (0-100) for a CD rip to pass grading. 0 (default) means any score 0-100 passes if log exists; 80 requires good rip, 100 requires perfect. Applies per disc via LOG_GRADE tag; failing logs fail the album. 0 disables threshold.",
+    "grade_check_log_checksum":
+        "Grading: verify the SHA256 checksum at the bottom of EAC logs (==== Log checksum ... ====). When on (default), a log whose checksum is invalid or missing (EAC V1.0+ expected) makes the album FAIL. Disable to ignore log checksum in grading.",
+    "grade_check_accuraterip":
+        "Grading: require every track to be Accurately Ripped (AR confidence ≥1). When on (default), if even one track is 'Track not present' or 'Cannot be verified' the album FAILS. Disable to allow non-AR rips in grading.",
     "audit_thorough":
         "Audit Library: enable AudioAuditor's full-track detectors "
         "(silence, dynamic range, true peak, LUFS, BPM). Much slower than "
@@ -865,6 +872,8 @@ FIELD_DESCRIPTIONS = {
         "Audit: verify the SHA256 checksum at the bottom of EAC/XLD logs (==== Log checksum ... ====) via Logchecker. When on (default), a log whose checksum is invalid or missing makes the disc AUDIT=FAKE. Disable to ignore log checksum.",
     "audit_require_accuraterip":
         "Audit: require every track to be Accurately Ripped (AR confidence ≥1, present in DB). When on (default), if even one track is 'Track not present', 'Cannot be verified', or 'Rip may not be accurate' (Logchecker Details), the whole disc AUDIT=FAKE. Disable to allow non-AR rips.",
+    "audit_log_score_threshold":
+        "Audit: minimum Logchecker score (0-100) for a CD rip to pass auditing. 0 (default) means any score passes; 80/100 require good/perfect rip. Per-disc via LOG_GRADE tag; failing logs make disc AUDIT=FAKE. 0 disables threshold.",
     "audit_batch_size":
         "AudioAuditor batch size: paths per CLI invocation. 250 default (CLI supports up to 50000); smaller batches give finer progress.",
     "audit_batch_timeout_s":
@@ -1450,6 +1459,7 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("Grading — Log Score", [
                 "grade_log_score_threshold",
+                "grade_check_log_checksum", "grade_check_accuraterip",
             ]),
             ("Grading — Strict Checks", [
                 "grade_check_tag_spaces", "grade_check_tag_blank_lines",
@@ -1462,6 +1472,7 @@ class ConfigDialog(tk.Toplevel):
                 "audit_verify_cd_checksums", "audit_cd_require_both",
                 "audit_integrity", "audit_fail_on_unscorable_log",
                 "audit_verify_log_checksum", "audit_require_accuraterip",
+                "audit_log_score_threshold",
             ]),
             ("Auditing — Detectors", [
                 "audit_clipping", "audit_scaled_clipping", "audit_mqa",
@@ -4175,6 +4186,44 @@ class App(tk.Tk):
             return
         path = self._item_paths.get(item)
         album_dir, res = self._find_album_for_item(item)
+        # Fallback for ungraded or not-yet-cached rows: derive album_dir from path hierarchy
+        # so track right-click always offers Edit / Open actions even before Grade.
+        if album_dir is None and path:
+            try:
+                if os.path.isfile(path):
+                    cand = os.path.dirname(path)
+                    if os.path.isdir(cand):
+                        album_dir = cand
+                        # Try to fetch cached grade for that album if present via normcase
+                        if res is None:
+                            res = self._grade_cache.get(cand)
+                            if res is None:
+                                nc = os.path.normcase(os.path.normpath(cand))
+                                res = self._grade_cache.get(nc)
+                elif os.path.isdir(path):
+                    # Album or artist dir clicked — check if it looks like an album (contains audio)
+                    try:
+                        if any(f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))
+                               for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))):
+                            album_dir = path
+                            if res is None:
+                                res = self._grade_cache.get(path)
+                    except OSError:
+                        pass
+                    # Artist folders keep album_dir None but path itself is usable as target_dir
+                # If still no album_dir, walk up parent items
+                if album_dir is None:
+                    parent = self.library_tree.parent(item)
+                    while parent:
+                        pp = self._item_paths.get(parent)
+                        if pp and os.path.isdir(pp):
+                            album_dir = pp
+                            if res is None:
+                                res = self._grade_cache.get(pp)
+                            break
+                        parent = self.library_tree.parent(parent)
+            except Exception:
+                pass
 
         menu = tk.Menu(self, tearoff=0, bg=PANEL, fg=TEXT,
                        activebackground=ACCENT_DARK, activeforeground="#ffffff")

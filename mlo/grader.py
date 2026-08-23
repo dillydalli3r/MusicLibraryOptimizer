@@ -1255,7 +1255,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             pass
 
         # Log SHA256 checksum verification (EAC logs have Rijndael checksum)
-        if cfg.get("audit_verify_log_checksum", True):
+        if cfg.get("grade_check_log_checksum", cfg.get("audit_verify_log_checksum", True)):
             try:
                 from .discs import check_log_checksum as _check_csum, read_log_text as _read_lt
                 # Re-collect log paths for this check (outside previous try's scope)
@@ -1300,7 +1300,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 pass
 
         # AccurateRip verification — every track must be 'Accurately ripped'
-        if cfg.get("audit_require_accuraterip", True):
+        if cfg.get("grade_check_accuraterip", cfg.get("audit_require_accuraterip", True)):
             try:
                 from .discs import check_accuraterip as _check_ar
                 ar_logs = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".log")]
