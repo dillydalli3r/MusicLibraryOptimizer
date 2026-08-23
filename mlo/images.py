@@ -181,7 +181,11 @@ def _prepare_image_streamlined(src_path, dst_path, config, remove_alpha=False):
                 if per_enabled:
                     re_en = bool(config.get("cover_resize_enabled", False))
                     cr_en = bool(config.get("cover_crop_enabled", False))
-                    thr = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                    try:
+                        thr = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                    except (TypeError, ValueError):
+                        thr = 0.05
+                    thr = max(0.0, min(0.5, thr))
                     tgt = _get_cover_target_size(ext, config) if re_en else 0
                     if (re_en and tgt > 0) or cr_en:
                         # Use a temp in-memory crop/resize via _resize_and_crop_image logic
@@ -523,7 +527,7 @@ def _rename_to_cover(filepath, new_ext=None):
     ext = new_ext if new_ext else os.path.splitext(filepath)[1]
     cover_path = os.path.join(out_dir, "cover" + ext)
 
-    if os.path.normpath(filepath) == os.path.normpath(cover_path):
+    if os.path.normcase(os.path.normpath(filepath)) == os.path.normcase(os.path.normpath(cover_path)):
         return filepath
 
     if os.path.exists(cover_path):
@@ -1953,6 +1957,12 @@ def run_process_images(config):
     files = _collect_targets(targets, VALID_EXTENSIONS)
     if targets is None:
         files = sorted(_walk_files(target_dir, VALID_EXTENSIONS))
+    # Deduplicate case-insensitive (Windows) and normcase for WinError 32
+    if len(files) != len(set(os.path.normcase(p) for p in files)):
+        seen = {}
+        for p in files:
+            seen[os.path.normcase(p)] = p
+        files = sorted(seen.values())
 
     log(f"found {len(files)} image file(s) for processing")
     for f in files[:10]:

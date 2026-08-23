@@ -58,7 +58,7 @@ def _existing_size(path, avoid_path=None):
     try:
         if not path or not os.path.exists(path):
             return 0
-        if avoid_path and os.path.normpath(path) == os.path.normpath(avoid_path):
+        if avoid_path and os.path.normcase(os.path.normpath(path)) == os.path.normcase(os.path.normpath(avoid_path)):
             return 0
         return os.path.getsize(path)
     except OSError:
@@ -119,26 +119,28 @@ def _pbar_skip(pbar, counts):
     counts["skip"] += 1
     if pbar is not None:
         try:
-            if getattr(pbar, "total", None) is not None:
-                pbar.total = max(0, pbar.total - 1)
-            pbar.refresh()
-            pbar.set_postfix(ok=counts["ok"], skip=counts["skip"], fail=counts["fail"])
+            with _write_lock:
+                if getattr(pbar, "total", None) is not None:
+                    pbar.total = max(0, pbar.total - 1)
+                pbar.refresh()
+                pbar.set_postfix(ok=counts["ok"], skip=counts["skip"], fail=counts["fail"])
         except Exception:
             pass
 
 
 def _pbar_update(pbar, counts, kind="ok"):
-    if kind == "ok":
-        counts["ok"] += 1
-    elif kind == "fail":
-        counts["fail"] += 1
+    with _write_lock:
+        if kind == "ok":
+            counts["ok"] += 1
+        elif kind == "fail":
+            counts["fail"] += 1
 
-    if pbar is not None:
-        try:
-            pbar.update(1)
-            pbar.set_postfix(ok=counts["ok"], skip=counts["skip"], fail=counts["fail"])
-        except Exception:
-            pass
+        if pbar is not None:
+            try:
+                pbar.update(1)
+                pbar.set_postfix(ok=counts["ok"], skip=counts["skip"], fail=counts["fail"])
+            except Exception:
+                pass
 
 
 def _walk_files(root_dir, extensions):
@@ -148,7 +150,7 @@ def _walk_files(root_dir, extensions):
     try:
         for entry in os.scandir(root_dir):
             if entry.is_dir(follow_symlinks=False):
-                if entry.name not in SKIP_DIRS:
+                if entry.name.lower() not in {d.lower() for d in SKIP_DIRS}:
                     yield from _walk_files(entry.path, extensions)
             elif entry.is_file(follow_symlinks=False):
                 if os.path.splitext(entry.name)[1].lower() in extensions:
@@ -214,16 +216,17 @@ def _collect_targets(targets, extensions):
     """
     if not targets:
         return []
-    files = set()
+    files = {}
     for t in targets:
         if not t:
             continue
         if os.path.isfile(t):
             if os.path.splitext(t)[1].lower() in extensions:
-                files.add(t)
+                files[os.path.normcase(os.path.normpath(t))] = t
         elif os.path.isdir(t):
-            files.update(_walk_files(t, extensions))
-    return sorted(files)
+            for f in _walk_files(t, extensions):
+                files[os.path.normcase(os.path.normpath(f))] = f
+    return sorted(files.values())
 
 
 def worker_count(config=None, default=None, maximum=None, items=None):

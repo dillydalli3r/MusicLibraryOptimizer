@@ -63,7 +63,13 @@ def _elevate_and_run(args):
     exe = sys.executable
     params = subprocess.list2cmdline(args)
     if not getattr(sys, "frozen", False):
-        script = os.path.join(SCRIPT_DIR, "mlo_cli.py")
+        # Locate cli entry: prefer mlo_cli.py, fallback to cliapp.py / __main__
+        cand = os.path.join(SCRIPT_DIR, "mlo_cli.py")
+        if not os.path.isfile(cand):
+            cand = os.path.join(SCRIPT_DIR, "mlo", "cliapp.py")
+        if not os.path.isfile(cand):
+            cand = os.path.join(SCRIPT_DIR, "mlo", "__main__.py")
+        script = cand
         params = subprocess.list2cmdline([script] + args)
 
     fd, log_path = tempfile.mkstemp(prefix="mlo_install_", suffix=".log")
@@ -269,6 +275,8 @@ def install_cli(scope):
     else:
         shim = os.path.join(target_dir, "mlo.cmd")
         entry = os.path.join(SCRIPT_DIR, "mlo_cli.py")
+        if not os.path.isfile(entry):
+            entry = os.path.join(SCRIPT_DIR, "mlo", "cliapp.py")
         try:
             with open(shim, "w", encoding="utf-8", newline="\r\n") as f:
                 f.write('@echo off\r\n'
@@ -337,7 +345,8 @@ def uninstall_cli(scope):
 def _resolve_script_ids(spec):
     if spec.lower() == "all":
         cfg = load_config()
-        return list(cfg.get("run_all_order", [1, 2, 3, 5, 4])), "RUN ALL"
+        from .config import DEFAULT_RUN_ALL_ORDER
+        return list(cfg.get("run_all_order", DEFAULT_RUN_ALL_ORDER)), "RUN ALL"
     ids = []
     for part in spec.replace(" ", "").split(","):
         if part.isdigit() and 1 <= int(part) <= len(SCRIPTS):

@@ -377,6 +377,14 @@ def normalize_config(user=None) -> dict:
     """
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     if isinstance(user, dict):
+        # Never persist transient 'targets' (GUI selection) to disk
+        user = {k: v for k, v in user.items() if k != "targets"}
+        # Deep-merge nested dicts instead of shallow overwrite
+        for k in ("encoder_tags", "audio_tag_writes"):
+            if k in user and isinstance(user[k], dict) and isinstance(cfg[k], dict):
+                merged = copy.deepcopy(cfg[k])
+                merged.update(user[k])
+                user[k] = merged
         cfg.update(user)
 
     for key in _BOOL_KEYS:

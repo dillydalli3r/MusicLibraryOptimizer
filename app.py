@@ -3369,13 +3369,20 @@ class App(tk.Tk):
         ))
 
     def _update_grade(self, album_dir, result):
-        # Normalize so mixed / vs \ from _find_albums vs os.path.join doesn't miss
-        album_dir = os.path.normpath(album_dir)
-        was_cached = album_dir in self._grade_cache or any(os.path.normpath(k) == album_dir for k in self._grade_cache)
-        # Keep cache key as normalized
+        # Normalize with normcase+normpath for Windows case/sep insensitivity
+        album_dir = os.path.normcase(os.path.normpath(album_dir))
+        # Migrate cache keys to normcase for consistency
+        was_cached = album_dir in self._grade_cache or any(os.path.normcase(os.path.normpath(k)) == album_dir for k in self._grade_cache)
         self._grade_cache[album_dir] = result
         tree = self.library_tree
+        # Try direct then case-insensitive search
         items = self._path_items.get(album_dir)
+        if not items:
+            # Fallback scan for case variant
+            for k, v in list(self._path_items.items()):
+                if os.path.normcase(os.path.normpath(k)) == album_dir:
+                    items = v
+                    break
         item = next(iter(items), None) if items else None
         if item is None:
             return
@@ -3946,8 +3953,8 @@ class App(tk.Tk):
             if not on or not path:
                 continue
             d = os.path.dirname(path) if os.path.isfile(path) else path
-            if d and d not in seen and os.path.isdir(d):
-                seen.add(d)
+            if d and os.path.normcase(os.path.normpath(d)) not in seen and os.path.isdir(d):
+                seen.add(os.path.normcase(os.path.normpath(d)))
                 dirs.append(d)
         return sorted(dirs)
 

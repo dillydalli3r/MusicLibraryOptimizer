@@ -33,7 +33,11 @@ def run_tool(*args, **kwargs):
     The wrapper mirrors the subset of ``subprocess.run`` used by the project,
     including ``capture_output``, ``input``, ``timeout`` and ``check``.
     """
-    kwargs.setdefault("creationflags", CREATE_NO_WINDOW)
+    # OR creationflags instead of overwriting
+    if "creationflags" in kwargs:
+        kwargs["creationflags"] |= CREATE_NO_WINDOW
+    else:
+        kwargs["creationflags"] = CREATE_NO_WINDOW
     input_data = kwargs.pop("input", None)
     capture_output = kwargs.pop("capture_output", False)
     check = kwargs.pop("check", False)
@@ -53,8 +57,21 @@ def run_tool(*args, **kwargs):
     try:
         stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        stdout, stderr = proc.communicate()
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                stdout, stderr = proc.communicate(timeout=2)
+            except Exception:
+                stdout, stderr = b"", b""
         raise
     finally:
         with _ACTIVE_LOCK:

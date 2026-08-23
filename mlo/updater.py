@@ -47,7 +47,7 @@ def _spawn_survivable(cmd_list):
         "Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
         "-Arguments @{CommandLine='" + cmdline_ps + "'} | Out-Null"
     )
-    encoded = base64.b64encode(ps_code.encode("utf-16-le")).decode("ascii")
+    encoded = base64.b64encode(ps_code.encode("utf-16le")).decode("ascii")
     bootstrap = [
         "powershell.exe", "-NoProfile", "-NonInteractive",
         "-EncodedCommand", encoded,
@@ -80,7 +80,9 @@ def _get_current_version():
 def _version_tuple(v):
     """'v1.0.1' / '1.0.1' -> (1, 0, 1); anything weird -> (0, 0, 0)."""
     try:
-        return tuple(int(x) for x in str(v).lstrip("vV").split("."))
+        from .tools import _parse_version
+        pv = _parse_version(v)
+        return pv if pv is not None else (0, 0, 0)
     except Exception:
         return (0, 0, 0)
 
@@ -106,16 +108,22 @@ def _fetch_latest_release():
 
 
 def _find_installer(data):
-    """Pick the x64 installer asset, never a portable executable."""
-    candidates = []
+    """Pick the installer exe; prefer setup/installer but fallback to any exe (e.g. MusicLibraryOptimizer-v1.6.exe)."""
+    exe_assets = []
     for asset in data.get("assets", []):
         name = str(asset.get("name", ""))
         lower = name.lower()
         if not lower.endswith(".exe"):
             continue
-        if "setup" in lower or "installer" in lower:
-            candidates.append(asset.get("browser_download_url"))
-    return next((url for url in candidates if url), None)
+        exe_assets.append((name, asset.get("browser_download_url")))
+    if not exe_assets:
+        return None
+    # Prefer setup/installer
+    for name, url in exe_assets:
+        if "setup" in name.lower() or "installer" in name.lower():
+            return url
+    # Fallback to single exe if only one, or any exe containing version
+    return exe_assets[0][1]
 
 
 def check_for_updates(silent=False, callback=None):
@@ -445,8 +453,16 @@ def maybe_auto_check(callback=None, force=False):
 
     def done(has_update, version, url, notes, error):
         if error is None:
-            config["last_update_check"] = time.time()
-            save_config(config)
+            try:
+                fresh = load_config()
+                fresh["last_update_check"] = time.time()
+                save_config(fresh)
+            except Exception:
+                try:
+                    config["last_update_check"] = time.time()
+                    save_config(config)
+                except Exception:
+                    pass
         if callback:
             callback(has_update, version, url, notes, error)
 

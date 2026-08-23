@@ -44,7 +44,8 @@ def _has_lyrics(path):
             return True
     except Exception:
         pass
-    return os.path.exists(os.path.splitext(path)[0] + ".lrc")
+    lrc = os.path.splitext(path)[0] + ".lrc"
+    return os.path.isfile(lrc) and os.path.getsize(lrc) > 0 if os.path.exists(lrc) else False
 
 
 def _album_files(album_dir):
@@ -158,57 +159,73 @@ def run_auto_tagging(config):
             except Exception:
                 pass
 
-        # Auto-zero ITUNESADVISORY for instrumental tracks (no lyrics -> cannot be explicit)
-        # This handles the case where INSTRUMENTAL=1 but advisory is 1/2 (explicit) - should be 0.
-        # Also handles ALBUMITUNESADVISORY via the subsequent derivation (if all tracks are 0, album becomes 0).
+        # 1) Fix INSTRUMENTAL from lyrics presence first (correct order)
+        instrumental_modified = 0
+        if do_instrumental:
+            for d in info:
+                if d["has_lyrics"] and d["instrumental"] != "0":
+                    if not should_write_audio_tag(config, "INSTRUMENTAL", filepath=d["af"].path):
+                        continue
+                    if d["af"].set_tag("INSTRUMENTAL", "0"):
+                        modified += 1
+                        instrumental_modified += 1
+                        d["instrumental"] = "0"
+                        d["af"] = AudioFile(d["af"].path)  # refresh
+            if instrumental_modified:
+                notes.append("instrumental")
+
+        # 2) Derive ALBUMITUNESADVISORY from current per-track advisories (respect per-type gate)
+        advisory_modified = 0
+        advisory_before = 0
+        if do_advisory:
+            # Only include advisories for tracks where we can write album advisory, or where advisory is enabled
+            advisories_for_derive = [d["advisory"] for d in info]
+            advisory_value = _derive_advisory(advisories_for_derive)
+            # Check if write needed (filter to writable files)
+            need_write = []
+            for d in info:
+                if d["album_advisory"] != str(advisory_value) and should_write_audio_tag(config, "ALBUMITUNESADVISORY", filepath=d["af"].path):
+                    need_write.append(d)
+            if force or need_write:
+                for d in need_write:
+                    if d["af"].set_tag("ALBUMITUNESADVISORY", str(advisory_value)):
+                        modified += 1
+                        advisory_modified += 1
+                        d["album_advisory"] = str(advisory_value)
+                if advisory_modified:
+                    notes.append(f"advisory={advisory_value}")
+                advisory_before = advisory_modified
+
+        # 3) Auto-zero ITUNESADVISORY for instrumental tracks (must run AFTER instrumental fix + advisory derive)
+        zero_modified = 0
         if do_zero_advisory_for_instrumental:
             for d in info:
-                # Check if track is instrumental (final value after potential instrumental fix below, but also current)
-                # We check both the cached instrumental value and whether the track has no lyrics
-                # For tracks that are instrumental (1) or would be considered instrumental (no lyrics and not has_lyrics)
                 is_instrumental = (d["instrumental"] == "1")
-                # Also consider tracks that have no lyrics and are not marked as 0 - they are effectively instrumental
-                # But we only zero if explicitly marked as 1 to avoid overwriting manual 1/2 for non-instrumental tracks without lyrics
-                if is_instrumental and d["advisory"] != "0":
+                # Only zero if instrumental and advisory is explicit/safe or empty; leave invalid "3" untouched
+                if is_instrumental and d["advisory"] in ("1", "2", ""):
                     if not should_write_audio_tag(config, "ITUNESADVISORY", filepath=d["af"].path):
                         continue
-                    # Only zero if current advisory is 1 or 2 (explicit), or if advisory is missing/empty and we want to ensure 0
-                    # Respect per-type ADVISORY family
-                    if d["advisory"] in ("1", "2") or d["advisory"] == "":
-                        # Also check if the track truly has no lyrics (to avoid zeroing a track that is marked 1 but actually has lyrics due to stale tag)
-                        # But if INSTRUMENTAL=1, by definition it should have no lyrics, so we zero advisory
-                        if force or d["advisory"] != "0":
-                            if d["af"].set_tag("ITUNESADVISORY", "0"):
-                                modified += 1
-                                d["advisory"] = "0"
-                                notes.append("zero advisory for instrumental") if "zero advisory for instrumental" not in notes else None
-
-        if do_advisory:
-            advisory_value = _derive_advisory(
-                d["advisory"] for d in info)
-            if force or any(d["album_advisory"] != str(advisory_value)
-                            for d in info):
-                for d in info:
-                    if d["album_advisory"] != str(advisory_value):
-                        if not should_write_audio_tag(config, "ALBUMITUNESADVISORY", filepath=d["af"].path):
-                            continue
-                        if d["af"].set_tag("ALBUMITUNESADVISORY",
-                                           str(advisory_value)):
-                            modified += 1
-            if modified:
-                notes.append(f"advisory={advisory_value}")
-
-        if do_instrumental:
-            if force or any(d["has_lyrics"] and d["instrumental"] != "0" and should_write_audio_tag(config, "INSTRUMENTAL", filepath=d["af"].path)
-                            for d in info):
-                for d in info:
-                    if d["has_lyrics"] and d["instrumental"] != "0":
-                        if not should_write_audio_tag(config, "INSTRUMENTAL", filepath=d["af"].path):
-                            continue
-                        if d["af"].set_tag("INSTRUMENTAL", "0"):
-                            modified += 1
-            if modified:
-                notes.append("instrumental")
+                    if d["af"].set_tag("ITUNESADVISORY", "0"):
+                        modified += 1
+                        zero_modified += 1
+                        d["advisory"] = "0"
+            if zero_modified:
+                notes.append("zero advisory for instrumental")
+                # Re-derive album advisory if we zeroed any track (album may need to go from 1/2 -> 0)
+                if do_advisory:
+                    new_val = _derive_advisory(d["advisory"] for d in info)
+                    if new_val != advisory_value:
+                        for d in info:
+                            if d["album_advisory"] != str(new_val) and should_write_audio_tag(config, "ALBUMITUNESADVISORY", filepath=d["af"].path):
+                                if d["af"].set_tag("ALBUMITUNESADVISORY", str(new_val)):
+                                    modified += 1
+                        advisory_value = new_val
+                        # Update note if advisory already appended
+                        # Replace last advisory note if present
+                        for i, n in enumerate(notes):
+                            if n.startswith("advisory="):
+                                notes[i] = f"advisory={new_val}"
+                                break
 
         return album, modified, notes, advisory_value
 

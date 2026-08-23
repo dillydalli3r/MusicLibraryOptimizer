@@ -105,8 +105,7 @@ def canonical_cue_text(content, keep_empty_lines, keep_other_lines,
 
     new_content = "\n".join(formatted)
 
-    while "\n\n\n" in new_content:
-        new_content = new_content.replace("\n\n\n", "\n\n")
+    new_content = re.sub(r"\n{3,}", "\n\n", new_content)
 
     # No trailing blank / whitespace-only lines AND no trailing newline
     # byte at all (empty cue -> empty string).
@@ -125,12 +124,10 @@ def _process_cue_file(args):
     try:
         original_size = os.path.getsize(filename)
 
-        # Safety: a real .cue is plain text. If the file contains NUL bytes
-        # it is binary (e.g. an audio file that reached here by mistake) and
-        # must never be rewritten/overwritten.
+        # Safety: read full file for NUL check, not just 4k prefix (binary audio after 4k would be mis-detected)
         with open(filename, "rb") as raw:
-            head = raw.read(4096)
-        if b"\x00" in head:
+            data = raw.read()
+        if b"\x00" in data:
             return (filename, False, "binary file skipped (not a cue)", 0, 0)
 
         try:

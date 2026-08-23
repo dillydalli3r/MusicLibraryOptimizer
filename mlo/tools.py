@@ -50,17 +50,20 @@ def _detect_tool(prefix, deps_dir):
 
 
 _TOOLS_CACHE = None
+_CACHE_LOCK = __import__("threading").Lock()
 
 
 def detect_all_tools():
     global _TOOLS_CACHE
-    if _TOOLS_CACHE is not None:
-        return _TOOLS_CACHE
+    with _CACHE_LOCK:
+        if _TOOLS_CACHE is not None:
+            return _TOOLS_CACHE
 
     tools = {}
 
     if not os.path.isdir(DEPS_DIR):
-        _TOOLS_CACHE = tools
+        with _CACHE_LOCK:
+            _TOOLS_CACHE = tools
         return tools
 
     fv, ff = _detect_tool("flac", DEPS_DIR)
@@ -138,7 +141,8 @@ def detect_all_tools():
                 "ffprobe_exe": os.path.join(d, "ffprobe.exe"),
             }
 
-    _TOOLS_CACHE = tools
+    with _CACHE_LOCK:
+        _TOOLS_CACHE = tools
     return tools
 
 

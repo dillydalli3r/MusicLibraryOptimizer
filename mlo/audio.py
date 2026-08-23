@@ -406,7 +406,7 @@ class AudioFile:
                         self.audio.add_tags()
                     else:
                         return False
-                self.audio.tags[str(key)] = value
+                self.audio.tags[spec["flac"]] = [value]
                 self.audio.save()
                 return True
 
@@ -416,7 +416,7 @@ class AudioFile:
                 if str(key).startswith("TXXX:"):
                     desc = str(key)[5:]
                     for frame in list(self.audio.tags.getall("TXXX")):
-                        if frame.desc == desc:
+                        if frame.desc.upper() == desc.upper():
                             try:
                                 del self.audio.tags[frame.HashKey]
                             except Exception:
@@ -438,7 +438,7 @@ class AudioFile:
 
             elif self.kind == "mp4":
                 if str(key).startswith("----:"):
-                    _, mean, name = str(key).split(":", 3)
+                    _, mean, name = str(key).split(":", 2)
                     fmt = getattr(MP4FreeForm, "FORMAT_UTF8", 1)
                     try:
                         self.audio[str(key)] = [
@@ -485,7 +485,7 @@ class AudioFile:
                 if str(key).startswith("TXXX:"):
                     desc = str(key)[5:]
                     for frame in list(self.audio.tags.getall("TXXX")):
-                        if frame.desc == desc:
+                        if frame.desc.upper() == desc.upper():
                             try:
                                 del self.audio.tags[frame.HashKey]
                             except Exception:
@@ -497,10 +497,13 @@ class AudioFile:
 
             elif self.kind == "mp4":
                 target = str(key).lower()
+                changed = False
                 for k in list(self.audio.keys()):
                     if str(k).lower() == target:
                         del self.audio[k]
-                self.audio.save()
+                        changed = True
+                if changed:
+                    self.audio.save()
                 return True
 
         except Exception as e:
@@ -779,7 +782,7 @@ class AudioFile:
                     if str(k).lower() in ("lyrics", "unsyncedlyrics"):
                         del self.audio.tags[k]
 
-                self.audio.tags["LYRICS"] = text
+                self.audio.tags["LYRICS"] = [text]
                 self.audio.save()
                 return True
 
@@ -792,7 +795,7 @@ class AudioFile:
                 return True
 
             elif self.kind == "mp4":
-                self.audio["\xa9lyr"] = text
+                self.audio["\xa9lyr"] = [text]
                 self.audio.save()
                 return True
 

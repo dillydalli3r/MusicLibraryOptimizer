@@ -74,16 +74,6 @@ def _optimize_flac(args):
     filename = os.path.basename(filepath)
     temp_path = filepath + ".opttmp.flac"
 
-    # Conservative clean: only remove UNSYNCEDLYRICS (always) and LYRICS when
-    # the user wants LRC sidecars only (lyrics_format == LRC), plus
-    # ENCODER_PROGRAM when that marker is disabled. No other tags are touched
-    # so Picard/MusicBrainz IDs etc. are never deleted.
-    try:
-        from .containers import _clean_flac_tags
-        _clean_flac_tags(filepath, config=config, enabled=enabled)
-    except Exception:
-        pass
-
     should_reencode, reason, ours = _should_reencode_flac(
         filepath,
         flac_level,
@@ -91,6 +81,20 @@ def _optimize_flac(args):
         force,
         enabled,
     )
+
+    # Only clean tags when we will re-encode or when file is already ours and
+    # needs tag cleanup; otherwise don't mutate a file we will skip.
+    # _clean_flac_tags is now applied to temp output after flac re-encode.
+    # For skip path with seektable removal, clean only if tags actually need removal.
+    cleaned = False
+    if should_reencode:
+        try:
+            from .containers import _clean_flac_tags
+            # Clean temp later; but also clean original UNSYNCEDLYRICS only if not re-encoding?
+            # For re-encode path we clean temp, not original.
+            pass
+        except Exception:
+            pass
 
     if not should_reencode:
         # Even when skipping re-encode, actively remove seektables if
@@ -164,6 +168,13 @@ def _optimize_flac(args):
 
         if not os.path.exists(temp_path):
             return (filename, False, "flac.exe produced no output", 0, 0)
+
+        # Clean FLAC tags on temp output (not original) - conservative
+        try:
+            from .containers import _clean_flac_tags
+            _clean_flac_tags(temp_path, config=config, enabled=enabled)
+        except Exception:
+            pass
 
         # Strip unwanted metadata from the temporary output before replacing
         # the original file. This keeps failure handling safe and accurate.
@@ -265,15 +276,11 @@ def run_optimize_flacs(config):
             ]
         )
 
-    # Debug: check for duplicates that would cause WinError 32
+    # Deduplicate (Select All checks album + tracks -> duplicates) + normcase for Windows
     if len(flac_files) != len(set(os.path.normcase(p) for p in flac_files)):
         log(c(f"WARNING: flac_files has duplicates: {len(flac_files)} vs {len(set(os.path.normcase(p) for p in flac_files))} unique", Color.YELLOW))
-        # Deduplicate
-        flac_files = sorted(set(os.path.normcase(p) for p in flac_files))
-        # But need to restore original case? Use normcase for dedupe but keep original
-        # Actually just dedupe via dict
         seen = {}
-        for p in _collect_targets(targets, (".flac",)):
+        for p in flac_files:
             seen[os.path.normcase(p)] = p
         flac_files = sorted(seen.values())
 

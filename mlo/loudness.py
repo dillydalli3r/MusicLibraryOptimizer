@@ -37,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # file's tags (e.g. "05-Spiders"), NOT the filename - so we key by track
 # number and match files via their TRACKNUMBER tag.
 TRACK_ROW_RE = re.compile(
-    r"^\s*DR(\d{1,2})\s+(?:\S+\s+){5}(\d+)-(.*?)\s*$"
+    r"^\s*DR(\d{1,2})\s+(?:\S+\s+){5}(\d+)\s*-\s*(.*?)\s*$"
 )
 # Album: "Official DR value: DR11"
 OFFICIAL_DR_RE = re.compile(
@@ -150,7 +150,18 @@ def _parse_dr_file(dr_path):
     per_title = {}
     album_dr = None
     try:
-        with open(dr_path, "r", encoding="utf-8", errors="replace") as f:
+        # Try chardet if available for cp1252/latin1 titles, fallback to utf-8
+        enc = "utf-8"
+        try:
+            import chardet as _ch
+            with open(dr_path, "rb") as _fb:
+                raw = _fb.read(65536)
+                det = _ch.detect(raw)
+                if det and det.get("encoding") and det.get("confidence", 0) > 0.5:
+                    enc = det["encoding"]
+        except Exception:
+            pass
+        with open(dr_path, "r", encoding=enc, errors="replace") as f:
             for line in f:
                 m = TRACK_ROW_RE.match(line)
                 if m:

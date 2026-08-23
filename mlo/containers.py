@@ -2,10 +2,42 @@
 
 Implements the ENCODER marker tag standard (see package docstring).
 """
+import os
 import re
+import tempfile
 import zlib
 
 from .deps import FLAC
+
+
+def _atomic_write(target_path, data: bytes):
+    """Write data atomically via temp + fsync + os.replace."""
+    dir_name = os.path.dirname(os.path.abspath(target_path)) or "."
+    fd = None
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=dir_name)
+        with os.fdopen(fd, "wb") as f:
+            fd = None
+            f.write(data)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, target_path)
+        tmp = None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
 
 ENCODER_KEYS = ("ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION")
 
@@ -70,6 +102,11 @@ def _read_flac_tags(filepath):
 
 def _write_flac_tags(filepath, quality, version, enabled=None):
     audio = FLAC(filepath)
+    if audio.tags is None:
+        try:
+            audio.add_tags()
+        except Exception:
+            pass
     if _enabled(enabled, "ENCODER_PROGRAM"):
         audio["ENCODER_PROGRAM"] = "FLAC reference encoder"
     if _enabled(enabled, "ENCODER_QUALITY"):
@@ -204,7 +241,8 @@ def _jxl_iter_boxes(data):
         payload_start = i + header
         payload_end = i + size
         if payload_end > n:
-            payload_end = n
+            # Truncated box: stop iteration instead of yielding partial payload
+            break
 
         yield btype, data[payload_start:payload_end], i, size
         i += size
@@ -281,8 +319,7 @@ def _write_jxl_tags(jxl_path, quality, version, enabled=None):
 
     out.extend(new_box)
 
-    with open(jxl_path, "wb") as f:
-        f.write(bytes(out))
+    _atomic_write(jxl_path, bytes(out))
 
 
 XMP_NS = b"http://ns.adobe.com/xap/1.0/\x00"
@@ -389,8 +426,7 @@ def _insert_jpeg_xmp(jpeg_path, quality, version, program, enabled=None):
 
     new_data = bytes(out[:2]) + app1 + bytes(out[2:])
 
-    with open(jpeg_path, "wb") as f:
-        f.write(new_data)
+    _atomic_write(jpeg_path, new_data)
 
     return True
 
@@ -461,8 +497,7 @@ def _strip_png_metadata(png_path):
         crc = zlib.crc32(ctype + payload) & 0xFFFFFFFF
         out.extend(crc.to_bytes(4, "big"))
 
-    with open(png_path, "wb") as f:
-        f.write(bytes(out))
+    _atomic_write(png_path, bytes(out))
 
     return True
 
@@ -491,7 +526,16 @@ def _inject_png_text(png_path, tags_dict):
 
         if ctype == b"IHDR" and not inserted:
             for k, v in tags_dict.items():
-                t_payload = k.encode("latin-1") + b"\x00" + str(v).encode("latin-1")
+                # Use utf-8 with latin-1 fallback; PNG tEXt is latin-1 but we must not crash on unicode
+                try:
+                    k_b = k.encode("latin-1")
+                except UnicodeEncodeError:
+                    k_b = k.encode("utf-8", errors="replace")
+                try:
+                    v_b = str(v).encode("latin-1")
+                except UnicodeEncodeError:
+                    v_b = str(v).encode("utf-8", errors="replace")
+                t_payload = k_b + b"\x00" + v_b
 
                 out.extend(len(t_payload).to_bytes(4, "big"))
                 out.extend(b"tEXt")
@@ -502,8 +546,7 @@ def _inject_png_text(png_path, tags_dict):
 
             inserted = True
 
-    with open(png_path, "wb") as f:
-        f.write(bytes(out))
+    _atomic_write(png_path, bytes(out))
 
     return True
 

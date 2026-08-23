@@ -1179,7 +1179,14 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         None)
                     if tr_track is None:
                         continue
-                    tn = _file_track_number(ap)
+                    # Use _track_num_of for D-TT like 1-01 -> 01, not disc number
+                    try:
+                        from .discs import _track_num_of
+                        tn = _track_num_of(ap)
+                        if tn is None:
+                            tn = _file_track_number(ap)
+                    except Exception:
+                        tn = _file_track_number(ap)
                     covered = tn is not None and tn in crc_map
                     if multi:
                         d = disc_of_filename(os.path.basename(ap)) or 1
@@ -1240,12 +1247,14 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             enforce_square = True
         # Cache dimensions once (avoid double Image.open)
         w = h = None
+        cover_read_error = False
         if HAS_PIL and (enforce_size or enforce_square):
             try:
                 with Image.open(cover_path) as _im:
                     w, h = _im.size
             except Exception:
                 w = h = None
+                cover_read_error = True
         # Size enforcement: require exact target_size x target_size (1px tolerance)
         if enforce_size and cfg.get("cover_resize_enabled", False) and target_cov > 0:
             total_checks += 1
@@ -1256,6 +1265,11 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     cover_ok = False
                     size_info = f"{w}x{h} → {target_cov}x{target_cov}"
                     add_issue(f"Cover image wrong size {w}x{h} (need {target_cov}x{target_cov})", "album")
+            elif cover_read_error:
+                failed_checks += 1
+                size_failed = True
+                cover_ok = False
+                add_issue(f"Cover image unreadable/corrupt (need {target_cov}x{target_cov})", "album")
         # Square enforcement: aspect within threshold (force_exact uses strict 0 threshold)
         if enforce_square:
             total_checks += 1
@@ -1277,6 +1291,11 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         add_issue(f"Cover image not square {w}x{h} (threshold {thr_cov:.0%})", "album")
                         if not size_info:
                             size_info = f"{w}x{h} not square"
+                elif cover_read_error:
+                    failed_checks += 1
+                    square_failed = True
+                    cover_ok = False
+                    add_issue("Cover image unreadable/corrupt (not square)", "album")
             except Exception:
                 pass
         if size_failed or square_failed:
@@ -1613,6 +1632,12 @@ def run_grade_library(config):
                 _pbar_skip(pbar, counts)
                 continue
 
+            if isinstance(result, dict) and result.get("error"):
+                stats["total_scanned"] += 1
+                stats["error_count"] += 1
+                stats["errors"].append((result.get("path", album), result.get("error_detail", "unknown error")))
+                _pbar_update(pbar, counts, kind="fail")
+                continue
             stats["total_scanned"] += 1
             results.append(result)
             _pbar_update(pbar, counts, kind="ok")
@@ -1620,7 +1645,7 @@ def run_grade_library(config):
         if pbar:
             pbar.close()
 
-    results.sort(key=lambda r: _relpath_guard(r["path"], folder).lower())
+    results.sort(key=lambda r: _relpath_guard(r.get("path", ""), folder).lower())
 
     summary_pass = 0
     summary_total = 0

@@ -23,9 +23,6 @@ from .config import load_config, save_config, DEFAULT_RUN_ALL_ORDER
 if os.name == "nt":
     os.system("")
 
-if os.name == "nt":
-    os.system("")
-
 
 def edit_run_all_order(config):
     while True:
@@ -58,7 +55,9 @@ def edit_run_all_order(config):
 
         for p in parts:
             if p in ("1", "2", "3", "4", "5", "6", "7", "8"):
-                order.append(int(p))
+                pid = int(p)
+                if pid not in order:
+                    order.append(pid)
             else:
                 print(c(f"  Invalid entry: '{p}'", Color.RED))
                 valid = False
@@ -581,7 +580,7 @@ def manage_dependencies():
         tools = refresh_tool_cache()
         log(
             c(
-                f"Detected {len(tools)}/5 tools: "
+                f"Detected {len(tools)}/8 tools: "
                 + ", ".join(f"{k} v{v['version']}" for k, v in tools.items()),
                 Color.GREEN,
             )
@@ -595,8 +594,8 @@ def main():
         print(c("ERROR: mutagen is required.  pip install mutagen", Color.RED))
         return
 
-    global _TOOLS_CACHE
-    _TOOLS_CACHE = None
+    import mlo.tools as _tools_mod
+    _tools_mod._TOOLS_CACHE = None
 
     config = load_config()
 

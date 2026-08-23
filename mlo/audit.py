@@ -108,13 +108,16 @@ def verify_integrity(filepath, ffmpeg_exe=None, flac_exe=None):
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, encoding="utf-8", errors="replace", timeout=60)
             err = (proc.stderr or "").strip()
-            if proc.returncode != 0 or err:
-                # ffmpeg prints errors to stderr; empty stderr means ok
-                # Filter out non-error warnings
-                if err and "error" in err.lower():
+            if proc.returncode != 0:
+                return False, (err.splitlines()[0] if err else f"ffmpeg rc={proc.returncode}")[:200]
+            if err:
+                # Filter false positives like "error correction" / "error concealment" which are not decode errors
+                low = err.lower()
+                if "error" in low and "error correction" not in low and "error concealment" not in low and "error resilience" not in low:
                     return False, err.splitlines()[0][:200]
-                if proc.returncode != 0:
-                    return False, (err or f"ffmpeg rc={proc.returncode}")[:200]
+                # Also catch "invalid", "corrupt", "truncated" etc.
+                if any(k in low for k in ("invalid", "corrupt", "truncated", "sync error", "crc mismatch")):
+                    return False, err.splitlines()[0][:200]
             return True, None
         except subprocess.TimeoutExpired:
             return False, "ffmpeg timeout"
@@ -174,7 +177,13 @@ def _audit_batch(cli, paths, config):
                     # Parse the text output of `info` into a minimal JSON-like item
                     # info always succeeds and shows `Status: REAL/FAKE` — map to Valid/Fake
                     out = proc2.stdout
-                    status = "Valid" if "Status:          REAL" in out else ("Fake" if "Fake" in out else "Unknown")
+                    # Robust status parse: look for Status line
+                    import re as _re
+                    m = _re.search(r"Status:\s*(REAL|FAKE)", out, _re.IGNORECASE)
+                    if m:
+                        status = "Valid" if m.group(1).upper() == "REAL" else "Fake"
+                    else:
+                        status = "Unknown"
                     # Extract filePath from the info output or use the input path
                     items.append({"filePath": p, "fileName": os.path.basename(p), "status": status, "errorMessage": ""})
                 else:
@@ -358,11 +367,13 @@ def run_audit_library(config):
             from concurrent.futures import as_completed
 
             def _is_cd(album_dir, paths_):
+                # Check all paths, not just first file order (mixed-media albums)
                 try:
-                    af = AudioFile(paths_[0])
-                    if af.audio is None:
-                        return False
-                    return str(af.get_tag("MEDIA") or "").strip() == "CD"
+                    for pp in paths_:
+                        af = AudioFile(pp)
+                        if af.audio is not None and str(af.get_tag("MEDIA") or "").strip() == "CD":
+                            return True
+                    return False
                 except Exception:
                     return False
 
@@ -580,6 +591,7 @@ def run_audit_library(config):
                 return os.path.normcase(p)
 
         missing = {canon(p) for p in batch}
+        canon_failed = {canon(k): v for k, v in integrity_failed.items()} if config.get("audit_integrity", True) else {}
         for item in items:
             path = item.get("filePath") or ""
             missing.discard(canon(path))
@@ -634,13 +646,11 @@ def run_audit_library(config):
                 # Ensure status counts reflect the AA side already counted;
                 # the final tag is what grading will use.
 
-            # Integrity check (foobar2000 Verify Integrity style) — if enabled
-            # and this file failed integrity (truncated, CRC mismatch, sync error),
-            # the final AUDIT must be FAKE regardless of the other sources.
-            if config.get("audit_integrity", True) and path in integrity_failed:
+            # Integrity check — use canon for Windows 8.3 / case variant safety
+            if canon(path) in canon_failed and should_write_audio_tag(config, "AUDIT", filepath=path):
                 tag_value = "FAKE"
                 severity = "fail"
-                reason = f"integrity check failed: {integrity_failed[path]}"
+                reason = f"integrity check failed: {canon_failed[canon(path)]}"
 
             # Persist the verdict into the file's AUDIT tag (respects per-filetype).
             if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=path):
@@ -707,18 +717,21 @@ def run_audit_library(config):
     cd_candidate_dirs = []
     for d in album_dirs:
         try:
-            # Quick check: .log present -> likely CD, otherwise skip scoring
             if not any(f.lower().endswith(".log") for f in os.listdir(d)):
                 continue
-            # Check first track's MEDIA is CD (lightweight)
-            first = next((os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))), None)
-            if first:
-                try:
-                    af0 = AudioFile(first)
-                    if str(af0.get_tag("MEDIA") or "").strip() != "CD":
+            # Check any track's MEDIA is CD, not just first by unsorted listdir
+            found_cd = False
+            for f in os.listdir(d):
+                if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac")):
+                    try:
+                        af0 = AudioFile(os.path.join(d, f))
+                        if str(af0.get_tag("MEDIA") or "").strip() == "CD":
+                            found_cd = True
+                            break
+                    except Exception:
                         continue
-                except Exception:
-                    continue
+            if not found_cd:
+                continue
             cd_candidate_dirs.append(d)
         except OSError:
             continue
@@ -764,7 +777,7 @@ def run_audit_library(config):
             log(f"  … and {len(log_notes) - 20} more.")
 
     stats["grade_dist"]["PASS"] = status_counts["Real"]
-    stats["summary_pass"] = status_counts["Real"] - warned
+    stats["summary_pass"] = max(0, status_counts["Real"] - warned)
     stats["summary_total"] = stats["total_scanned"]
     stats["issue_counts"] = issue_counts
     stats["audit_status_counts"] = status_counts

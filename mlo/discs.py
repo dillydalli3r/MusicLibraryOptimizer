@@ -125,10 +125,10 @@ def parse_log_toc_seconds(text):
 def parse_log_checksums(text):
     """Map track number -> CRC-32 hex (8 chars, uppercase) from a rip log.
 
-    Walks the "Track  N" sections; prefers Copy CRC over Test CRC over the
-    AccurateRip bracket value.
+    Walks the "Track  N" sections; prefers Copy CRC over Test CRC over XLD over AccurateRip.
     """
     per_track = {}
+    priority = {}  # track -> priority level
     current = None
     for raw in text.splitlines():
         line = raw.strip()
@@ -140,20 +140,29 @@ def parse_log_checksums(text):
             continue
         m = COPY_CRC_RE.match(line)
         if m:
-            per_track[current] = m.group(1).upper()
+            # Copy is highest priority 3
+            if priority.get(current, -1) < 3:
+                per_track[current] = m.group(1).upper()
+                priority[current] = 3
             continue
         m = TEST_CRC_RE.match(line)
         if m:
-            per_track.setdefault(current, m.group(1).upper())
+            if priority.get(current, -1) < 2:
+                per_track[current] = m.group(1).upper()
+                priority[current] = 2
             continue
         m = XLD_CRC_RE.match(line)
         if m:
-            per_track.setdefault(current, m.group(1).upper())
+            if priority.get(current, -1) < 1:
+                per_track[current] = m.group(1).upper()
+                priority[current] = 1
             continue
         if "accurately" in line.lower():
             m = ACCURATE_CRC_RE.search(line)
             if m:
-                per_track.setdefault(current, m.group(1).upper())
+                if priority.get(current, -1) < 0:
+                    per_track[current] = m.group(1).upper()
+                    priority[current] = 0
     return per_track
 
 
@@ -166,6 +175,10 @@ def _file_track_number(path):
             return int(raw)
     except Exception:
         pass
+    # Use _track_num_of for D-TT (1-01 -> 1) correctly returns TT
+    tn = _track_num_of(path)
+    if tn is not None:
+        return tn
     m = re.match(r"^(\d{1,3})(?:\s*[-._\s])", os.path.basename(path))
     if m:
         return int(m.group(1))
@@ -209,11 +222,23 @@ def verify_album_checksums(ffmpeg_exe, album_dir, paths, config=None):
         return {}, {}
     if not paths:
         return {}, {}
+    # Check MEDIA across all paths, not just first file order
+    is_cd = False
+    for pp in paths:
+        try:
+            af2 = AudioFile(pp)
+            if af2.audio is not None and str(af2.get_tag("MEDIA") or "").strip() == "CD":
+                is_cd = True
+                break
+        except Exception:
+            continue
+    if not is_cd:
+        return {}, {}
+    # Keep first-file check for unreadable early return
     af = AudioFile(paths[0])
     if af.audio is None:
-        return {}, {p: "unreadable audio" for p in paths}
-    if str(af.get_tag("MEDIA") or "").strip() != "CD":
-        return {}, {}
+        # If first is unreadable but others are CD, still verify those
+        pass
 
     logs = [os.path.join(album_dir, f) for f in sorted(os.listdir(album_dir))
             if f.lower().endswith(".log")]
@@ -289,7 +314,13 @@ def _disc_pattern_for(config):
     pat = str(config.get("discs_rename_pattern", "CD-{n}")).strip()
     if "{n}" not in pat:
         return "CD-{n}"
-    return pat[:32]
+    # Validate after truncation still contains {n}
+    truncated = pat[:32]
+    if "{n}" not in truncated:
+        return "CD-{n}"
+    # Strip path separators to avoid traversal
+    truncated = truncated.replace("/", "").replace("\\", "")
+    return truncated
 
 
 def _disc_expected_name(pattern, disc, ext):
@@ -643,7 +674,8 @@ def score_disc_log(cli_exe, log_path, disc_files, timeout=300):
         for p in disc_files:
             stub = os.path.join(workdir, os.path.basename(p))
             try:
-                open(stub, "wb").write(b"\x00" * 1024)
+                with open(stub, "wb") as fh:
+                    fh.write(b"\x00" * 1024)
             except OSError:
                 return None
         # Keep the original log basename - the CLI picks up any .log in
@@ -692,8 +724,14 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
     if not discs:
         return {}, notes
 
-    # MEDIA=CD only - read the first track's MEDIA tag.
-    first = next(iter(discs.values()))[0]
+    # MEDIA=CD only - check all discs first file, not arbitrary order
+    first = None
+    for d in sorted(discs.keys()):
+        if discs[d]:
+            first = discs[d][0]
+            break
+    if first is None:
+        return {}, notes
     af = AudioFile(first)
     if af.audio is None:
         return {}, notes
