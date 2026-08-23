@@ -238,6 +238,7 @@ DEFAULT_CONFIG = {
     "grade_check_cue_blank_lines": True,
     "grader_cover_size_tolerance_px": 1,
     "grader_strict_square_threshold": 0.005,
+    "grade_log_score_threshold": 0,
 
     # Audio audit (AudioAuditor CLI): full-track detectors (silence, DR,
     # true peak, LUFS, BPM) instead of the fast scan; force re-audits files
@@ -366,6 +367,7 @@ _INT_RANGES = {
     "audit_per_file_timeout_s": (10, 60),
     "images_jpeg_quality": (70, 100),
     "grader_cover_size_tolerance_px": (0, 5),
+    "grade_log_score_threshold": (0, 100),
     "worker_limit": (0, 64),
     "update_check_interval_days": (1, 30),
     "cover_target_size": (0, 4000),

@@ -1189,6 +1189,16 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 failed_checks += 1
                 add_issue(f"LOG_GRADE not 0-100: {lg}", tr["file"])
                 tr["issues"].append("LOG_GRADE")
+            else:
+                try:
+                    thresh = int(cfg.get("grade_log_score_threshold", 0) or 0)
+                    thresh = max(0, min(100, thresh))
+                except Exception:
+                    thresh = 0
+                if thresh > 0 and int(lg) < thresh:
+                    failed_checks += 1
+                    add_issue(f"LOG_GRADE {lg} below threshold {thresh} (Logchecker score too low)", tr["file"])
+                    tr["issues"].append("LOG_GRADE")
 
         # CD integrity: every track must be covered by a per-track CRC in
         # the rip log(s). The .log checksum is the ONLY audit source for
@@ -1637,6 +1647,12 @@ def run_grade_library(config):
         f"CD log+cue | cover jpg/jpeg/png/jxl | "
         f"INST=1 no lyrics | INST=0 lyrics required"
     )
+    try:
+        _th = int(config.get("grade_log_score_threshold", 0) or 0)
+        if _th > 0:
+            log(f"  CD log threshold: {_th}/100 (via Logchecker) — LOG_GRADE < {_th} fails grading")
+    except Exception:
+        pass
 
     if not os.path.isdir(folder):
         log(c(f"ERROR: folder does not exist: {folder}", Color.RED))

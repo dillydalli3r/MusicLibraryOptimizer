@@ -208,6 +208,7 @@ CONFIG_FIELDS = [
     ("grade_check_cover_crop", "Check Cover Crop/Size", "bool", None),
     ("grader_cover_size_tolerance_px", "Grading: Cover Size Tolerance (px)", "int", (0, 5)),
     ("grader_strict_square_threshold", "Grading: Strict Square Threshold (0.00-0.05)", "str", None),
+    ("grade_log_score_threshold", "CD Log Score Minimum to Pass (0-100)", "int", (0, 100)),
     # Audio Audit
     ("audit_thorough", "Thorough Audit (slower)", "bool", None),
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
@@ -823,6 +824,8 @@ FIELD_DESCRIPTIONS = {
         "Grading: allowed pixel deviation for cover size check. 1 px default (e.g. 999-1001 passes for 1000).",
     "grader_strict_square_threshold":
         "Grading: strict square threshold when Force Exact Size is on. 0.005 (0.5%) default; small values require near-perfect squares.",
+    "grade_log_score_threshold":
+        "Minimum Logchecker score (0-100) for a CD rip to pass grading. 0 (default) means any score 0-100 passes if log exists; 80 requires good rip, 100 requires perfect. Applies per disc via LOG_GRADE tag; failing logs fail the album. 0 disables threshold.",
     "audit_thorough":
         "Audit Library: enable AudioAuditor's full-track detectors "
         "(silence, dynamic range, true peak, LUFS, BPM). Much slower than "
@@ -1438,6 +1441,9 @@ class ConfigDialog(tk.Toplevel):
             ("Grading — Cover", [
                 "cover_enforce_size", "cover_enforce_square",
                 "grader_cover_size_tolerance_px", "grader_strict_square_threshold",
+            ]),
+            ("Grading — Log Score", [
+                "grade_log_score_threshold",
             ]),
             ("Grading — Strict Checks", [
                 "grade_check_tag_spaces", "grade_check_tag_blank_lines",

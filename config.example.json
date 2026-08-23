@@ -170,6 +170,7 @@
   "grade_include_lrc": true,
   "grade_include_music": true,
   "grade_include_other": false,
+  "grade_log_score_threshold": 0,
   "grade_verbose": true,
   "grader_cover_size_tolerance_px": 1,
   "grader_strict_square_threshold": 0.005,
