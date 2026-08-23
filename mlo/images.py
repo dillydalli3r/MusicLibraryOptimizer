@@ -848,6 +848,7 @@ def _process_image_to_jxl(args):
             "-d", "0",
             "-e", str(effort),
             "-j", str(threads_to_use),
+            "--container=1",
         ]
 
         if use_strip_all:
@@ -1505,6 +1506,7 @@ def _process_jxl_in_place(args):
             "-d", "0",
             "-e", str(effort),
             "-j", str(threads_to_use),
+            "--container=1",
         ]
 
         if use_strip_all:
