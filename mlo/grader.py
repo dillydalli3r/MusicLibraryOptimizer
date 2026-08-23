@@ -711,14 +711,17 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
 
         if af.audio is None:
             track["unreadable"] = True
-            add_issue("Unreadable audio file", basename)
-            track["issues"].append("UNREADABLE")
-
-            for t in PER_TRACK_TAGS:
-                if not should_write_audio_tag(cfg, t, filepath=ap):
-                    continue
+            if cfg.get("grade_check_unreadable", True):
+                add_issue("Unreadable audio file", basename)
+                track["issues"].append("UNREADABLE")
                 total_checks += 1
                 failed_checks += 1
+            if cfg.get("grade_check_missing_tags", True):
+                for t in PER_TRACK_TAGS:
+                    if not should_write_audio_tag(cfg, t, filepath=ap):
+                        continue
+                    total_checks += 1
+                    failed_checks += 1
 
             tracks.append(track)
             continue
@@ -734,22 +737,25 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             track["values"][t] = val
 
             if val is None or str(val).strip() == "":
-                failed_checks += 1
-                add_issue(f"Missing {t}", basename)
-                track["issues"].append(t)
+                if cfg.get("grade_check_missing_tags", True):
+                    failed_checks += 1
+                    add_issue(f"Missing {t}", basename)
+                    track["issues"].append(t)
             elif t == "ITUNESADVISORY":
                 raw = str(val)
                 stripped = raw.strip()
                 if raw != stripped or stripped not in ("0", "1", "2"):
-                    failed_checks += 1
-                    add_issue(f"ITUNESADVISORY must be 0/1/2 without spaces (found {raw!r})", basename)
-                    track["issues"].append(t)
+                    if cfg.get("grade_check_missing_tags", True):
+                        failed_checks += 1
+                        add_issue(f"ITUNESADVISORY must be 0/1/2 without spaces (found {raw!r})", basename)
+                        track["issues"].append(t)
             elif t == "GENRE":
                 raw = str(val)
                 if raw != raw.strip():
-                    failed_checks += 1
-                    add_issue(f"GENRE has leading/trailing spaces ({raw!r})", basename)
-                    track["issues"].append(t)
+                    if cfg.get("grade_check_tag_spaces", True):
+                        failed_checks += 1
+                        add_issue(f"GENRE has leading/trailing spaces ({raw!r})", basename)
+                        track["issues"].append(t)
 
             # Configurable: check tags for blank lines (spaces already handled for GENRE above)
             # Only check per-line trailing/leading spaces for non-GENRE/ITUNESADVISORY when enabled
@@ -799,55 +805,56 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         # ENCODER marker tags — per-format, only when that field is enabled.
         # For FLAC (the only audio type the app re-encodes), check PROGRAM/QUALITY/VERSION.
         # PROGRAM is off by default since v1.4.2, but when turned on per format grading must require it.
-        try:
-            ext_enc = os.path.splitext(ap)[1].lower()
-            enc_key = None
-            if ext_enc == ".flac":
-                enc_key = "flac"
-            elif ext_enc in (".jpg", ".jpeg"):
-                enc_key = "jpeg"
-            elif ext_enc == ".png":
-                enc_key = "png"
-            elif ext_enc == ".jxl":
-                enc_key = "jxl"
-            if enc_key:
-                enc_cfg = (cfg.get("encoder_tags") or {}).get(enc_key, {}) if cfg else {}
-                for field in ("ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"):
-                    # Default: PROGRAM off, QUALITY/VERSION on
-                    default_on = False if field == "ENCODER_PROGRAM" else True
-                    if not enc_cfg.get(field, default_on):
-                        continue
-                    # Read the tag via the underlying mutagen object (PROGRAM not in TAG_MAP for FLAC)
-                    val = None
-                    try:
-                        if af.audio is not None and hasattr(af.audio, "get"):
-                            # FLAC Vorbis via mutagen.flac.FLAC — keys are lower-case in storage
-                            # Do case-insensitive lookup
-                            raw = None
-                            # Try direct lower and upper
-                            for k in (field, field.lower(), field.upper()):
-                                if k in af.audio:
-                                    try:
-                                        raw = af.audio.get(k, [None])[0]
-                                    except Exception:
-                                        raw = None
-                                    if raw is not None:
-                                        break
-                            # Fallback via get_tag for other containers
-                            if raw is None:
-                                raw = af.get_tag(field)
-                            val = str(raw).strip() if raw is not None else None
-                        else:
-                            val = af.get_tag(field)
-                    except Exception:
+        if cfg.get("grade_check_encoder", True):
+            try:
+                ext_enc = os.path.splitext(ap)[1].lower()
+                enc_key = None
+                if ext_enc == ".flac":
+                    enc_key = "flac"
+                elif ext_enc in (".jpg", ".jpeg"):
+                    enc_key = "jpeg"
+                elif ext_enc == ".png":
+                    enc_key = "png"
+                elif ext_enc == ".jxl":
+                    enc_key = "jxl"
+                if enc_key:
+                    enc_cfg = (cfg.get("encoder_tags") or {}).get(enc_key, {}) if cfg else {}
+                    for field in ("ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"):
+                        # Default: PROGRAM off, QUALITY/VERSION on
+                        default_on = False if field == "ENCODER_PROGRAM" else True
+                        if not enc_cfg.get(field, default_on):
+                            continue
+                        # Read the tag via the underlying mutagen object (PROGRAM not in TAG_MAP for FLAC)
                         val = None
-                    total_checks += 1
-                    if not val:
-                        failed_checks += 1
-                        add_issue(f"Missing {field} (re-optimize)", basename)
-                        track["issues"].append(field)
-        except Exception:
-            pass
+                        try:
+                            if af.audio is not None and hasattr(af.audio, "get"):
+                                # FLAC Vorbis via mutagen.flac.FLAC — keys are lower-case in storage
+                                # Do case-insensitive lookup
+                                raw = None
+                                # Try direct lower and upper
+                                for k in (field, field.lower(), field.upper()):
+                                    if k in af.audio:
+                                        try:
+                                            raw = af.audio.get(k, [None])[0]
+                                        except Exception:
+                                            raw = None
+                                        if raw is not None:
+                                            break
+                                # Fallback via get_tag for other containers
+                                if raw is None:
+                                    raw = af.get_tag(field)
+                                val = str(raw).strip() if raw is not None else None
+                            else:
+                                val = af.get_tag(field)
+                        except Exception:
+                            val = None
+                        total_checks += 1
+                        if not val:
+                            failed_checks += 1
+                            add_issue(f"Missing {field} (re-optimize)", basename)
+                            track["issues"].append(field)
+            except Exception:
+                pass
 
         # Artist for the library view (first track that has one). Keys are
         # matched case-insensitively: Picard writes lowercase Vorbis
@@ -888,7 +895,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         audit_val = af.get_tag("AUDIT")
         audit_clean = str(audit_val).strip() if audit_val is not None else ""
         track["audit"] = audit_clean or None
-        if should_write_audio_tag(cfg, "AUDIT", filepath=ap):
+        if should_write_audio_tag(cfg, "AUDIT", filepath=ap) and cfg.get("grade_check_audit", True):
             total_checks += 1
             if not audit_clean:
                 failed_checks += 1
@@ -927,7 +934,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
 
         if inst_val == "1":
             instrumental_count += 1
-            if should_write_audio_tag(cfg, "INSTRUMENTAL", filepath=ap):
+            if should_write_audio_tag(cfg, "INSTRUMENTAL", filepath=ap) and cfg.get("grade_check_instrumental", True):
                 total_checks += 1
                 if embedded or lrc:
                     failed_checks += 1
@@ -936,14 +943,17 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
 
         elif inst_val == "0":
             if should_write_audio_tag(cfg, "INSTRUMENTAL", filepath=ap):
-                lyrics_expected_count += 1
-                total_checks += 1
-                if _grade_lyrics_present(embedded, lrc, lyrics_format):
+                # Track expectation for stats regardless
+                _has_lyr = _grade_lyrics_present(embedded, lrc, lyrics_format)
+                if _has_lyr:
                     lyrics_present_count += 1
-                else:
-                    failed_checks += 1
-                    add_issue(f"Missing lyrics ({lyrics_format.upper()})", basename)
-                    track["issues"].append("LYRICS")
+                lyrics_expected_count += 1
+                if cfg.get("grade_check_lyrics", True):
+                    total_checks += 1
+                    if not _has_lyr:
+                        failed_checks += 1
+                        add_issue(f"Missing lyrics ({lyrics_format.upper()})", basename)
+                        track["issues"].append("LYRICS")
 
         # Lyrics FORMATTING compliance (only when lyrics are present):
         # the stored text must already be in the canonical form the Lyrics
@@ -952,6 +962,8 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         # Configurable via grade_check_lyrics_* and grade_check_lyrics_zero/crop
         if embedded or lrc:
             if not should_write_audio_tag(cfg, "LYRICS", filepath=ap):
+                pass
+            elif not cfg.get("grade_check_lyrics_format", True):
                 pass
             elif not cfg.get("grade_check_lyrics_spaces", True) and not cfg.get("grade_check_lyrics_blank_lines", True) and not cfg.get("grade_check_lyrics_zero", True):
                 # All lyrics checks disabled
@@ -1008,7 +1020,8 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             sidecar = get_sidecar_cover_path(album_dir, basename)
             track["sidecar_cover"] = sidecar
             track["sidecar_cover_file"] = os.path.basename(sidecar) if sidecar else None
-            if sidecar:
+            if sidecar and cfg.get("grade_check_sidecar_cover", True):
+                total_checks += 1
                 # Validate the sidecar image with the same cover checks
                 if not _cover_image_ok(sidecar, cfg):
                     failed_checks += 1
@@ -1058,7 +1071,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         for tr in tracks if not tr.get("unreadable")
     )
     media_summary = _summarize_values(media_values)
-    if any_media_enabled:
+    if any_media_enabled and cfg.get("grade_check_media", True):
         total_checks += 1
         if media_summary is None:
             failed_checks += 1
@@ -1066,36 +1079,37 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         elif media_summary == "INCONSISTENT":
             failed_checks += 1
             add_issue("MEDIA inconsistent across tracks", "album-wide")
-    else:
+    elif not any_media_enabled:
         # No enabled tracks — treat as unknown but not failing
         media_summary = None
 
     digital = media_summary == "Digital Media"
 
     # SOURCE policy per track (skipped if MEDIA_SOURCE disabled for this filetype).
-    for tr in tracks:
-        if tr.get("unreadable"):
-            continue
-        # Resolve full path for per-type check
-        tr_path = os.path.join(album_dir, tr["file"])
-        if not should_write_audio_tag(cfg, "SOURCE", filepath=tr_path):
-            continue
-        total_checks += 1
-        src = tr["values"].get("SOURCE")
+    if cfg.get("grade_check_source", True):
+        for tr in tracks:
+            if tr.get("unreadable"):
+                continue
+            # Resolve full path for per-type check
+            tr_path = os.path.join(album_dir, tr["file"])
+            if not should_write_audio_tag(cfg, "SOURCE", filepath=tr_path):
+                continue
+            total_checks += 1
+            src = tr["values"].get("SOURCE")
 
-        if digital:
-            if not src:
-                failed_checks += 1
-                add_issue("Missing SOURCE (required for Digital Media)", tr["file"])
-                tr["issues"].append("SOURCE")
-        else:
-            if src:
-                failed_checks += 1
-                add_issue("SOURCE present but MEDIA is not Digital Media", tr["file"])
-                tr["issues"].append("SOURCE")
+            if digital:
+                if not src:
+                    failed_checks += 1
+                    add_issue("Missing SOURCE (required for Digital Media)", tr["file"])
+                    tr["issues"].append("SOURCE")
+            else:
+                if src:
+                    failed_checks += 1
+                    add_issue("SOURCE present but MEDIA is not Digital Media", tr["file"])
+                    tr["issues"].append("SOURCE")
 
     # SOURCE consistency for Digital Media (only if at least one track enables MEDIA_SOURCE).
-    if digital:
+    if digital and cfg.get("grade_check_source", True):
         # Filter to only enabled filetypes
         enabled_sources = []
         any_enabled = False
@@ -1117,142 +1131,148 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 add_issue("SOURCE inconsistent across album", "album-wide")
 
     # Album-wide tag consistency (skip if no enabled tracks for this tag).
-    for t in ALBUM_TAGS:
-        vals = album_tag_values.get(t)
-        if vals is None:
-            # No enabled filetypes for this tag — skip grading
-            continue
-        total_checks += 1
-        clean = {x for x in vals if x}
+    if cfg.get("grade_check_album_tags", True):
+        for t in ALBUM_TAGS:
+            vals = album_tag_values.get(t)
+            if vals is None:
+                # No enabled filetypes for this tag — skip grading
+                continue
+            total_checks += 1
+            clean = {x for x in vals if x}
 
-        if not clean:
-            failed_checks += 1
-            add_issue(f"Missing album tag {t}", "album-wide")
-        elif "" in vals:
-            failed_checks += 1
-            add_issue(f"Album tag {t} missing on some tracks", "album-wide")
-        elif len(clean) > 1:
-            failed_checks += 1
-            add_issue(f"Album tag {t} inconsistent", "album-wide")
+            if not clean:
+                failed_checks += 1
+                add_issue(f"Missing album tag {t}", "album-wide")
+            elif "" in vals:
+                failed_checks += 1
+                add_issue(f"Album tag {t} missing on some tracks", "album-wide")
+            elif len(clean) > 1:
+                failed_checks += 1
+                add_issue(f"Album tag {t} inconsistent", "album-wide")
 
     # Media-specific file requirements.
     if media_summary == "CD":
-        total_checks += 1
-        if not has_log:
-            failed_checks += 1
-            add_issue("Missing .log file", "album")
+        if cfg.get("grade_check_cd_log", True):
+            total_checks += 1
+            if not has_log:
+                failed_checks += 1
+                add_issue("Missing .log file", "album")
 
-        total_checks += 1
-        if not has_cue:
-            failed_checks += 1
-            add_issue("Missing .cue file", "album")
+        if cfg.get("grade_check_cd_cue", True):
+            total_checks += 1
+            if not has_cue:
+                failed_checks += 1
+                add_issue("Missing .cue file", "album")
 
         # CD rip naming: .log/.cue must match discs_rename_pattern (default
         # CD-{n} → CD-1 … CD-11) — the deterministic scheme from discs.py.
         # If autorename left a file under its original name (ambiguous case,
         # or discs_rename disabled) the album fails here. .log CONTENTS are
         # never modified — only the filename is changed.
-        try:
-            from .discs import _disc_pattern_for as _pat, _is_expected_disc_file as _is_exp
-            pat = _pat(cfg)
-            bad_logs = [f for f in all_files
-                        if f.lower().endswith(".log")
-                        and not _is_exp(f, pat, ".log")]
-            bad_cues = [f for f in all_files
-                        if f.lower().endswith(".cue")
-                        and not _is_exp(f, pat, ".cue")]
-            total_checks += 1
-            if bad_logs or bad_cues:
-                failed_checks += 1
-                detail = ", ".join(bad_logs + bad_cues)
-                add_issue(f"CD rip sheets not named {pat} (found: {detail}) — "
-                          f"enable Settings → CD Rips → Auto-Rename or "
-                          f"rename manually to {pat.replace('{n}', '1')}.log", "album")
-        except Exception:
-            pass
+        if cfg.get("grade_check_disc_naming", True):
+            try:
+                from .discs import _disc_pattern_for as _pat, _is_expected_disc_file as _is_exp
+                pat = _pat(cfg)
+                bad_logs = [f for f in all_files
+                            if f.lower().endswith(".log")
+                            and not _is_exp(f, pat, ".log")]
+                bad_cues = [f for f in all_files
+                            if f.lower().endswith(".cue")
+                            and not _is_exp(f, pat, ".cue")]
+                total_checks += 1
+                if bad_logs or bad_cues:
+                    failed_checks += 1
+                    detail = ", ".join(bad_logs + bad_cues)
+                    add_issue(f"CD rip sheets not named {pat} (found: {detail}) — "
+                              f"enable Settings → CD Rips → Auto-Rename or "
+                              f"rename manually to {pat.replace('{n}', '1')}.log", "album")
+            except Exception:
+                pass
 
         # CD releases must carry the rip-log score on every track (skipped if LOG_GRADE disabled for this filetype).
-        for tr in tracks:
-            if tr.get("unreadable"):
-                continue
-            tr_path = os.path.join(album_dir, tr["file"])
-            if not should_write_audio_tag(cfg, "LOG_GRADE", filepath=tr_path):
-                continue
-            total_checks += 1
-            lg = tr.get("log_grade")
-            if lg is None:
-                failed_checks += 1
-                add_issue("Missing LOG_GRADE tag (run Audit Library)",
-                          tr["file"])
-                tr["issues"].append("LOG_GRADE")
-            elif not lg.isdigit() or not (0 <= int(lg) <= 100):
-                failed_checks += 1
-                add_issue(f"LOG_GRADE not 0-100: {lg}", tr["file"])
-                tr["issues"].append("LOG_GRADE")
-            else:
-                try:
-                    thresh = int(cfg.get("grade_log_score_threshold", 0) or 0)
-                    thresh = max(0, min(100, thresh))
-                except Exception:
-                    thresh = 0
-                if thresh > 0 and int(lg) < thresh:
+        if cfg.get("grade_check_log_grade", True):
+            for tr in tracks:
+                if tr.get("unreadable"):
+                    continue
+                tr_path = os.path.join(album_dir, tr["file"])
+                if not should_write_audio_tag(cfg, "LOG_GRADE", filepath=tr_path):
+                    continue
+                total_checks += 1
+                lg = tr.get("log_grade")
+                if lg is None:
                     failed_checks += 1
-                    add_issue(f"LOG_GRADE {lg} below threshold {thresh} (Logchecker score too low)", tr["file"])
+                    add_issue("Missing LOG_GRADE tag (run Audit Library)",
+                              tr["file"])
                     tr["issues"].append("LOG_GRADE")
+                elif not lg.isdigit() or not (0 <= int(lg) <= 100):
+                    failed_checks += 1
+                    add_issue(f"LOG_GRADE not 0-100: {lg}", tr["file"])
+                    tr["issues"].append("LOG_GRADE")
+                else:
+                    try:
+                        thresh = int(cfg.get("grade_log_score_threshold", 0) or 0)
+                        thresh = max(0, min(100, thresh))
+                    except Exception:
+                        thresh = 0
+                    if thresh > 0 and int(lg) < thresh:
+                        failed_checks += 1
+                        add_issue(f"LOG_GRADE {lg} below threshold {thresh} (Logchecker score too low)", tr["file"])
+                        tr["issues"].append("LOG_GRADE")
 
         # CD integrity: every track must be covered by a per-track CRC in
         # the rip log(s). The .log checksum is the ONLY audit source for
         # CD rips — an album whose log is missing, unreadable, or lacks a
         # CRC for any of its tracks can never grade PASS.
-        try:
-            from .discs import parse_log_checksums, read_log_text, \
-                album_discs as _album_discs, disc_of_filename, \
-                _file_track_number, _disc_pattern_for as _pat2, \
-                _disc_expected_name as _exp_name
-            log_paths = [os.path.join(album_dir, f)
-                         for f in all_files
-                         if f.lower().endswith(".log")]
-            crc_map = {}
-            for lp in sorted(log_paths):
-                crc_map.update(parse_log_checksums(read_log_text(lp)))
-            if not crc_map:
-                total_checks += 1
-                failed_checks += 1
-                add_issue("Rip .log has no per-track CRC checksums "
-                          "(cannot verify CD integrity)", "album")
-            else:
-                discs_map = _album_discs(album_dir)
-                multi = bool(discs_map)
-                for ap in audio_paths:
-                    tr_track = next(
-                        (t for t in tracks
-                         if t.get("unreadable") is False
-                         and os.path.join(album_dir, t["file"]) == ap),
-                        None)
-                    if tr_track is None:
-                        continue
-                    # Use _track_num_of for D-TT like 1-01 -> 01, not disc number
-                    try:
-                        from .discs import _track_num_of
-                        tn = _track_num_of(ap)
-                        if tn is None:
-                            tn = _file_track_number(ap)
-                    except Exception:
-                        tn = _file_track_number(ap)
-                    covered = tn is not None and tn in crc_map
-                    if multi:
-                        d = disc_of_filename(os.path.basename(ap)) or 1
-                        dlog = os.path.join(album_dir, _exp_name(_pat2(cfg), d, ".log"))
-                        if not os.path.isfile(dlog):
-                            covered = False
+        if cfg.get("grade_check_crc", True):
+            try:
+                from .discs import parse_log_checksums, read_log_text, \
+                    album_discs as _album_discs, disc_of_filename, \
+                    _file_track_number, _disc_pattern_for as _pat2, \
+                    _disc_expected_name as _exp_name
+                log_paths = [os.path.join(album_dir, f)
+                             for f in all_files
+                             if f.lower().endswith(".log")]
+                crc_map = {}
+                for lp in sorted(log_paths):
+                    crc_map.update(parse_log_checksums(read_log_text(lp)))
+                if not crc_map:
                     total_checks += 1
-                    if not covered:
-                        failed_checks += 1
-                        add_issue("Track not covered by .log CRC "
-                                  "(unverifiable CD rip)", tr_track["file"])
-                        tr_track["issues"].append("CRC")
-        except Exception:
-            pass
+                    failed_checks += 1
+                    add_issue("Rip .log has no per-track CRC checksums "
+                              "(cannot verify CD integrity)", "album")
+                else:
+                    discs_map = _album_discs(album_dir)
+                    multi = bool(discs_map)
+                    for ap in audio_paths:
+                        tr_track = next(
+                            (t for t in tracks
+                             if t.get("unreadable") is False
+                             and os.path.join(album_dir, t["file"]) == ap),
+                            None)
+                        if tr_track is None:
+                            continue
+                        # Use _track_num_of for D-TT like 1-01 -> 01, not disc number
+                        try:
+                            from .discs import _track_num_of
+                            tn = _track_num_of(ap)
+                            if tn is None:
+                                tn = _file_track_number(ap)
+                        except Exception:
+                            tn = _file_track_number(ap)
+                        covered = tn is not None and tn in crc_map
+                        if multi:
+                            d = disc_of_filename(os.path.basename(ap)) or 1
+                            dlog = os.path.join(album_dir, _exp_name(_pat2(cfg), d, ".log"))
+                            if not os.path.isfile(dlog):
+                                covered = False
+                        total_checks += 1
+                        if not covered:
+                            failed_checks += 1
+                            add_issue("Track not covered by .log CRC "
+                                      "(unverifiable CD rip)", tr_track["file"])
+                            tr_track["issues"].append("CRC")
+            except Exception:
+                pass
 
         # Log SHA256 checksum verification (EAC logs have Rijndael checksum)
         if cfg.get("grade_check_log_checksum", cfg.get("audit_verify_log_checksum", True)):
@@ -1340,10 +1360,11 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         pass
 
     else:
-        total_checks += 1
-        if media_summary is not None and media_summary != "INCONSISTENT":
-            failed_checks += 1
-            add_issue("Unrecognized MEDIA value", "album-wide")
+        if cfg.get("grade_check_media", True):
+            total_checks += 1
+            if media_summary is not None and media_summary != "INCONSISTENT":
+                failed_checks += 1
+                add_issue("Unrecognized MEDIA value", "album-wide")
 
     # Cover check — also builds a UI-friendly cover_detail string that
     # surfaces enforcement failures (e.g. "cover.jpg (wrong size 500x500 → 1000x1000)"
@@ -1351,11 +1372,13 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
     # never silently "cover.jpg" when the image would fail grading.
     cover_detail = cover_file or "MISSING"
     cover_ok = True
-    total_checks += 1
+    if cfg.get("grade_check_cover", True):
+        total_checks += 1
     if not cover_file:
-        failed_checks += 1
-        cover_ok = False
-        add_issue("Missing cover image", "album")
+        if cfg.get("grade_check_cover", True):
+            failed_checks += 1
+            cover_ok = False
+            add_issue("Missing cover image", "album")
         if cfg.get("cover_enforce_size") and cfg.get("cover_resize_enabled"):
             try:
                 tgt = _get_cover_target_size("", cfg)
@@ -1386,7 +1409,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             if w is None or h is None:
                 cover_read_error = True
         # Size enforcement: require exact target_size x target_size (configurable tolerance)
-        if enforce_size and cfg.get("cover_resize_enabled", False) and target_cov > 0:
+        if enforce_size and cfg.get("cover_resize_enabled", False) and target_cov > 0 and cfg.get("grade_check_cover", True):
             total_checks += 1
             try:
                 tol = int(cfg.get("grader_cover_size_tolerance_px", 1) or 1)
@@ -1406,7 +1429,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 cover_ok = False
                 add_issue(f"Cover image unreadable/corrupt (need {target_cov}x{target_cov})", "album")
         # Square enforcement: aspect within threshold (force_exact uses strict threshold from config)
-        if enforce_square:
+        if enforce_square and cfg.get("grade_check_cover", True):
             total_checks += 1
             if force_exact:
                 try:
@@ -1515,7 +1538,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
 
     # CUE sheet FORMATTING compliance (when a cue exists): every cue must
     # already be in the canonical form the CUE formatter would produce.
-    if has_cue:
+    if has_cue and cfg.get("grade_check_cue_format", True):
         cue_files = sorted(
             os.path.join(album_dir, f) for f in all_files
             if f.lower().endswith(".cue")
@@ -1534,14 +1557,15 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
     # Strict file-type check: any file whose category is not allowed
     # (e.g. an unclassified .txt/.pdf/.m3u when 'other' is off) fails the
     # album. Categories are toggled in Settings -> Grading.
-    disallowed = _disallowed_files(album_dir, all_files, cfg)
-    total_checks += 1
-    if disallowed:
-        failed_checks += 1
-        shown = ", ".join(disallowed[:6])
-        if len(disallowed) > 6:
-            shown += f" (+{len(disallowed) - 6} more)"
-        add_issue(f"Disallowed file types: {shown}", "album")
+    if cfg.get("grade_check_disallowed", True):
+        disallowed = _disallowed_files(album_dir, all_files, cfg)
+        total_checks += 1
+        if disallowed:
+            failed_checks += 1
+            shown = ", ".join(disallowed[:6])
+            if len(disallowed) > 6:
+                shown += f" (+{len(disallowed) - 6} more)"
+            add_issue(f"Disallowed file types: {shown}", "album")
 
     pass_count = max(0, total_checks - failed_checks)
 

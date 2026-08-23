@@ -211,6 +211,25 @@ CONFIG_FIELDS = [
     ("grade_log_score_threshold", "CD Log Score Minimum to Pass (0-100)", "int", (0, 100)),
     ("grade_check_log_checksum", "Grading: Verify .log SHA256 Checksum", "bool", None),
     ("grade_check_accuraterip", "Grading: Require AccurateRip Match", "bool", None),
+    ("grade_check_unreadable", "Grading: Unreadable Files", "bool", None),
+    ("grade_check_missing_tags", "Grading: Missing Required Tags", "bool", None),
+    ("grade_check_encoder", "Grading: Encoder Tags (PROGRAM/QUALITY/VERSION)", "bool", None),
+    ("grade_check_audit", "Grading: AUDIT Must Be REAL", "bool", None),
+    ("grade_check_instrumental", "Grading: INSTRUMENTAL vs Lyrics", "bool", None),
+    ("grade_check_lyrics", "Grading: Missing Lyrics (EMBEDDED/LRC/BOTH)", "bool", None),
+    ("grade_check_lyrics_format", "Grading: Lyrics Formatting", "bool", None),
+    ("grade_check_sidecar_cover", "Grading: Sidecar Cover per Track", "bool", None),
+    ("grade_check_media", "Grading: MEDIA Missing/Inconsistent/Unrecognized", "bool", None),
+    ("grade_check_source", "Grading: SOURCE Policy", "bool", None),
+    ("grade_check_album_tags", "Grading: Album Tags Consistency", "bool", None),
+    ("grade_check_cd_log", "Grading: CD Missing .log", "bool", None),
+    ("grade_check_cd_cue", "Grading: CD Missing .cue", "bool", None),
+    ("grade_check_disc_naming", "Grading: CD .log/.cue Naming (CD-N)", "bool", None),
+    ("grade_check_log_grade", "Grading: LOG_GRADE Missing/Range", "bool", None),
+    ("grade_check_crc", "Grading: .log CRC Coverage", "bool", None),
+    ("grade_check_cover", "Grading: Cover Missing/Size/Square", "bool", None),
+    ("grade_check_cue_format", "Grading: CUE Formatting", "bool", None),
+    ("grade_check_disallowed", "Grading: Disallowed File Types", "bool", None),
     # Audio Audit
     ("audit_thorough", "Thorough Audit (slower)", "bool", None),
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
@@ -835,6 +854,44 @@ FIELD_DESCRIPTIONS = {
         "Grading: verify the SHA256 checksum at the bottom of EAC logs (==== Log checksum ... ====). When on (default), a log whose checksum is invalid or missing (EAC V1.0+ expected) makes the album FAIL. Disable to ignore log checksum in grading.",
     "grade_check_accuraterip":
         "Grading: require every track to be Accurately Ripped (AR confidence ≥1). When on (default), if even one track is 'Track not present' or 'Cannot be verified' the album FAILS. Disable to allow non-AR rips in grading.",
+    "grade_check_unreadable":
+        "Grading: fail if an audio file cannot be read/parsed. When off, unreadable files still warn but don't fail grading.",
+    "grade_check_missing_tags":
+        "Grading: require per-track tags GENRE/ITUNESADVISORY/REPLAYGAIN_*/DYNAMIC RANGE/INSTRUMENTAL. When off, missing tags still warn via tags view but album doesn't FAIL.",
+    "grade_check_encoder":
+        "Grading: require ENCODER_PROGRAM/QUALITY/VERSION per format (when those toggles are on). When off, missing encoder markers don't fail grading.",
+    "grade_check_audit":
+        "Grading: require AUDIT=REAL on every track. When off, missing or FAKE audit tags don't fail grading (audit viewer still shows status).",
+    "grade_check_instrumental":
+        "Grading: enforce INSTRUMENTAL consistency — INSTRUMENTAL=1 must not have lyrics, =0 must have lyrics per lyrics_format. When off, mismatch doesn't fail.",
+    "grade_check_lyrics":
+        "Grading: require lyrics presence per INSTRUMENTAL=0 (per lyrics_format EMBEDDED/LRC/BOTH). When off, missing lyrics don't fail grading.",
+    "grade_check_lyrics_format":
+        "Grading: require lyrics formatting (canonical text, merged timestamps, word timestamps, synced). When off, formatting issues don't fail.",
+    "grade_check_sidecar_cover":
+        "Grading: fail if a per-track sidecar cover (e.g., 01 - Track.jpg) exists but is wrong size/not square per cover settings. When off, sidecar covers are ignored.",
+    "grade_check_media":
+        "Grading: require MEDIA present and consistent across an album (single value). When off, missing or mixed MEDIA doesn't fail. 'Unrecognized MEDIA value' also covered.",
+    "grade_check_source":
+        "Grading: enforce SOURCE per MEDIA=Digital Media (must have SOURCE) and consistency across album. When off, SOURCE issues don't fail.",
+    "grade_check_album_tags":
+        "Grading: require album tags ALBUMITUNESADVISORY/ALBUM DYNAMIC RANGE present and consistent. When off, missing/inconsistent album tags don't fail.",
+    "grade_check_cd_log":
+        "Grading: for MEDIA=CD require at least one .log file. When off, missing .log doesn't fail grading.",
+    "grade_check_cd_cue":
+        "Grading: for MEDIA=CD require at least one .cue sheet. When off, missing .cue doesn't fail.",
+    "grade_check_disc_naming":
+        "Grading: for MEDIA=CD require .log/.cue names to match discs_rename_pattern (CD-{n}). When off, misnamed sheets don't fail; autorename still offered.",
+    "grade_check_log_grade":
+        "Grading: for MEDIA=CD require LOG_GRADE tag 0-100 on every track (when write_log_grade enabled). When off, missing/out-of-range LOG_GRADE doesn't fail (threshold still applies if on).",
+    "grade_check_crc":
+        "Grading: for MEDIA=CD require .log to carry per-track CRCs and every track to be covered. When off, missing CRCs / uncovered tracks don't fail.",
+    "grade_check_cover":
+        "Grading: require a cover image (cover.jpg/png/jxl) that passes size/square checks. When off, cover missing/size/square doesn't fail grading. Individual cover_enforce_* still gate size/square.",
+    "grade_check_cue_format":
+        "Grading: require .cue sheets to be in canonical form (LF, quoted FILE, configured FILE type, no BOM/trailing spaces). When off, cue formatting doesn't fail.",
+    "grade_check_disallowed":
+        "Grading: fail albums containing disallowed file types (per grade_include_*). When off, extra types like .txt/.pdf still shown but don't fail grading.",
     "audit_thorough":
         "Audit Library: enable AudioAuditor's full-track detectors "
         "(silence, dynamic range, true peak, LUFS, BPM). Much slower than "
@@ -1460,6 +1517,24 @@ class ConfigDialog(tk.Toplevel):
             ("Grading — Log Score", [
                 "grade_log_score_threshold",
                 "grade_check_log_checksum", "grade_check_accuraterip",
+            ]),
+            ("Grading — Core Checks", [
+                "grade_check_unreadable", "grade_check_missing_tags",
+                "grade_check_encoder", "grade_check_audit",
+                "grade_check_cover", "grade_check_disallowed",
+            ]),
+            ("Grading — Instrumental & Lyrics", [
+                "grade_check_instrumental", "grade_check_lyrics",
+                "grade_check_lyrics_format", "grade_check_sidecar_cover",
+            ]),
+            ("Grading — Media & Source", [
+                "grade_check_media", "grade_check_source",
+                "grade_check_album_tags",
+            ]),
+            ("Grading — CD", [
+                "grade_check_cd_log", "grade_check_cd_cue",
+                "grade_check_disc_naming", "grade_check_log_grade",
+                "grade_check_crc", "grade_check_cue_format",
             ]),
             ("Grading — Strict Checks", [
                 "grade_check_tag_spaces", "grade_check_tag_blank_lines",
