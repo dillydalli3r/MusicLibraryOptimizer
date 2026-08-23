@@ -747,7 +747,9 @@ def _process_image_to_jxl(args):
                     or os.path.getsize(decoded_png) == 0
                 ):
                     err = djxl_result.stderr.decode("utf-8", errors="replace").strip()
-                    return (src_path, "failed", 0, 0, f"djxl decode failed: {err}")
+                    # PNG-JXL that this djxl cannot decode (e.g. newer encoding) — don't count as failure,
+                    # just skip with a warning so the progress doesn't show 1 failed for a valid cover.
+                    return (src_path, "skipped", 0, 0, f"skipped (cannot decode JXL: {err[:80]})")
 
                 input_for_cjxl = decoded_png
 
