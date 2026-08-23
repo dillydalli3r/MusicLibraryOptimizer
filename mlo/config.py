@@ -7,9 +7,13 @@ import tempfile
 from .paths import CONFIG_FILE, DEFAULT_DIGITAL_SOURCE
 from .ui import c, Color
 
-# Run All order. By default EVERY script runs (1-8); the user can change the
-# order / remove scripts via Settings -> Run All Order (or the console menu).
-DEFAULT_RUN_ALL_ORDER = [1, 2, 3, 4, 5, 6, 7, 8]
+# Run All order — systematic pipeline: 1) textual metadata, 2) media, 3) analysis, 4) report.
+# 1 Format Lyrics + 2 Format CUEs normalize sidecars first so autotag can derive
+# INSTRUMENTAL correctly; 8 Auto Tagging then fixes INSTRUMENTAL/ADVISORY/GENRE;
+# 3 Optimize FLACs + 5 Process Images handle media (FLAC preserves the fixed tags);
+# 7 DR/ReplayGain + 6 Audit Library analyze the final audio; 4 Grade Library last
+# reports 100/0. User can reorder via Settings → Run All Order.
+DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 7, 6, 4]
 
 # Audio tag families that can be toggled per filetype.
 # Each family groups related TAG_MAP keys that are written together.
@@ -189,9 +193,11 @@ DEFAULT_CONFIG = {
 
     # CD rips (MEDIA=CD): deterministic CD-N renaming of .log/.cue and
     # conservative CUE FILE-name correction. Both are content-derived —
-    # nothing is renamed when the evidence is ambiguous.
+    # nothing is renamed when the evidence is ambiguous. The single-fallback
+    # ensures a lone .cue/.log in a single-disc album still becomes CD-1.
     "discs_rename_enabled": True,
     "discs_rename_pattern": "CD-{n}",
+    "discs_rename_single_fallback": True,
     "cue_fix_filenames": True,
 
     # Music-file tag writes
@@ -241,6 +247,7 @@ DEFAULT_CONFIG = {
     "audit_cd_require_both": True,
     "audit_integrity": True,
     "audit_clipping": True,
+    "audit_scaled_clipping": True,
     "audit_mqa": True,
     "audit_ai": True,
     "audit_fake_stereo": True,
@@ -484,6 +491,9 @@ def normalize_config(user=None) -> dict:
                 continue
             if 1 <= script_id <= 8 and script_id not in clean_order:
                 clean_order.append(script_id)
+    # Migrate legacy sequential default [1..8] to systematic pipeline
+    if clean_order == [1, 2, 3, 4, 5, 6, 7, 8] and clean_order != list(DEFAULT_RUN_ALL_ORDER):
+        clean_order = list(DEFAULT_RUN_ALL_ORDER)
     cfg["run_all_order"] = clean_order or list(DEFAULT_RUN_ALL_ORDER)
     return cfg
 

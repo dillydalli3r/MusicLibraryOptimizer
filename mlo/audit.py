@@ -59,6 +59,8 @@ FLAG_KEYS = (
 # Detector toggles: config key -> CLI --no-* flag. Default on; a False
 # setting appends the flag, disabling that detector. Silenced detectors
 # produce no warning flags, so a "warn" verdict from them disappears.
+# audit_scaled_clipping is filtered in Python (no CLI flag) so loud masters
+# can hide just scaled clipping without losing normal clipping detection.
 DETECTOR_NO_FLAGS = {
     "audit_clipping": "--no-clipping",
     "audit_mqa": "--no-mqa",
@@ -596,6 +598,9 @@ def run_audit_library(config):
             path = item.get("filePath") or ""
             missing.discard(canon(path))
             severity, reason = _classify(item)
+            # Scaled clipping is very common on loud masters; allow silencing just this warning
+            if reason == "scaled clipping" and not config.get("audit_scaled_clipping", True):
+                severity, reason = "ok", ""
             cli_status = str(item.get("status", "")).strip()
 
             stats["total_scanned"] += 1

@@ -52,7 +52,7 @@ except ImportError:
 from mlo import stats as stats_mod
 from mlo import tools as tools_mod
 from mlo import fetchdeps
-from mlo.config import DEFAULT_CONFIG, AUDIO_TAG_FAMILIES, AUDIO_TAG_TYPES
+from mlo.config import DEFAULT_CONFIG, DEFAULT_RUN_ALL_ORDER, AUDIO_TAG_FAMILIES, AUDIO_TAG_TYPES
 from mlo.paths import DEFAULT_DIGITAL_SOURCE, DEPS_DIR, SCRIPT_DIR
 from mlo.deps import HAS_MUTAGEN, HAS_PIL
 from mlo.report import print_results, print_grade_results, print_combined_results
@@ -174,6 +174,7 @@ CONFIG_FIELDS = [
     # CD rips — disc handling
     ("discs_rename_enabled", "Auto-Rename .cue/.log to CD-N", "bool", None),
     ("discs_rename_pattern", "Rename pattern (use {n} for disc number)", "str", None),
+    ("discs_rename_single_fallback", "Single-Disc Fallback: lone .cue/.log → CD-1 when no disc data", "bool", None),
     # Tags — Media/Source + writes
     ("normalize_media_source", "Normalize MEDIA/SOURCE", "bool", None),
     ("digital_media_source_value", "Digital SOURCE Value", "str", None),
@@ -206,6 +207,7 @@ CONFIG_FIELDS = [
     ("audit_cd_require_both", "CD: Require Both Log & AudioAuditor = REAL", "bool", None),
     ("audit_integrity", "Verify File Integrity (like foobar2000 Verify Integrity: FLAC CRC, MP3 sync, ffmpeg decode)", "bool", None),
     ("audit_clipping", "Audit Clipping Detection", "bool", None),
+    ("audit_scaled_clipping", "Audit Scaled Clipping Detection", "bool", None),
     ("audit_mqa", "Audit MQA Detection", "bool", None),
     ("audit_ai", "Audit AI Detection", "bool", None),
     ("audit_fake_stereo", "Audit Fake Stereo Detection", "bool", None),
@@ -721,8 +723,12 @@ FIELD_DESCRIPTIONS = {
     "discs_rename_enabled":
         "Auto-rename cue/log sheets to CD-1.cue / CD-1.log … CD-11.cue/log "
         "for multi-disc albums (content-derived: FILE entries for cues; "
-        "filename/disc-number/duration for logs). Off by default discovery "
-        "still works, only the rename step is skipped.",
+        "filename/disc-number/duration for logs). On by default; discovery "
+        "still works when off, only the rename step is skipped.",
+    "discs_rename_single_fallback":
+        "Single-disc fallback: when an album has only one .cue or one .log "
+        "and no disc-number evidence, rename it to CD-1.cue/log. On by "
+        "default; turn off to leave lone sheets untouched when ambiguous.",
     "discs_rename_pattern":
         "Customize the autorename pattern: use {n} as disc number "
         "(e.g. CD-{n} → CD-1.log, Disc {n} → Disc 1.log). Change both .cue "
@@ -809,6 +815,13 @@ FIELD_DESCRIPTIONS = {
         "Audit: detect clipped samples (--no-clipping when off). "
         "Loud modern masters often clip at the true-peak ceiling and are "
         "still genuine lossless; turn this off to stop 'clipping' warnings.",
+    "audit_scaled_clipping":
+        "Audit: detect scaled clipping (--no-scaled-clipping when off). "
+        "'Scaled clipping' means the waveform was clipped and then the volume "
+        "was reduced, so peaks sit just below 0 dB but the flat-topped shape "
+        "remains — a remnant of loud mastering/limiting. Still REAL (warn), "
+        "not FAKE; disable to hide 'scaled clipping' warnings when most tracks "
+        "show it.",
     "audit_mqa":
         "Audit: detect MQA encoding markers (--no-mqa when off).",
     "audit_ai":
@@ -884,7 +897,11 @@ FIELD_DESCRIPTIONS = {
     "confirm_before_update":
         "Ask for confirmation before downloading and installing an update.",
     "run_all_order":
-        "Execution order used by the Run All button.",
+        "Execution order used by the Run All button. Default pipeline: "
+        "1 Lyrics → 2 CUEs → 8 Auto Tagging (fixes INSTRUMENTAL from lyrics) → "
+        "3 FLAC → 5 Images (media optimization) → 7 DR → 6 Audit (analysis) → "
+        "4 Grade (report). Text → media → analysis → report is systematic; "
+        "grade last so audit/DR results are included. Reorder via Settings.",
 }
 
 
@@ -1318,6 +1335,7 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("CD Rips", [
                 "discs_rename_enabled", "discs_rename_pattern",
+                "discs_rename_single_fallback",
             ]),
             ("Tags — Media & Source", [
                 "normalize_media_source", "digital_media_source_value",
@@ -1348,7 +1366,7 @@ class ConfigDialog(tk.Toplevel):
             ("Audio Auditor", [
                 "audit_thorough", "audit_cutoff_allow",
                 "audit_verify_cd_checksums", "audit_cd_require_both",
-                "audit_clipping", "audit_mqa",
+                "audit_clipping", "audit_scaled_clipping", "audit_mqa",
                 "audit_ai", "audit_fake_stereo", "audit_silence",
                 "audit_dynamic_range", "audit_true_peak", "audit_lufs",
                 "audit_bpm",
@@ -1418,9 +1436,9 @@ class ConfigDialog(tk.Toplevel):
         order_box = ttk.Frame(inner, style="Card.TFrame")
         order_box.grid(row=row, column=0, sticky="ew", padx=5, pady=(0, 4))
         # Only base scripts 1-6 auto-fill; 7/8 (DR & Auto Tagging) are opt-in
-        current = [s for s in (config.get("run_all_order") or [1, 2, 3, 5, 4])
+        current = [s for s in (config.get("run_all_order") or DEFAULT_RUN_ALL_ORDER)
                    if isinstance(s, int) and s in SCRIPT_NAMES]
-        for sid in (1, 2, 3, 4, 5, 6):
+        for sid in (1, 2, 3, 4, 5, 6, 7, 8):
             if sid not in current:
                 current.append(sid)
         self.order_vars = []
@@ -1631,7 +1649,7 @@ class ConfigDialog(tk.Toplevel):
                     var.set(str(d))
             except (ValueError, tk.TclError):
                 pass
-        order = defaults.get("run_all_order", [1, 2, 3, 5, 4])
+        order = defaults.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
         for sv, sid in zip(self.order_vars, order):
             sv.set(SCRIPT_NAMES[sid])
         default_tags = defaults.get("encoder_tags") or {}
@@ -1695,7 +1713,7 @@ class ConfigDialog(tk.Toplevel):
             sid = name_to_id.get(sv.get())
             if sid and sid not in order:
                 order.append(sid)
-        self.config["run_all_order"] = order or [1, 2, 3, 5, 4]
+        self.config["run_all_order"] = order or list(DEFAULT_RUN_ALL_ORDER)
 
         if not str(self.config.get("digital_media_source_value", "")).strip():
             self.config["digital_media_source_value"] = DEFAULT_DIGITAL_SOURCE
@@ -3676,7 +3694,7 @@ class App(tk.Tk):
         targets = [p for p, c in self._checked.items() if c]
         if not targets:
             return
-        order = list(self.config.get("run_all_order", [1, 2, 3, 5, 4]))
+        order = list(self.config.get("run_all_order", DEFAULT_RUN_ALL_ORDER))
         # Optimize Selected always finishes with an audio audit so the
         # AUDIT tags (and the viewer's audit column) stay current.
         if 6 not in order:
@@ -4491,7 +4509,7 @@ class App(tk.Tk):
             self.log(f"Update check error: {e}", tag="yellow")
 
     def _run_all(self):
-        order = self.config.get("run_all_order", [1, 2, 3, 5, 4])
+        order = self.config.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
         self._run_scripts(order, "RUN ALL SCRIPTS")
 
     def _run_custom(self):

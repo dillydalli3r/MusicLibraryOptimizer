@@ -353,7 +353,11 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
     pattern = _disc_pattern_for(config)
     discs = discs if discs is not None else album_discs(album_dir)
     # Single-disc fallback: no D-TT but audio files exist → treat as disc 1
+    # Config discs_rename_single_fallback (default True) allows lone .cue/.log
+    # to become CD-1 even when no disc evidence exists.
     if not discs:
+        if config is not None and not config.get("discs_rename_single_fallback", True):
+            return []
         # Use is_audio_file to count actual music (skip sidecars)
         aud = [f for f in os.listdir(album_dir) if is_audio_file(f)]
         if len(aud) > 0:
@@ -443,6 +447,8 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
     discs = discs if discs is not None else album_discs(album_dir)
     # Single-disc fallback without D-TT: one log → CD-1.log
     if not discs:
+        if config is not None and not config.get("discs_rename_single_fallback", True):
+            return []
         aud = [f for f in os.listdir(album_dir) if is_audio_file(f)]
         if len(aud) > 0:
             logs_tmp = [f for f in os.listdir(album_dir) if f.lower().endswith(".log")]
@@ -722,7 +728,21 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
     notes = []
     discs = album_discs(album_dir)
     if not discs:
-        return {}, notes
+        # Single-disc fallback for scoring: if enabled and single album with one log/cue,
+        # treat as disc 1 so CD-1.log can be scored even without D-TT naming.
+        if config is None or config.get("discs_rename_single_fallback", True):
+            try:
+                aud = [f for f in os.listdir(album_dir) if is_audio_file(f)]
+                logs_tmp = [f for f in os.listdir(album_dir) if f.lower().endswith(".log")]
+                cues_tmp = [f for f in os.listdir(album_dir) if f.lower().endswith(".cue")]
+                if aud and (len(logs_tmp) == 1 or len(cues_tmp) == 1):
+                    discs = {1: [os.path.join(album_dir, f) for f in aud]}
+                else:
+                    return {}, notes
+            except OSError:
+                return {}, notes
+        else:
+            return {}, notes
 
     # MEDIA=CD only - check all discs first file, not arbitrary order
     first = None
