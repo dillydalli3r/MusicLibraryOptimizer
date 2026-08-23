@@ -180,6 +180,7 @@ CONFIG_FIELDS = [
     ("discs_rename_enabled", "Auto-Rename .cue/.log to CD-N", "bool", None),
     ("discs_rename_pattern", "Rename pattern (use {n} for disc number)", "str", None),
     ("discs_rename_single_fallback", "Single-Disc Fallback: lone .cue/.log → CD-1 when no disc data", "bool", None),
+    ("discs_log_score_fallback", "Fallback: grade .log by reading it if AudioAuditor fails", "bool", None),
     ("discs_toc_tolerance_s", "TOC Tolerance (s) for log duration match", "str", None),
     ("discs_toc_unique_margin_s", "TOC Unique Margin (s)", "str", None),
     # Tags — Media/Source + writes
@@ -762,6 +763,11 @@ FIELD_DESCRIPTIONS = {
         "Customize the autorename pattern: use {n} as disc number "
         "(e.g. CD-{n} → CD-1.log, Disc {n} → Disc 1.log). Change both .cue "
         "and .log together; grading checks the same pattern. Must contain {n}.",
+    "discs_log_score_fallback":
+        "When on (default), if AudioAuditor can't score a .log, grade it by "
+        "reading the log text (Copy OK + CRCs → 100, errors → 20, etc.). Heuristic, "
+        "not as precise as AudioAuditor, but ensures every .log gets a LOG_GRADE. "
+        "Off = leave unscorable logs unscored (old behaviour).",
     "discs_toc_tolerance_s":
         "TOC duration tolerance (seconds) for matching a .log's TOC table to "
         "actual audio durations when renaming logs. 4.0 s default; tighter avoids "
@@ -1413,7 +1419,7 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("CD & Discs", [
                 "discs_rename_enabled", "discs_rename_pattern",
-                "discs_rename_single_fallback",
+                "discs_rename_single_fallback", "discs_log_score_fallback",
                 "discs_toc_tolerance_s", "discs_toc_unique_margin_s",
             ]),
             ("Tagging — Media & Source", [

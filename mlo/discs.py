@@ -828,10 +828,14 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
                 continue  # already graded
         score = score_disc_log(cli_exe, log_path, paths)
         if score is None:
-            # Fallback: ensure every log is gradeable (user request)
-            score = _fallback_log_score(log_path)
-            if score is not None:
-                notes.append(f"disc {d}: fallback score {score} for {_disc_expected_name(pattern, d, '.log')} (AudioAuditor failed)")
+            # Fallback: ensure every log is gradeable when enabled
+            if config is None or config.get("discs_log_score_fallback", True):
+                score = _fallback_log_score(log_path)
+                if score is not None:
+                    notes.append(f"disc {d}: fallback score {score} for {_disc_expected_name(pattern, d, '.log')} (AudioAuditor failed)")
+                else:
+                    notes.append(f"disc {d}: could not score {_disc_expected_name(pattern, d, '.log')}")
+                    continue
             else:
                 notes.append(f"disc {d}: could not score {_disc_expected_name(pattern, d, '.log')}")
                 continue
@@ -871,11 +875,15 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
             # Try AudioAuditor first
             score2 = score_disc_log(cli_exe, log_full, all_audio)
             if score2 is None:
-                score2 = _fallback_log_score(log_full)
-                if score2 is not None:
-                    notes.append(f"{logf}: fallback score {score2} (orphan, AudioAuditor failed)")
+                if config is None or config.get("discs_log_score_fallback", True):
+                    score2 = _fallback_log_score(log_full)
+                    if score2 is not None:
+                        notes.append(f"{logf}: fallback score {score2} (orphan, AudioAuditor failed)")
+                    else:
+                        notes.append(f"{logf}: could not score (orphan, even fallback)")
+                        continue
                 else:
-                    notes.append(f"{logf}: could not score (orphan, even fallback)")
+                    notes.append(f"{logf}: could not score (orphan, AudioAuditor failed, fallback off)")
                     continue
             dnum = _log_name_disc(logf)
             if dnum is None or dnum in scores:

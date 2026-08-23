@@ -108,6 +108,7 @@
   "cue_file_type": "WAVE",
   "cue_fix_filenames": true,
   "digital_media_source_value": "Digital",
+  "discs_log_score_fallback": true,
   "discs_rename_enabled": true,
   "discs_rename_pattern": "CD-{n}",
   "discs_rename_single_fallback": true,
