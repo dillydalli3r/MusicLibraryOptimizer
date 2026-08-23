@@ -265,6 +265,18 @@ def run_optimize_flacs(config):
             ]
         )
 
+    # Debug: check for duplicates that would cause WinError 32
+    if len(flac_files) != len(set(os.path.normcase(p) for p in flac_files)):
+        log(c(f"WARNING: flac_files has duplicates: {len(flac_files)} vs {len(set(os.path.normcase(p) for p in flac_files))} unique", Color.YELLOW))
+        # Deduplicate
+        flac_files = sorted(set(os.path.normcase(p) for p in flac_files))
+        # But need to restore original case? Use normcase for dedupe but keep original
+        # Actually just dedupe via dict
+        seen = {}
+        for p in _collect_targets(targets, (".flac",)):
+            seen[os.path.normcase(p)] = p
+        flac_files = sorted(seen.values())
+
     if not flac_files:
         log("No FLAC files found.")
         return stats

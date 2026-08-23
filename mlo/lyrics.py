@@ -775,6 +775,13 @@ def run_format_lyrics(config):
     files = _collect_targets(targets, AUDIO_EXTS)
     if targets is None:
         files = sorted(_walk_files(folder, AUDIO_EXTS))
+    # Deduplicate in case targets contained both album and its tracks (e.g. Select All)
+    # _collect_targets already uses a set, but be extra safe for case-insensitive FS
+    if len(files) != len(set(os.path.normcase(p) for p in files)):
+        seen = {}
+        for p in files:
+            seen[os.path.normcase(p)] = p
+        files = sorted(seen.values())
 
     if files:
         threads = worker_count(
