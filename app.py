@@ -112,14 +112,14 @@ RAW_TAGS = [
 # The TAGS heading doubles as the key for its compact layout:
 # G=Genre A=Advisory I=Instrumental L=Lyrics AA=Album Advisory.
 TREE_COLUMNS = {
-    "grade": ("GRADE", 74, True),
-    "audit": ("AUDIT", 80, True),
-    "checks": ("CHECKS", 88, False),
-    "tracks": ("TRACKS", 58, True),
-    "media": ("MEDIA", 100, True),
-    "cover": ("COVER", 110, True),
-    "tags": ("TAGS · G I A AA L", 800, True),
-    "failed": ("FAILED", 300, True),
+    "grade": ("GRADE", 60, True),
+    "audit": ("AUDIT", 65, True),
+    "checks": ("CHECKS", 70, False),
+    "tracks": ("TRACKS", 50, True),
+    "media": ("MEDIA", 80, True),
+    "cover": ("COVER", 90, True),
+    "tags": ("TAGS · G I A AA L", 420, True),
+    "failed": ("FAILED", 220, True),
 }
 
 CONFIG_FIELDS = [
@@ -2731,16 +2731,13 @@ class App(tk.Tk):
         self.library_tree.configure(columns=tuple(TREE_COLUMNS))
         # First column (tree): label as FOLDER / TRACK so empty header is not confusing
         self.library_tree.heading("#0", text="  FOLDER / TRACK", anchor="w")
-        # FOLDER / TRACK is fixed so TAGS can use all remaining space (user reported TAGS cut off)
-        self.library_tree.column("#0", width=260, minwidth=180, stretch=False, anchor="w")
+        # All columns fit without horizontal scroll (1500px window) — TAGS + FAILED share remaining space
+        self.library_tree.column("#0", width=220, minwidth=160, stretch=False, anchor="w")
         for col_id, (heading, width, _default) in TREE_COLUMNS.items():
             self.library_tree.heading(col_id, text=heading, anchor="w")
-            # Only TAGS stretches — it must utilize all available space; others are fixed
-            # so the long genre/tag string is never clipped at the window edge.
-            is_tags = col_id == "tags"
-            # Increase minwidth for TAGS so it never collapses, and allow it to stretch
-            minw = 200 if is_tags else 40
-            stretch = is_tags
+            # TAGS and FAILED share remaining space so all 8 cols fit at 1500px
+            stretch = col_id in ("tags", "failed")
+            minw = 140 if col_id == "tags" else (120 if col_id == "failed" else 40)
             self.library_tree.column(col_id, width=width, minwidth=minw, anchor="w",
                                      stretch=stretch)
 

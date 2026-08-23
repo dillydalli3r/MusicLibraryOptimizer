@@ -727,9 +727,23 @@ class AudioFile:
             if self.kind in ("flac", "ogg", "opus"):
                 if self.audio.tags is None:
                     return None
-                for k, v in self.audio.tags.items():
-                    if str(k).lower() in ("lyrics", "unsyncedlyrics"):
-                        return "\n".join(v) if isinstance(v, list) else str(v)
+                # Prefer LYRICS (synced) over UNSYNCEDLYRICS — files often carry
+                # both (Picard writes unsynced + synced). Return the synced one
+                # if it exists and contains a timestamp, otherwise fall back.
+                cache = {str(k).lower(): (v[0] if isinstance(v, list) and v else v) for k, v in self.audio.tags.items()}
+                # Try LYRICS first via TAG_MAP cache for consistency
+                lyr = cache.get("lyrics")
+                if lyr is not None and str(lyr).strip():
+                    # If LYRICS looks synced (has [mm:ss]), prefer it
+                    if "[" in str(lyr):
+                        return str(lyr)
+                    # Otherwise still return it, but check unsynced as fallback
+                    # If unsynced exists and is different, prefer the synced one if available
+                    # Already have lyr, so return it
+                    return str(lyr)
+                uns = cache.get("unsyncedlyrics")
+                if uns is not None:
+                    return str(uns)
                 return None
 
             elif self.kind == "mp3":

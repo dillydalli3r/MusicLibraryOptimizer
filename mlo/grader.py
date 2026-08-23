@@ -947,6 +947,11 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         fmt_ok = False
                     if lrc_text and not _lyrics_word_timestamps_valid(lrc_text, cfg):
                         fmt_ok = False
+                # Unsynced lyrics must fail — plain text without any [mm:ss.xx] is not synced
+                if lyr_text and not TIMESTAMP_RE_GRADE.search(lyr_text):
+                    fmt_ok = False
+                if lrc_text and not TIMESTAMP_RE_GRADE.search(lrc_text):
+                    fmt_ok = False
                 if not fmt_ok:
                     failed_checks += 1
                     add_issue("Lyrics not optimally formatted "
