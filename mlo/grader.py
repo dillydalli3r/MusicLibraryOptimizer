@@ -1,6 +1,7 @@
 """Library grader: per-album tag/lyrics/cover compliance reports."""
 import os
 import re
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .audio import AudioFile
@@ -15,6 +16,47 @@ from .stats import (
 )
 from .deps import HAS_PIL, Image
 from .ui import print_header, log, c, Color, print_separator, _short_val
+
+def _get_cover_dimensions(cover_path):
+    """Get cover dimensions, handling JXL via jxlinfo when Pillow lacks JXL support."""
+    ext = os.path.splitext(cover_path)[1].lower()
+    if ext == ".jxl":
+        # Try Pillow first (may have JXL plugin)
+        if HAS_PIL:
+            try:
+                with Image.open(cover_path) as im:
+                    return im.size
+            except Exception:
+                pass
+        # Fallback to jxlinfo (from libjxl)
+        try:
+            from .tools import detect_all_tools
+            tools = detect_all_tools()
+            jxl_info = tools.get("libjxl")
+            if jxl_info and jxl_info.get("cjxl_exe"):
+                jxl_dir = os.path.dirname(jxl_info["cjxl_exe"])
+                jxlinfo = os.path.join(jxl_dir, "jxlinfo.exe")
+                if not os.path.isfile(jxlinfo):
+                    # Try alternative location
+                    jxlinfo = os.path.join(os.path.dirname(jxl_dir), "jxlinfo.exe")
+                if os.path.isfile(jxlinfo):
+                    from .subproc import run_tool
+                    proc = run_tool([jxlinfo, cover_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=5)
+                    if proc.stdout:
+                        m = re.search(r"(\d+)x(\d+)", proc.stdout)
+                        if m:
+                            return (int(m.group(1)), int(m.group(2)))
+        except Exception:
+            pass
+        return (None, None)
+    else:
+        if not HAS_PIL:
+            return (None, None)
+        try:
+            with Image.open(cover_path) as im:
+                return im.size
+        except Exception:
+            return (None, None)
 
 PER_TRACK_TAGS = [
     "GENRE",
@@ -1245,15 +1287,12 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         if force_exact and cfg.get("cover_resize_enabled", False) and target_cov > 0:
             enforce_size = True
             enforce_square = True
-        # Cache dimensions once (avoid double Image.open)
+        # Cache dimensions once (handles JXL via jxlinfo)
         w = h = None
         cover_read_error = False
-        if HAS_PIL and (enforce_size or enforce_square):
-            try:
-                with Image.open(cover_path) as _im:
-                    w, h = _im.size
-            except Exception:
-                w = h = None
+        if (HAS_PIL or cover_path.lower().endswith(".jxl")) and (enforce_size or enforce_square):
+            w, h = _get_cover_dimensions(cover_path)
+            if w is None or h is None:
                 cover_read_error = True
         # Size enforcement: require exact target_size x target_size (configurable tolerance)
         if enforce_size and cfg.get("cover_resize_enabled", False) and target_cov > 0:

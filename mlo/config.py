@@ -205,7 +205,6 @@ DEFAULT_CONFIG = {
     "discs_rename_single_fallback": True,
     "discs_toc_tolerance_s": 4.0,
     "discs_toc_unique_margin_s": 4.0,
-    "discs_log_score_fallback": True,
     "cue_fix_filenames": True,
 
     # Music-file tag writes

@@ -141,6 +141,26 @@ def detect_all_tools():
                 "ffprobe_exe": os.path.join(d, "ffprobe.exe"),
             }
 
+    pv, pf = _detect_tool("php", DEPS_DIR)
+    if pf:
+        d = os.path.join(DEPS_DIR, pf)
+        if os.path.isfile(os.path.join(d, "php.exe")):
+            tools["php"] = {
+                "version": pv,
+                "php_exe": os.path.join(d, "php.exe"),
+            }
+
+    lc_v, lc_f = _detect_tool("logchecker", DEPS_DIR)
+    if lc_f:
+        d = os.path.join(DEPS_DIR, lc_f)
+        phar = os.path.join(d, "logchecker.phar")
+        if os.path.isfile(phar):
+            tools["logchecker"] = {
+                "version": lc_v,
+                "phar_path": phar,
+                "php_exe": tools.get("php", {}).get("php_exe"),
+            }
+
     with _CACHE_LOCK:
         _TOOLS_CACHE = tools
     return tools

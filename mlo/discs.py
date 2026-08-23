@@ -18,11 +18,9 @@ content-derived evidence, never order or fuzzy matching:
            Anything ambiguous is left untouched - grading will flag the
            missing LOG_GRADE instead of guessing.
 
-Per-disc rip-log scoring: AudioAuditorCLI scores only one log per
-folder, so each disc is scored in isolation - a temporary folder is
-filled with stub files named after that disc's tracks plus only that
-disc's log; the stub run needs no audio decoding (cambia scores the log
-text) and returns the 0-100 score via `analyze --rip-log --json`.
+Per-disc rip-log scoring: OPSnet Logchecker (PHP) scores each log directly
+via `php logchecker.phar analyze --no_text <log>` and returns the 0-100 score.
+No stub audio needed — Logchecker parses the log text itself.
 """
 import os
 import re
@@ -672,92 +670,68 @@ def fix_cue_filenames(album_dir, log_fn=None, config=None):
 
 
 # ----------------------------------------------------------------------
-# Per-disc rip-log scoring
+# Per-disc rip-log scoring — now via OPSnet Logchecker (PHP) instead of AudioAuditor
 # ----------------------------------------------------------------------
-def score_disc_log(cli_exe, log_path, disc_files, timeout=300):
-    """Score one disc's log with AudioAuditorCLI in an isolated stub
-    folder. Returns the 0-100 score (int) or None."""
-    workdir = tempfile.mkdtemp(prefix="mlo_riplog_")
-    try:
-        for p in disc_files:
-            stub = os.path.join(workdir, os.path.basename(p))
-            try:
-                with open(stub, "wb") as fh:
-                    fh.write(b"\x00" * 1024)
-            except OSError:
-                return None
-        # Keep the original log basename - the CLI picks up any .log in
-        # the folder, but some verifiers match it against the cue.
-        shutil.copy2(log_path,
-                     os.path.join(workdir, os.path.basename(log_path)))
+def score_disc_log(cli_exe, log_path=None, disc_files=None, timeout=30):
+    """Score one disc's log with OPSnet Logchecker via PHP. Returns 0-100 or None.
 
-        proc = run_tool(
-            [cli_exe, "analyze", workdir, "--rip-log", "--json",
-             "--no-fun", "--no-tips", "--no-update-check", "--no-config"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=timeout,
-        )
-        if proc.returncode != 0 or not (proc.stdout or "").strip():
-            return None
-        try:
-            import json
-            items = json.loads(proc.stdout)
-        except ValueError:
-            return None
-        for item in items:
-            score = item.get("ripLogScore")
-            if score is not None and item.get("hasRipLog"):
-                try:
-                    return int(score)
-                except (ValueError, TypeError):
-                    return None
-        return None
-    except Exception:
-        return None
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
-
-
-def _fallback_log_score(log_path):
-    """Fallback log grading when AudioAuditor cannot score — ensures every .log is gradeable.
-
-    Parses log text for EAC/XLD/CUETools error indicators and per-track CRC presence.
-    Returns 0-100 score or None if log is unreadable. Heuristic but ensures a grade.
+    Supports both old calling convention score_disc_log(cli, log_path, disc_files)
+    and new score_disc_log(log_path). disc_files is ignored (Logchecker only needs log).
     """
+    # Handle overloaded signatures
+    actual_log = log_path if log_path is not None else cli_exe
+    # If cli_exe is actually a log path (new call) and log_path is None
+    if actual_log is None and isinstance(cli_exe, str) and cli_exe.lower().endswith(".log"):
+        actual_log = cli_exe
+    if isinstance(disc_files, int) and timeout == 30:
+        # timeout passed as disc_files when called with 3 args where third is timeout
+        timeout = disc_files
+        disc_files = None
+    log_path = actual_log
+    if not log_path or not isinstance(log_path, str) or not os.path.isfile(log_path):
+        return None
     try:
-        text = read_log_text(log_path)
-        if not text.strip():
+        from .tools import detect_all_tools
+        tools = detect_all_tools()
+        lc_info = tools.get("logchecker")
+        php_info = tools.get("php")
+        if not lc_info:
             return None
-        per_track = parse_log_checksums(text)
-        has_crc = bool(per_track)
-        low = text.lower()
-        # Error indicators (lower score)
-        has_error = any(k in low for k in (
-            "there were errors", "read error", "suspicious position",
-            "copy finished with errors", "inaccurately ripped",
-            "some tracks could not be verified", "failed",
-            "error occurred"
-        ))
-        has_ok = any(k in low for k in (
-            "no errors occurred", "copy ok", "copy finished",
-            "accurately ripped", "all tracks accurately ripped",
-            "no errors", "test and copy"
-        ))
-        # Heuristic scores
-        if has_error:
-            # If has CRCs but errors, give low score 20-50 depending on presence of ok
-            return 20 if has_crc else 0
-        if has_crc and has_ok:
-            return 100
-        if has_crc:
-            # Has CRCs but no explicit ok/error -> likely good
-            return 95
-        if "eac" in low or "xld" in low or "cuetools" in low:
-            # Recognized ripper but no CRCs -> ambiguous
-            return 50
-        # Unknown format but exists
-        return 75
+        phar = lc_info.get("phar_path")
+        php_exe = lc_info.get("php_exe") or (php_info.get("php_exe") if php_info else None)
+        if not phar or not php_exe or not os.path.isfile(phar) or not os.path.isfile(php_exe):
+            # Fallback: try to locate php via PATH if not in deps
+            php_exe = shutil.which("php") or php_exe
+            if not php_exe or not os.path.isfile(php_exe):
+                return None
+        # Ensure Python Scripts for checksum validation are findable (Logchecker tries python/eac-logchecker)
+        env = dict(os.environ)
+        try:
+            import sys as _sys
+            for p in [os.path.join(os.path.dirname(_sys.executable), "Scripts"),
+                      r"C:\Users\dillydallier\AppData\Local\Python\pythoncore-3.14-64\Scripts",
+                      r"C:\Users\dillydallier\AppData\Local\Python\bin\Scripts"]:
+                if os.path.isdir(p) and p not in env.get("PATH", ""):
+                    env["PATH"] = p + os.pathsep + env.get("PATH", "")
+            # Also add python exe dir
+            py_dir = os.path.dirname(_sys.executable)
+            if py_dir not in env.get("PATH", ""):
+                env["PATH"] = py_dir + os.pathsep + env.get("PATH", "")
+        except Exception:
+            pass
+        proc = run_tool([php_exe, phar, "analyze", "--no_text", log_path],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        text=True, encoding="utf-8", errors="replace",
+                        timeout=timeout, env=env)
+        # Logchecker prints Score even when checksum not validated (still valid)
+        if proc.stdout:
+            m = re.search(r"Score\s*:\s*(\d+)", proc.stdout)
+            if m:
+                try:
+                    return int(m.group(1))
+                except:
+                    pass
+        return None
     except Exception:
         return None
 
@@ -826,19 +800,10 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
                 have.append(v)
             if have and all(v.isdigit() and 0 <= int(v) <= 100 for v in have):
                 continue  # already graded
-        score = score_disc_log(cli_exe, log_path, paths)
+        score = score_disc_log(log_path)
         if score is None:
-            # Fallback: ensure every log is gradeable when enabled
-            if config is None or config.get("discs_log_score_fallback", True):
-                score = _fallback_log_score(log_path)
-                if score is not None:
-                    notes.append(f"disc {d}: fallback score {score} for {_disc_expected_name(pattern, d, '.log')} (AudioAuditor failed)")
-                else:
-                    notes.append(f"disc {d}: could not score {_disc_expected_name(pattern, d, '.log')}")
-                    continue
-            else:
-                notes.append(f"disc {d}: could not score {_disc_expected_name(pattern, d, '.log')}")
-                continue
+            notes.append(f"disc {d}: could not score {_disc_expected_name(pattern, d, '.log')} (Logchecker failed)")
+            continue
         scores[d] = score
         for p in paths:
             if not write_tags:
@@ -872,19 +837,10 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
             if not all_audio:
                 continue
             # Avoid duplicate attempt if this log was the expected one and already has note
-            # Try AudioAuditor first
-            score2 = score_disc_log(cli_exe, log_full, all_audio)
+            score2 = score_disc_log(log_full)
             if score2 is None:
-                if config is None or config.get("discs_log_score_fallback", True):
-                    score2 = _fallback_log_score(log_full)
-                    if score2 is not None:
-                        notes.append(f"{logf}: fallback score {score2} (orphan, AudioAuditor failed)")
-                    else:
-                        notes.append(f"{logf}: could not score (orphan, even fallback)")
-                        continue
-                else:
-                    notes.append(f"{logf}: could not score (orphan, AudioAuditor failed, fallback off)")
-                    continue
+                notes.append(f"{logf}: could not score (orphan, Logchecker failed)")
+                continue
             dnum = _log_name_disc(logf)
             if dnum is None or dnum in scores:
                 dnum = max(scores.keys(), default=0) + 1

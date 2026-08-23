@@ -46,6 +46,8 @@ DISPLAY_NAMES = {
     "rsgain": "rsgain",
     "ffmpeg": "ffmpeg",
     "simpledrmeter": "simple-dr-meter",
+    "logchecker": "Logchecker",
+    "php": "PHP",
 }
 
 REPOS = {
@@ -56,6 +58,7 @@ REPOS = {
     "audioauditor": "Angel2mp3/AudioAuditor",
     "rsgain": "complexlogic/rsgain",
     "ffmpeg": "BtbN/FFmpeg-Builds",
+    "logchecker": "OPSnet/Logchecker",
 }
 
 # Ordered asset-name preferences (regex, matched case-insensitively).
@@ -70,6 +73,7 @@ ASSET_PATTERNS = {
     "audioauditor": [r"^AudioAuditorCLI-win-x64\.exe$"],
     "rsgain": [r"^rsgain-[\d.]+-win64\.zip$"],
     "ffmpeg": [r"^ffmpeg-master-latest-win64-gpl\.zip$"],
+    "logchecker": [r"^logchecker\.phar$"],
 }
 
 INSTALL_PREFIX = {
@@ -80,6 +84,8 @@ INSTALL_PREFIX = {
     "audioauditor": "AudioAuditor",
     "rsgain": "rsgain",
     "ffmpeg": "ffmpeg",
+    "logchecker": "Logchecker",
+    "php": "php",
 }
 
 # Exe files that must be present after installation.
@@ -91,10 +97,12 @@ MARKER_EXES = {
     "audioauditor": ("AudioAuditorCLI.exe",),
     "rsgain": ("rsgain.exe",),
     "ffmpeg": ("ffmpeg.exe", "ffprobe.exe"),
+    "logchecker": ("logchecker.phar",),
+    "php": ("php.exe",),
 }
 
 # Tools whose release asset is a single bare exe - no archive to extract.
-SINGLE_EXE_TOOLS = {"audioauditor"}
+SINGLE_EXE_TOOLS = {"audioauditor", "logchecker"}
 
 # Exact, pinned dependency versions. Every tool is downloaded from a specific
 # GitHub release tag (never "latest") so installs and CI builds are fully
@@ -141,12 +149,27 @@ PINNED = {
         "asset": "",
         "version": "0.0.0",
     },
+    "logchecker": {
+        "tag": "0.14.4",
+        "asset": "logchecker.phar",
+        "version": "0.14.4",
+    },
+    "php": {
+        "tag": "8.1.28",
+        "asset": "php-8.1.28-nts-Win32-vs16-x64.zip",
+        "version": "8.1.28",
+    },
 }
 
 # simple-dr-meter is a Python script (no Windows binary / no releases); it is
 # fetched from the repo's v0.0.0 tag archive instead of a GitHub release.
 SIMPLE_DR_METER_ZIP_URL = (
     "https://github.com/magicgoose/simple-dr-meter/archive/refs/tags/v0.0.0.zip"
+)
+
+# PHP for Windows (needed for Logchecker phar) — not on GitHub, direct from windows.php.net
+PHP_ZIP_URL = (
+    "https://windows.php.net/downloads/releases/archives/php-8.1.28-nts-Win32-vs16-x64.zip"
 )
 
 _HEADERS = {
@@ -401,6 +424,59 @@ def _install_simple_dr_meter(log=print, progress=None):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _install_php(log=print, progress=None):
+    """Download PHP for Windows (needed for Logchecker phar)."""
+    pin = PINNED["php"]
+    version = pin["version"]
+    display = DISPLAY_NAMES["php"]
+    log(f"Downloading {display} v{version} (php zip) …")
+    dest_dir = os.path.join(DEPS_DIR, f"php v{version}")
+    fd, tmp_zip = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    workdir = tempfile.mkdtemp(prefix="mlo_php_")
+    try:
+        _download(PHP_ZIP_URL, tmp_zip, progress)
+        log(f"Extracting PHP v{version} …")
+        _extract_archive(tmp_zip, workdir, log)
+        src = _locate_binaries(workdir, "php")
+        if src is None:
+            # Fallback: workdir itself may contain php.exe directly
+            if os.path.isfile(os.path.join(workdir, "php.exe")):
+                src = workdir
+            else:
+                # Search one level deeper
+                for entry in os.listdir(workdir):
+                    cand = os.path.join(workdir, entry)
+                    if os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "php.exe")):
+                        src = cand
+                        break
+        if src is None:
+            raise RuntimeError("Could not find php.exe inside the archive")
+        os.makedirs(dest_dir, exist_ok=True)
+        for fname in os.listdir(src):
+            s = os.path.join(src, fname)
+            d = os.path.join(dest_dir, fname)
+            if os.path.isfile(s):
+                shutil.copy2(s, d)
+            elif os.path.isdir(s):
+                if os.path.exists(d):
+                    shutil.rmtree(d, ignore_errors=True)
+                shutil.copytree(s, d)
+        names = {f.lower() for f in os.listdir(dest_dir)}
+        if "php.exe" not in names:
+            raise RuntimeError("Installed folder is missing: php.exe")
+        _remove_older_versions("php", os.path.basename(dest_dir))
+        log(f"Installed {display} v{version} -> {dest_dir}")
+        return version
+    finally:
+        try:
+            if os.path.exists(tmp_zip):
+                os.remove(tmp_zip)
+        except OSError:
+            pass
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def install_dependency(key, log=print, progress=None):
     """Download and install the latest release of a tool.
 
@@ -408,6 +484,8 @@ def install_dependency(key, log=print, progress=None):
     """
     if key == "simpledrmeter":
         return _install_simple_dr_meter(log=log, progress=progress)
+    if key == "php":
+        return _install_php(log=log, progress=progress)
 
     rel = get_latest_release(key)
     version = rel["version"]
