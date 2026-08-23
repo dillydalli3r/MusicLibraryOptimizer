@@ -4195,14 +4195,27 @@ class App(tk.Tk):
         path = self._item_paths.get(item)
         if not path:
             return None, None
+        # Direct hit (album row) — handle normcase for Windows
         res = self._grade_cache.get(path)
+        if res is None:
+            try:
+                res = self._grade_cache.get(os.path.normcase(os.path.normpath(path)))
+            except Exception:
+                res = None
         if res is not None:
             return path, res
         parent = self.library_tree.parent(item)
         while parent:
             p = self._item_paths.get(parent)
-            if p and p in self._grade_cache:
-                return p, self._grade_cache[p]
+            if p:
+                res = self._grade_cache.get(p)
+                if res is None:
+                    try:
+                        res = self._grade_cache.get(os.path.normcase(os.path.normpath(p)))
+                    except Exception:
+                        res = None
+                if res is not None:
+                    return p, res
             parent = self.library_tree.parent(parent)
         return None, None
 
