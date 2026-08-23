@@ -4564,6 +4564,169 @@ class App(tk.Tk):
         t.start()
 
     # ------------------------------------------------------------------
+    # Selective execution: when Force is off, only run a script on tracks
+    # that actually fail grading for that script's domain. Maps grading
+    # issue strings → script IDs.
+    # ------------------------------------------------------------------
+    def _script_needed_for_album(self, script_id, album_dir, res):
+        """Whether this album/track grading indicates script_id is needed."""
+        if res is None or "error" in res:
+            return True  # no grading — be conservative and run
+        # Build a single searchable blob of all issue strings for this album
+        # (album-level keys + per-track issues).
+        issues_blob = " ".join(str(k).lower() for k in res.get("issues", {}).keys())
+        for tr in res.get("tracks") or []:
+            issues_blob += " " + " ".join(str(x).lower() for x in tr.get("issues") or [])
+
+        # Script-specific keywords — precise to avoid cross-triggering
+        # (e.g. LYRICS issues should not trigger AutoTagging).
+        if script_id == 1:  # Format Lyrics
+            return any(k in issues_blob for k in ("lyrics not optimally formatted", "missing lyrics", "lyrics has", "unsynced", "instrumental=1 but lyrics present"))
+        if script_id == 2:  # Format CUEs
+            return any(k in issues_blob for k in ("cue", "cuesheet", "cd rip sheets not named", "missing .cue file", "missing .log file"))
+        if script_id == 3:  # Optimize FLACs
+            return any(k in issues_blob for k in ("encoder", "re-optimize", "re-encode"))
+        if script_id == 5:  # Process Images
+            return any(k in issues_blob for k in ("cover image", "missing cover", "cover image wrong size", "not square"))
+        if script_id == 6:  # Audit Library
+            return any(k in issues_blob for k in ("audit", "log_grade", "crc", "rip .log has no"))
+        if script_id == 7:  # DR & ReplayGain
+            return any(k in issues_blob for k in ("replaygain", "dynamic range"))
+        if script_id == 8:  # Auto Tagging
+            return any(k in issues_blob for k in (
+                "missing genre", "missing itunesadvisory", "genre has leading",
+                "itunesadvisory must", "missing album tag", "album tag",
+                "missing media", "media inconsistent", "unrecognized media",
+                "missing source", "source present but", "source inconsistent",
+                "missing instrumental", "missing albumitunesadvisory"))
+        if script_id == 4:  # Grade Library — always needed if requested explicitly
+            return True
+        return True
+
+    def _filter_targets_for_script(self, script_id, original_targets):
+        """Return filtered targets for this script, or None for 'run on all'."""
+        # If no grading cache, can't filter — run on original targets
+        if not getattr(self, "_grade_cache", None):
+            return list(original_targets) if original_targets is not None else None
+        # Resolve force flag for this script
+        force_map = {
+            1: self.force_lyrics_var.get(),
+            2: self.force_cue_var.get(),
+            3: self.force_flac_var.get(),
+            5: self.force_images_var.get(),
+            6: self.force_audit_var.get(),
+            7: self.force_dr_var.get(),
+            8: self.force_autotag_var.get(),
+            4: True,  # grade never forced-filtered
+        }
+        if force_map.get(script_id, False):
+            return list(original_targets) if original_targets is not None else None
+
+        # Build set of album dirs that actually need this script
+        # original_targets can be None (entire library), or list of artist/album/track paths
+        # Map each target to its album dir.
+        def album_for_path(p):
+            if not p:
+                return None
+            # If it's a file, album is its directory
+            if os.path.isfile(p):
+                return os.path.normpath(os.path.dirname(p))
+            # If it's a directory, check if it's an album (has audio files) or artist folder
+            # Use grade cache key if present, else treat as album/artist as-is
+            norm = os.path.normpath(p)
+            # If this path is directly an album in cache, return it
+            if norm in self._grade_cache or os.path.normpath(norm) in [os.path.normpath(k) for k in self._grade_cache.keys()]:
+                return norm
+            # If it's an artist folder, we need to include its albums later via expansion
+            return norm
+
+        # Collect candidate album dirs
+        candidate_albums = set()
+        if original_targets is None:
+            # Entire library — consider all cached albums + any found on disk not yet cached
+            try:
+                from mlo.stats import _find_albums
+                folder = self.folder_var.get().strip() or self.config.get("music_folder", "")
+                if folder and os.path.isdir(folder):
+                    for a in _find_albums(folder):
+                        candidate_albums.add(os.path.normpath(a))
+            except Exception:
+                pass
+            for k in self._grade_cache.keys():
+                candidate_albums.add(os.path.normpath(k))
+        else:
+            for t in original_targets:
+                # Expand artist folders to their albums
+                norm_t = os.path.normpath(t)
+                # If t is an artist folder present in _artists, expand
+                if norm_t in getattr(self, "_artists", {}):
+                    for alb in self._artists.get(norm_t, []):
+                        candidate_albums.add(os.path.normpath(alb))
+                elif t and os.path.isdir(t):
+                    # Check if this dir is an album or contains albums
+                    # If it has audio files, it's an album
+                    try:
+                        files = os.listdir(t)
+                        has_audio = any(f.lower().endswith((".flac", ".mp3", ".m4a", ".ogg", ".opus", ".aac")) for f in files)
+                        if has_audio:
+                            candidate_albums.add(norm_t)
+                        else:
+                            # Might be artist — find albums under it
+                            from mlo.stats import _find_albums
+                            for a in _find_albums(t):
+                                candidate_albums.add(os.path.normpath(a))
+                    except Exception:
+                        candidate_albums.add(norm_t)
+                else:
+                    # Track file or unknown — map to its album
+                    alb = album_for_path(t)
+                    if alb:
+                        candidate_albums.add(alb)
+
+        # Filter to only those that actually need this script
+        needed_albums = set()
+        for alb in candidate_albums:
+            res = self._grade_cache.get(alb) or self._grade_cache.get(os.path.normpath(alb))
+            # Also try normalized lookup
+            if res is None:
+                for k, v in self._grade_cache.items():
+                    if os.path.normpath(k) == alb:
+                        res = v
+                        break
+            if self._script_needed_for_album(script_id, alb, res):
+                needed_albums.add(alb)
+
+        if not needed_albums:
+            return []  # nothing needs this script
+
+        # If original_targets was None (entire library), return needed_albums as new targets
+        if original_targets is None:
+            return sorted(needed_albums)
+
+        # Otherwise, filter original_targets to only those whose album is needed
+        filtered = []
+        for t in original_targets:
+            norm_t = os.path.normpath(t)
+            # Direct album match
+            if norm_t in needed_albums:
+                filtered.append(t)
+                continue
+            # Artist folder — keep if any of its albums is needed
+            if norm_t in getattr(self, "_artists", {}):
+                if any(os.path.normpath(a) in needed_albums for a in self._artists.get(norm_t, [])):
+                    filtered.append(t)
+                    continue
+            # Track file — keep if its album is needed
+            alb = album_for_path(t)
+            if alb and alb in needed_albums:
+                filtered.append(t)
+                continue
+            # Fallback: if we can't determine, keep it (conservative)
+            # But for strict "no running again if not needed", we skip unknowns
+            # So do not append
+        return filtered
+
+    # ------------------------------------------------------------------
     # Worker thread
     # ------------------------------------------------------------------
     def _worker(self, script_ids, title, targets=None, force_flac=False,
@@ -4615,11 +4778,55 @@ class App(tk.Tk):
                              tag="yellow")
                     self._continue_event.wait()
 
-                self.log("")
-                self.log(f"▶ Starting {name}", tag="blue")
+                # Selective execution: when Force is off for this script,
+                # only run it on tracks/albums that actually fail grading
+                # for its domain. This prevents re-running scripts that
+                # already pass (per user request).
+                force_for_this = {
+                    1: force_lyrics,
+                    2: force_cue,
+                    3: force_flac,
+                    5: force_images,
+                    6: force_audit,
+                    7: force_dr,
+                    8: force_autotag,
+                    4: True,  # Grade Library is never skipped — it *is* the check
+                }.get(script_id, False)
+
+                script_cfg = run_cfg
+                if script_id != 4 and not force_for_this:
+                    filtered = self._filter_targets_for_script(script_id, targets)
+                    if filtered is not None and len(filtered) == 0:
+                        self.log("")
+                        self.log(f"⏭ Skipping {name} — all selected tracks already pass grading for this check (Force off)", tag="muted")
+                        continue
+                    # If filtering produced a strict subset, scope this runner to it
+                    if filtered is not None:
+                        # Compare normalized sets to detect subset
+                        try:
+                            orig_set = set(os.path.normpath(p) for p in targets) if targets is not None else None
+                            filt_set = set(os.path.normpath(p) for p in filtered)
+                            is_subset = orig_set is None or filt_set != orig_set
+                        except Exception:
+                            is_subset = True
+                        if is_subset:
+                            # Need a per-script config copy so we don't pollute other scripts
+                            script_cfg = run_cfg.copy() if run_cfg is self.config else dict(run_cfg)
+                            script_cfg["targets"] = filtered
+                            self.log("")
+                            self.log(f"▶ Starting {name} (filtered to {len(filtered)} target(s) that need it — Force off)", tag="blue")
+                        else:
+                            self.log("")
+                            self.log(f"▶ Starting {name}", tag="blue")
+                    else:
+                        self.log("")
+                        self.log(f"▶ Starting {name}", tag="blue")
+                else:
+                    self.log("")
+                    self.log(f"▶ Starting {name}", tag="blue")
 
                 try:
-                    s = runner(run_cfg)
+                    s = runner(script_cfg)
                 except Exception as e:
                     self.log(f"FATAL in {name}: {e}")
                     traceback.print_exc(file=self.stdout_stream)
