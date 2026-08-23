@@ -380,11 +380,17 @@ def run_audit_library(config):
                 f"verdict (force audit overrides)")
 
     if not require_both:
-        todo = [p for p in todo
-                if p not in checksum_verified and p not in cd_files]
+        # Only skip CD files that were successfully verified via log CRC.
+        # Unverified CD files (no .log, no CRC, or log missing) still need
+        # AudioAuditor — otherwise they'd never be audited and grading would
+        # always fail them for missing AUDIT.
+        todo = [p for p in todo if p not in checksum_verified]
         if cd_files:
+            n_unverified = len(unverified_cd)
+            n_verified = len(checksum_verified)
             log(f"CD rips ({len(cd_files)} track(s)) are verified via .log "
-                f"checksums only - AudioAuditor not applied to MEDIA=CD.")
+                f"checksums only - AudioAuditor not applied to MEDIA=CD "
+                f"({n_verified} verified, {n_unverified} unverified will be audited).")
     else:
         # require_both: keep CD files in todo even if they were checksum-verified
         # (we need to AND). Unverified CD files stay in todo as well — they'll

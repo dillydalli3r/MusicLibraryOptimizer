@@ -117,6 +117,155 @@ def _flatten_png_alpha(src_path, dst_path):
         return False
 
 
+def _prepare_image_streamlined(src_path, dst_path, config, remove_alpha=False):
+    """Streamlined Pillow pre-processing: alpha removal + cover crop/resize in one open.
+
+    Combines the previously separate _flatten_png_alpha and _resize_and_crop_image
+    passes into a single Image.open → convert → crop → resize → save, so a
+    PNG→JXL with crop+alpha or a JPEG→JXL with crop does not pay two Pillow
+    decode/encode cycles. Returns True when a new file was written to dst_path.
+    """
+    if not HAS_PIL or not src_path or not dst_path:
+        return False
+    try:
+        with Image.open(src_path) as img:
+            try:
+                img.load()
+            except Exception:
+                pass
+            # 1) Alpha handling (PNG only)
+            if remove_alpha and img.mode in ("RGBA", "LA", "P"):
+                if img.mode == "P" and "transparency" not in img.info and img.mode not in ("RGBA", "LA"):
+                    pass
+                else:
+                    try:
+                        # Flatten to RGB with white background for RGBA/LA, or convert P
+                        if img.mode == "P":
+                            img = img.convert("RGBA")
+                        if img.mode in ("RGBA", "LA"):
+                            bg = Image.new("RGB", img.size, (255, 255, 255))
+                            if img.mode == "LA":
+                                img = img.convert("RGBA")
+                            bg.paste(img, mask=img.split()[-1])
+                            img = bg
+                        else:
+                            img = img.convert("RGB")
+                    except Exception:
+                        try:
+                            img = img.convert("RGB")
+                        except Exception:
+                            return False
+            elif img.mode not in ("RGB", "RGBA", "LA", "P"):
+                # Ensure a saveable mode for other formats
+                try:
+                    img = img.convert("RGB")
+                except Exception:
+                    pass
+            elif img.mode == "P":
+                try:
+                    img = img.convert("RGB")
+                except Exception:
+                    pass
+
+            # 2) Cover crop/resize (if enabled)
+            did_cover = False
+            if config is not None:
+                ext = os.path.splitext(src_path)[1].lower()
+                per_enabled = True
+                if ext in (".jpg", ".jpeg"):
+                    per_enabled = bool(config.get("cover_jpeg_enabled", True))
+                elif ext == ".png":
+                    per_enabled = bool(config.get("cover_png_enabled", True))
+                elif ext == ".jxl":
+                    per_enabled = bool(config.get("cover_jxl_enabled", True))
+                if per_enabled:
+                    re_en = bool(config.get("cover_resize_enabled", False))
+                    cr_en = bool(config.get("cover_crop_enabled", False))
+                    thr = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                    tgt = _get_cover_target_size(ext, config) if re_en else 0
+                    if (re_en and tgt > 0) or cr_en:
+                        # Use a temp in-memory crop/resize via _resize_and_crop_image logic
+                        # but operate on the already-opened img to avoid re-opening
+                        # Create a temp file for the helper to read from — instead, do it inline
+                        w, h = img.size
+                        need_crop = False
+                        if cr_en and thr >= 0:
+                            try:
+                                ratio = w / h if h else 1.0
+                                if abs(ratio - 1.0) > thr:
+                                    need_crop = True
+                            except Exception:
+                                need_crop = False
+                        force_exact = bool(config.get("cover_force_exact_size", False))
+                        if force_exact and re_en and tgt > 0 and w != h:
+                            try:
+                                if abs(w / h - 1.0) > thr:
+                                    need_crop = True
+                            except Exception:
+                                need_crop = True
+                        need_resize = False
+                        if re_en and tgt > 0:
+                            if not need_crop:
+                                if w > tgt or h > tgt:
+                                    need_resize = True
+                            else:
+                                sq = min(w, h)
+                                if sq > tgt:
+                                    need_resize = True
+                        if need_crop or need_resize:
+                            # Perform crop to threshold (not square) inline
+                            if need_crop:
+                                if w > h:
+                                    target_w = int(h * (1.0 + thr))
+                                    target_w = max(h, min(target_w, w))
+                                    left = (w - target_w) // 2
+                                    img = img.crop((left, 0, left + target_w, h))
+                                else:
+                                    target_h = int(w * (1.0 + thr))
+                                    target_h = max(w, min(target_h, h))
+                                    top = (h - target_h) // 2
+                                    img = img.crop((0, top, w, top + target_h))
+                            if need_resize:
+                                try:
+                                    resample = Image.Resampling.LANCZOS
+                                except AttributeError:
+                                    resample = Image.LANCZOS
+                                img = img.resize((tgt, tgt), resample)
+                            did_cover = True
+
+            # Save to dst_path with appropriate format (infer from dst ext, fallback to src)
+            ext_dst = os.path.splitext(dst_path)[1].lower() or os.path.splitext(src_path)[1].lower()
+            save_kwargs = {}
+            if ext_dst in (".jpg", ".jpeg"):
+                if img.mode in ("RGBA", "LA", "P"):
+                    try:
+                        bg = Image.new("RGB", img.size, (255, 255, 255))
+                        if img.mode == "LA":
+                            img = img.convert("RGBA")
+                        bg.paste(img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None)
+                        img = bg
+                    except Exception:
+                        img = img.convert("RGB")
+                elif img.mode != "RGB":
+                    img = img.convert("RGB")
+                save_kwargs["format"] = "JPEG"
+                save_kwargs["quality"] = 95
+                save_kwargs["optimize"] = True
+            elif ext_dst == ".png":
+                save_kwargs["format"] = "PNG"
+                save_kwargs["optimize"] = True
+            else:
+                # For JXL temp or other, save as PNG to preserve lossless
+                save_kwargs["format"] = "PNG"
+                save_kwargs["optimize"] = True
+
+            img.save(dst_path, **save_kwargs)
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def _get_cover_target_size(ext, config):
     """Return per-format cover target size (0 = use global).
 
@@ -513,17 +662,41 @@ def _process_image_to_jxl(args):
                 force_no_reconstruction = True
 
         elif ext == ".png":
-            if remove_alpha and HAS_PIL:
-                has_alpha = _png_has_alpha(src_path)
-                if has_alpha:
-                    stripped_png = src_path + ".no_alpha.png"
-                    temp_files.append(stripped_png)
-
-                    if _flatten_png_alpha(src_path, stripped_png):
-                        input_for_cjxl = stripped_png
+            # Streamlined: alpha + cover crop/resize in one Pillow pass when either is needed
+            if HAS_PIL and (remove_alpha or (config is not None and (config.get("cover_crop_enabled") or config.get("cover_resize_enabled")))):
+                has_alpha = _png_has_alpha(src_path) if remove_alpha else False
+                # Check if cover handling would be needed (peek, don't open twice)
+                cover_needed = False
+                if config is not None:
+                    per_en = bool(config.get("cover_png_enabled", True)) if ext == ".png" else True
+                    if per_en and (config.get("cover_resize_enabled") or config.get("cover_crop_enabled")):
+                        try:
+                            with Image.open(src_path) as _im:
+                                _w, _h = _im.size
+                                if config.get("cover_crop_enabled") and abs(_w/_h - 1.0) > float(config.get("cover_crop_threshold", 0.05) or 0.05):
+                                    cover_needed = True
+                                if config.get("cover_resize_enabled") and _get_cover_target_size(ext, config) > 0 and (_w > _get_cover_target_size(ext, config) or _h > _get_cover_target_size(ext, config)):
+                                    cover_needed = True
+                        except Exception:
+                            cover_needed = True
+                if has_alpha or cover_needed:
+                    streamlined_tmp = src_path + ".streamlined.tmp.png"
+                    _safe_remove(streamlined_tmp)
+                    temp_files.append(streamlined_tmp)
+                    if _prepare_image_streamlined(src_path, streamlined_tmp, config, remove_alpha=has_alpha):
+                        input_for_cjxl = streamlined_tmp
                     else:
-                        _safe_remove(stripped_png)
-                        temp_files.remove(stripped_png)
+                        _safe_remove(streamlined_tmp)
+                        temp_files.remove(streamlined_tmp)
+                        # Fallback to old separate handling if streamlined fails
+                        if has_alpha:
+                            stripped_png = src_path + ".no_alpha.png"
+                            temp_files.append(stripped_png)
+                            if _flatten_png_alpha(src_path, stripped_png):
+                                input_for_cjxl = stripped_png
+                            else:
+                                _safe_remove(stripped_png)
+                                temp_files.remove(stripped_png)
 
         elif ext == ".jxl":
             decoded_jpeg = src_path + ".decoded.jpg"
