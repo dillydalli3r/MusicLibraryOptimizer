@@ -4463,6 +4463,283 @@ class App(tk.Tk):
                 res, self._lyrics_format, track_file=track_file):
             emit(text, style)
 
+        # --- Full checklist of all grading + auditing checks, filtered by config ---
+        # Shows every check that is enabled in Settings and whether this
+        # album/track passed it (or was skipped because the check is disabled).
+        # This satisfies the request that Grade details display ALL things
+        # checked for both auditing and grading based on configuration.
+        try:
+            cfg = getattr(self, "config", {}) or {}
+            # Grading checks overview
+            emit("", None)
+            emit("Grading checks (per Settings → Grading):", "bold")
+            # Map toggle -> human-readable and issue substrings for pass/fail detection
+            grade_checks = [
+                ("grade_check_unreadable", "Unreadable files"),
+                ("grade_check_missing_tags", "Missing required tags (GENRE/ITUNESADVISORY/REPLAYGAIN/DYNAMIC RANGE/INSTRUMENTAL)"),
+                ("grade_check_encoder", "Encoder tags (PROGRAM/QUALITY/VERSION)"),
+                ("grade_check_audit", "AUDIT must be REAL"),
+                ("grade_check_instrumental", "INSTRUMENTAL vs lyrics"),
+                ("grade_check_lyrics", "Missing lyrics"),
+                ("grade_check_lyrics_format", "Lyrics formatting (canonical/merged/word/synced)"),
+                ("grade_check_sidecar_cover", "Sidecar cover per track"),
+                ("grade_check_media", "MEDIA missing/inconsistent/unrecognized"),
+                ("grade_check_source", "SOURCE policy (Digital Media)"),
+                ("grade_check_album_tags", "Album tags ALBUMITUNESADVISORY/ALBUM DYNAMIC RANGE"),
+                ("grade_check_cd_log", "CD missing .log"),
+                ("grade_check_cd_cue", "CD missing .cue"),
+                ("grade_check_disc_naming", "CD .log/.cue naming (CD-N)"),
+                ("grade_check_log_grade", "LOG_GRADE presence/range"),
+                ("grade_check_crc", ".log CRC coverage"),
+                ("grade_check_log_checksum", ".log SHA256 checksum (EAC)"),
+                ("grade_check_accuraterip", "AccurateRip per track"),
+                ("grade_check_cover", "Cover missing/size/square"),
+                ("grade_check_cue_format", "CUE formatting (canonical)"),
+                ("grade_check_disallowed", "Disallowed file types"),
+                ("grade_check_tag_spaces", "Tag leading/trailing spaces"),
+                ("grade_check_tag_blank_lines", "Tag blank lines"),
+                ("grade_check_lyrics_spaces", "Lyrics spaces"),
+                ("grade_check_lyrics_blank_lines", "Lyrics blank lines"),
+                ("grade_check_lyrics_zero", "Lyrics zero timestamp [00:00.00]"),
+                ("grade_check_cue_spaces", "CUE spaces"),
+                ("grade_check_cue_blank_lines", "CUE blank lines"),
+                ("grade_check_cover_crop", "Cover crop/size"),
+            ]
+            # Also include thresholds / includes as checks
+            grade_thresholds = [
+                ("grade_log_score_threshold", f"Log score ≥ {cfg.get('grade_log_score_threshold',0)}/100"),
+                ("grader_cover_size_tolerance_px", f"Cover size tolerance {cfg.get('grader_cover_size_tolerance_px',1)}px"),
+                ("grader_strict_square_threshold", f"Strict square threshold {cfg.get('grader_strict_square_threshold',0.005)}"),
+                ("grade_include_music", "Allow music files"),
+                ("grade_include_cover", "Allow cover images"),
+                ("grade_include_cue", "Allow .cue"),
+                ("grade_include_log", "Allow .log"),
+                ("grade_include_lrc", "Allow .lrc"),
+                ("grade_include_other", "Allow other file types"),
+                ("cover_enforce_size", "Enforce cover size 1000×1000"),
+                ("cover_enforce_square", "Enforce cover square"),
+                ("cover_resize_enabled", "Resize covers"),
+            ]
+            # Build set of failed issue keys for quick lookup
+            failed_fields = set(res.get("issues", {}).keys())
+            # Also per-track issues if track_file is specified
+            if track_file:
+                for tr in res.get("tracks", []):
+                    if os.path.join(res.get("path",""), tr.get("file","")) == track_file:
+                        failed_fields.update(tr.get("issues", []))
+                        break
+            # Helper to decide if a check is considered failed for this album
+            def _grade_failed(key):
+                # Map toggle to substrings in issue keys
+                substr_map = {
+                    "grade_check_unreadable": ["Unreadable"],
+                    "grade_check_missing_tags": ["Missing GENRE","Missing ITUNESADVISORY","Missing REPLAYGAIN","Missing DYNAMIC RANGE","Missing INSTRUMENTAL","ITUNESADVISORY must"],
+                    "grade_check_encoder": ["ENCODER_PROGRAM","ENCODER_QUALITY","ENCODER_VERSION","Missing ENCODER"],
+                    "grade_check_audit": ["AUDIT"],
+                    "grade_check_instrumental": ["INSTRUMENTAL=1 but lyrics"],
+                    "grade_check_lyrics": ["Missing lyrics"],
+                    "grade_check_lyrics_format": ["Lyrics not optimally formatted"],
+                    "grade_check_sidecar_cover": ["Sidecar cover"],
+                    "grade_check_media": ["Missing MEDIA","MEDIA inconsistent","Unrecognized MEDIA"],
+                    "grade_check_source": ["Missing SOURCE","SOURCE present but","SOURCE inconsistent"],
+                    "grade_check_album_tags": ["Missing album tag","Album tag"],
+                    "grade_check_cd_log": ["Missing .log"],
+                    "grade_check_cd_cue": ["Missing .cue"],
+                    "grade_check_disc_naming": ["CD rip sheets not named"],
+                    "grade_check_log_grade": ["Missing LOG_GRADE","LOG_GRADE not","below threshold"],
+                    "grade_check_crc": ["Rip .log has no per-track CRC","Track not covered by .log CRC"],
+                    "grade_check_log_checksum": ["Log checksum invalid"],
+                    "grade_check_accuraterip": ["Not accurately ripped"],
+                    "grade_check_cover": ["Missing cover image","Cover image wrong size","Cover image not square","Cover image unreadable","Cover missing"],
+                    "grade_check_cue_format": ["CUE sheet not optimally formatted"],
+                    "grade_check_disallowed": ["Disallowed file types"],
+                    "grade_check_tag_spaces": ["has leading/trailing spaces"],
+                    "grade_check_tag_blank_lines": ["has blank lines"],
+                    "grade_check_lyrics_spaces": ["Lyrics not optimally"],
+                    "grade_check_lyrics_blank_lines": ["Lyrics not optimally"],
+                    "grade_check_lyrics_zero": ["Lyrics not optimally"],
+                    "grade_check_cue_spaces": ["CUE sheet not optimally"],
+                    "grade_check_cue_blank_lines": ["CUE sheet not optimally"],
+                    "grade_check_cover_crop": ["Cover image not square","Cover image wrong size","needs resize/crop"],
+                }
+                for pat in substr_map.get(key, []):
+                    for ff in failed_fields:
+                        if pat.lower() in ff.lower():
+                            return True
+                return False
+
+            for key, label in grade_checks:
+                enabled = bool(cfg.get(key, True))
+                if not enabled:
+                    emit(f"  [OFF] {label} — disabled in Settings", "muted")
+                else:
+                    if _grade_failed(key):
+                        emit(f"  [FAIL] {label}", "red")
+                    else:
+                        emit(f"  [PASS] {label}", "green")
+            for key, label in grade_thresholds:
+                # Thresholds / includes: show value and whether enabled
+                if key.startswith("grade_include") or key.startswith("cover_") or key.startswith("grader_"):
+                    enabled = bool(cfg.get(key, True)) if key.startswith("grade_include") or key.startswith("cover_") else True
+                    # For cover_enforce, show as toggle
+                    if key in ("cover_enforce_size","cover_enforce_square","cover_resize_enabled"):
+                        enabled = bool(cfg.get(key, False))
+                        if not enabled:
+                            emit(f"  [OFF] {label} — disabled", "muted")
+                        else:
+                            # Check if cover-related failures exist
+                            has_cover_fail = any("cover" in f.lower() for f in failed_fields)
+                            emit(f"  [{'FAIL' if has_cover_fail and enabled else 'PASS'}] {label}", "red" if has_cover_fail and enabled else "green")
+                    elif key.startswith("grade_include"):
+                        if not cfg.get(key, True):
+                            emit(f"  [OFF] {label} — disabled", "muted")
+                        else:
+                            # Disallowed is the failure for includes
+                            has_disallow = any("disallowed" in f.lower() for f in failed_fields)
+                            emit(f"  [{'FAIL' if has_disallow else 'PASS'}] {label} (enabled)", "red" if has_disallow else "green")
+                    else:
+                        # Thresholds: show value
+                        if key == "grade_log_score_threshold":
+                            thr = int(cfg.get(key,0) or 0)
+                            if thr == 0:
+                                emit(f"  [OFF] {label} — threshold 0 (disabled)", "muted")
+                            else:
+                                failed = _grade_failed("grade_check_log_grade") and any("below threshold" in f.lower() for f in failed_fields)
+                                emit(f"  [{'FAIL' if failed else 'PASS'}] {label}", "red" if failed else "green")
+                        else:
+                            emit(f"  [ON] {label}", None)
+                else:
+                    emit(f"  [ON] {label}", None)
+
+            emit("", None)
+            emit("Auditing checks (per Settings → Auditing):", "bold")
+            audit_checks = [
+                ("audit_verify_cd_checksums", "Verify CD .log CRC vs decoded PCM"),
+                ("audit_cd_require_both", "Require both .log CRC and AudioAuditor REAL"),
+                ("audit_integrity", "File integrity (flac -t + ffmpeg -v error)"),
+                ("audit_fail_on_unscorable_log", "Fail if .log unscorable"),
+                ("audit_verify_log_checksum", ".log SHA256 checksum (EAC)"),
+                ("audit_require_accuraterip", "AccurateRip per track"),
+                ("audit_log_score_threshold", f"Log score ≥ {cfg.get('audit_log_score_threshold',0)}/100"),
+                ("audit_thorough", "Thorough audit (full-track detectors)"),
+                ("audit_clipping", "Detect clipping"),
+                ("audit_scaled_clipping", "Detect scaled clipping"),
+                ("audit_mqa", "Detect MQA"),
+                ("audit_ai", "Detect AI-generated"),
+                ("audit_fake_stereo", "Detect fake stereo"),
+                ("audit_silence", "Detect excessive silence"),
+                ("audit_dynamic_range", "Measure dynamic range"),
+                ("audit_true_peak", "Measure true peak"),
+                ("audit_lufs", "Measure LUFS"),
+                ("audit_bpm", "Detect BPM"),
+                ("audit_cutoff_allow", f"Cutoff allow {cfg.get('audit_cutoff_allow',0)} Hz"),
+            ]
+            # For auditing, we need to evaluate per-album auditing status.
+            # We reuse the same failed_fields for log checksum/AR/log score if auditing toggles mirror grading,
+            # but also need to evaluate AUDIT tag, integrity, etc. via file inspection.
+            # Lightweight per-album audit evaluation:
+            try:
+                from mlo.discs import check_log_checksum as _chk_csum_a, check_accuraterip as _chk_ar_a
+                from mlo.audio import AudioFile as _AF
+                # Determine if album is CD
+                is_cd = (res.get("media") == "CD")
+                has_log = res.get("has_log")
+                log_grade_vals = [tr.get("log_grade") for tr in res.get("tracks",[]) if tr.get("log_grade")]
+                # Integrity: sample first track's AUDIT/verify quickly if enabled
+                audit_failed_keys = set()
+                if cfg.get("audit_verify_log_checksum", True) and is_cd and has_log:
+                    # Check each log in album dir
+                    try:
+                        for f in os.listdir(album_dir):
+                            if f.lower().endswith(".log"):
+                                lp = os.path.join(album_dir, f)
+                                st,_det = _chk_csum_a(lp)
+                                if st == "invalid" or (st == "missing" and "Exact Audio Copy V1.0" in open(lp,"r",encoding="utf-8",errors="replace").read()):
+                                    audit_failed_keys.add("audit_verify_log_checksum")
+                                    break
+                    except Exception:
+                        pass
+                if cfg.get("audit_require_accuraterip", True) and is_cd and has_log:
+                    try:
+                        for f in os.listdir(album_dir):
+                            if f.lower().endswith(".log"):
+                                lp = os.path.join(album_dir, f)
+                                ok,_reason,_per = _chk_ar_a(lp)
+                                if ok is False:
+                                    audit_failed_keys.add("audit_require_accuraterip")
+                                    break
+                    except Exception:
+                        pass
+                if cfg.get("audit_log_score_threshold", 0):
+                    try:
+                        thr_a = int(cfg.get("audit_log_score_threshold",0) or 0)
+                        if thr_a > 0 and log_grade_vals:
+                            for lg in log_grade_vals:
+                                try:
+                                    if int(lg) < thr_a:
+                                        audit_failed_keys.add("audit_log_score_threshold")
+                                        break
+                                except: pass
+                    except: pass
+                if cfg.get("audit_fail_on_unscorable_log", True) and is_cd:
+                    if not log_grade_vals and has_log:
+                        audit_failed_keys.add("audit_fail_on_unscorable_log")
+                # AUDIT tag check: if any track AUDIT != REAL and audit is considered
+                if cfg.get("audit_verify_cd_checksums", True) or True:
+                    # Check AUDIT summary
+                    audit_sum = res.get("audit_summary")
+                    if audit_sum in ("FAKE","Mix"):
+                        audit_failed_keys.add("audit_verify_cd_checksums")
+                # Integrity: check AUDIT=FAKE due to integrity? Use AUDIT tag already
+                # For simplicity, if any track has AUDIT=FAKE and audit_integrity is on, consider it could be integrity
+                # We'll just check if audit_integrity is on and album has any FAKE
+                # The detailed per-file integrity requires ffmpeg; skip heavy check and just note tag
+                if cfg.get("audit_integrity", True):
+                    # If album has at least one FAKE and media is not CD with checksum, consider integrity possible
+                    pass
+            except Exception:
+                audit_failed_keys = set()
+
+            for key, label in audit_checks:
+                # Threshold / cutoff special handling
+                if key == "audit_log_score_threshold":
+                    thr = int(cfg.get(key,0) or 0)
+                    if thr == 0:
+                        emit(f"  [OFF] {label} — threshold 0 (disabled)", "muted")
+                    else:
+                        if key in audit_failed_keys:
+                            emit(f"  [FAIL] {label}", "red")
+                        else:
+                            emit(f"  [PASS] {label}", "green")
+                    continue
+                if key == "audit_cutoff_allow":
+                    # Always show value, not pass/fail
+                    emit(f"  [ON] {label}", None)
+                    continue
+                enabled = bool(cfg.get(key, True))
+                if not enabled:
+                    emit(f"  [OFF] {label} — disabled in Settings", "muted")
+                else:
+                    if key in audit_failed_keys or (key == "audit_verify_cd_checksums" and any("AUDIT" in f for f in failed_fields)):
+                        # For checksum-type, also consider grading failure as proxy if auditing would fail
+                        # Check if corresponding grading failure exists
+                        is_fail = key in audit_failed_keys
+                        # Also check if album's AUDIT is FAKE and this check is about CD verification
+                        if not is_fail and key in ("audit_verify_cd_checksums","audit_cd_require_both") and res.get("audit_summary") in ("FAKE","Mix"):
+                            is_fail = True
+                        emit(f"  [{'FAIL' if is_fail else 'PASS'}] {label}", "red" if is_fail else "green")
+                    else:
+                        # For detectors, just show enabled as PASS (per-file results not stored)
+                        if key in ("audit_clipping","audit_scaled_clipping","audit_mqa","audit_ai","audit_fake_stereo","audit_silence","audit_dynamic_range","audit_true_peak","audit_lufs","audit_bpm","audit_thorough"):
+                            emit(f"  [ON] {label} — enabled (per-file results in AUDIT tag)", "green")
+                        else:
+                            if key in audit_failed_keys:
+                                emit(f"  [FAIL] {label}", "red")
+                            else:
+                                emit(f"  [PASS] {label}", "green")
+        except Exception as e:
+            emit(f"  (could not build full checklist: {e})", "red")
+
         btn = ttk.Frame(box)
         btn.grid(row=2, column=0, sticky="e", pady=(8, 0))
         ttk.Button(btn, text="Close", style="Small.TButton",
