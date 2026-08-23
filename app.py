@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Music Library Optimizer - Desktop Application (v1.6.0 - Tkinter)
+Music Library Optimizer - Desktop Application (v1.6.1 - Tkinter)
 ================================================================
 Dark-themed Tkinter GUI front-end for the `mlo` core package.
 Replaces the former PySide6 revamp (removed as obsolete) — uses the
@@ -227,6 +227,7 @@ CONFIG_FIELDS = [
     ("grade_check_disc_naming", "Grading: CD .log/.cue Naming (CD-N)", "bool", None),
     ("grade_check_log_grade", "Grading: LOG_GRADE Missing/Range", "bool", None),
     ("grade_check_crc", "Grading: .log CRC Coverage", "bool", None),
+    ("grade_check_cd_format", "Grading: CD Must Be 16-bit 44.1 kHz", "bool", None),
     ("grade_check_cover", "Grading: Cover Missing/Size/Square", "bool", None),
     ("grade_check_cue_format", "Grading: CUE Formatting", "bool", None),
     ("grade_check_disallowed", "Grading: Disallowed File Types", "bool", None),
@@ -241,6 +242,7 @@ CONFIG_FIELDS = [
     ("audit_verify_log_checksum", "Verify .log Checksum (SHA256 at bottom)", "bool", None),
     ("audit_require_accuraterip", "Require AccurateRip Match for All Tracks", "bool", None),
     ("audit_log_score_threshold", "Audit Log Score Minimum to Pass (0-100)", "int", (0, 100)),
+    ("audit_check_cd_format", "Auditing: CD Must Be 16-bit 44.1 kHz", "bool", None),
     ("audit_batch_size", "Audit Batch Size (50-500)", "int", (50, 500)),
     ("audit_batch_timeout_s", "Audit Batch Timeout (s)", "int", (10, 120)),
     ("audit_per_file_timeout_s", "Audit Per-File Timeout (s)", "int", (10, 60)),
@@ -886,6 +888,8 @@ FIELD_DESCRIPTIONS = {
         "Grading: for MEDIA=CD require LOG_GRADE tag 0-100 on every track (when write_log_grade enabled). When off, missing/out-of-range LOG_GRADE doesn't fail (threshold still applies if on).",
     "grade_check_crc":
         "Grading: for MEDIA=CD require .log to carry per-track CRCs and every track to be covered. When off, missing CRCs / uncovered tracks don't fail.",
+    "grade_check_cd_format":
+        "Grading: for MEDIA=CD require audio is exactly 16-bit 44.1 kHz (CD-DA). When on (default), any CD track not 16/44.1 fails grading — helps detect fake rips from upsampled sources. Disable to allow non-CD rates for CD-tagged files.",
     "grade_check_cover":
         "Grading: require a cover image (cover.jpg/png/jxl) that passes size/square checks. When off, cover missing/size/square doesn't fail grading. Individual cover_enforce_* still gate size/square.",
     "grade_check_cue_format":
@@ -931,6 +935,8 @@ FIELD_DESCRIPTIONS = {
         "Audit: require every track to be Accurately Ripped (AR confidence ≥1, present in DB). When on (default), if even one track is 'Track not present', 'Cannot be verified', or 'Rip may not be accurate' (Logchecker Details), the whole disc AUDIT=FAKE. Disable to allow non-AR rips.",
     "audit_log_score_threshold":
         "Audit: minimum Logchecker score (0-100) for a CD rip to pass auditing. 0 (default) means any score passes; 80/100 require good/perfect rip. Per-disc via LOG_GRADE tag; failing logs make disc AUDIT=FAKE. 0 disables threshold.",
+    "audit_check_cd_format":
+        "Auditing: for MEDIA=CD require audio is exactly 16-bit 44.1 kHz (CD-DA). When on (default), any CD track not 16/44.1 is AUDIT=FAKE — helps detect fake rips from hi-res upsampled sources. Disable to allow non-CD rates.",
     "audit_batch_size":
         "AudioAuditor batch size: paths per CLI invocation. 250 default (CLI supports up to 50000); smaller batches give finer progress.",
     "audit_batch_timeout_s":
@@ -1516,7 +1522,7 @@ class ConfigDialog(tk.Toplevel):
                 "grade_check_album_tags",
                 "grade_check_cd_log", "grade_check_cd_cue",
                 "grade_check_disc_naming", "grade_check_log_grade",
-                "grade_check_crc", "grade_check_cue_format",
+                "grade_check_crc", "grade_check_cd_format", "grade_check_cue_format",
             ]),
             ("10 — Grading  ·  Strict Formatting", [
                 "grade_check_tag_spaces", "grade_check_tag_blank_lines",
@@ -1529,7 +1535,7 @@ class ConfigDialog(tk.Toplevel):
                 "audit_verify_cd_checksums", "audit_cd_require_both",
                 "audit_integrity", "audit_fail_on_unscorable_log",
                 "audit_verify_log_checksum", "audit_require_accuraterip",
-                "audit_log_score_threshold",
+                "audit_log_score_threshold", "audit_check_cd_format",
             ]),
             ("12 — Auditing  ·  Detectors", [
                 "audit_clipping", "audit_scaled_clipping", "audit_mqa",
@@ -2241,7 +2247,7 @@ class SetupWizard(tk.Toplevel):
         ),
         (
             "v1.6.0 Strict — Perfect Scores (100/100, 0px, 100q)",
-            "Applies v1.6.0 strict defaults — your config.json: Log scores must be 100/100 (perfect rip) • cover size tolerance 0px / strict square 0.0 / crop 0.0 • JPEG quality 100 (max) • no [00:00.00] zero timestamp • all ENCODER_PROGRAM on • run order 1→2→8→3→5→6→4→7 (Grade before DR). All grading checks remain on. Matches new defaults.",
+            "Applies v1.6.0 strict defaults — your config.json: Log scores must be 100/100 (perfect rip) • cover size tolerance 0px / strict square 0.0 / crop 0.0 • JPEG quality 100 (max) • no [00:00.00] zero timestamp • all ENCODER_PROGRAM on • run order 1→2→8→3→5→6→4→7 (Grade before DR). CD must be 16-bit 44.1 kHz (true CD-DA). All grading checks remain on. Matches new defaults.",
             {"grade_log_score_threshold": 100, "audit_log_score_threshold": 100,
              "grader_cover_size_tolerance_px": 0, "grader_strict_square_threshold": 0.0,
              "cover_crop_threshold": 0.0, "images_jpeg_quality": 100,
@@ -2254,7 +2260,8 @@ class SetupWizard(tk.Toplevel):
              "cover_enforce_size": True, "cover_enforce_square": True,
              "cover_resize_enabled": True, "cover_target_size": 1000, "cover_force_exact_size": True,
              "audit_thorough": True, "audit_verify_log_checksum": True, "audit_require_accuraterip": True,
-             "grade_check_log_checksum": True, "grade_check_accuraterip": True},
+             "grade_check_log_checksum": True, "grade_check_accuraterip": True,
+             "grade_check_cd_format": True, "audit_check_cd_format": True},
         ),
     ]
 
@@ -4498,6 +4505,7 @@ class App(tk.Tk):
                 "grade_check_disc_naming": ["CD rip sheets not named"],
                 "grade_check_log_grade": ["Missing LOG_GRADE","LOG_GRADE not","below threshold"],
                 "grade_check_crc": ["Rip .log has no per-track CRC","Track not covered by .log CRC"],
+                "grade_check_cd_format": ["CD must be 16-bit", "not 16-bit", "not 44.1"],
                 "grade_check_log_checksum": ["Log checksum invalid"],
                 "grade_check_accuraterip": ["Not accurately ripped"],
                 "grade_check_cover": ["Missing cover image","Cover image wrong size","Cover image not square","Cover image unreadable","Cover missing"],
@@ -4557,6 +4565,7 @@ class App(tk.Tk):
                     ("grade_check_disc_naming", "CD naming CD-N"),
                     ("grade_check_log_grade", "LOG_GRADE"),
                     ("grade_check_crc", "CRC coverage"),
+                    ("grade_check_cd_format", "CD 16-bit 44.1 kHz"),
                     ("grade_check_log_checksum", "SHA256 checksum"),
                     ("grade_check_accuraterip", "AccurateRip"),
                     ("grade_check_cue_format", "CUE canonical"),
@@ -4631,6 +4640,7 @@ class App(tk.Tk):
                     ("audit_log_score_threshold", f"Log score ≥ {cfg.get('audit_log_score_threshold',0)}/100"),
                     ("audit_fail_on_unscorable_log", "Fail if .log unscorable"),
                     ("audit_integrity", "File integrity (flac -t + ffmpeg)"),
+                    ("audit_check_cd_format", "CD 16-bit 44.1 kHz"),
                 ]),
                 ("Detectors", [
                     ("audit_thorough", "Thorough (full-track)"),
@@ -4699,6 +4709,34 @@ class App(tk.Tk):
                 if cfg.get("audit_fail_on_unscorable_log", True) and is_cd:
                     if not log_grade_vals and has_log:
                         audit_failed_keys.add("audit_fail_on_unscorable_log")
+                if cfg.get("audit_check_cd_format", True) and is_cd:
+                    try:
+                        for f in os.listdir(album_dir):
+                            if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac")):
+                                fp2 = os.path.join(album_dir, f)
+                                try:
+                                    af2 = _AF(fp2)
+                                    if af2.audio is None or not hasattr(af2.audio, "info") or af2.audio.info is None:
+                                        continue
+                                    inf2 = af2.audio.info
+                                    b2 = getattr(inf2, "bits_per_sample", None)
+                                    if b2 is None:
+                                        b2 = getattr(inf2, "bits", None)
+                                    r2 = getattr(inf2, "sample_rate", None)
+                                    if r2 is None:
+                                        continue
+                                    ok2 = True
+                                    if b2 is not None and b2 != 16:
+                                        ok2 = False
+                                    if r2 != 44100:
+                                        ok2 = False
+                                    if not ok2:
+                                        audit_failed_keys.add("audit_check_cd_format")
+                                        break
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
                 # AUDIT tag check: if any track AUDIT != REAL and audit is considered
                 if cfg.get("audit_verify_cd_checksums", True) or True:
                     # Check AUDIT summary

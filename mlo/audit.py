@@ -1210,6 +1210,100 @@ def run_audit_library(config):
                                 except Exception:
                                     pass
 
+    # --------------------------------------------------------------
+    # Audit FAIL on CD not 16-bit 44.1 kHz (true CD-DA)
+    # --------------------------------------------------------------
+    # Audit FAIL on CD not 16-bit 44.1 kHz (true CD-DA) — independent of CRC check
+    # --------------------------------------------------------------
+    if config.get("audit_check_cd_format", True):
+        # Build CD file set independently (MEDIA=CD) so it works even when CRC check is off
+        _cd_files_for_format = set()
+        try:
+            from mlo.audio import AudioFile as _AFCF
+            for p in files:
+                try:
+                    af_tmp = _AFCF(p)
+                    if af_tmp.audio is not None and str(af_tmp.get_tag("MEDIA") or "").strip() == "CD":
+                        _cd_files_for_format.add(p)
+                except Exception:
+                    continue
+        except Exception:
+            _cd_files_for_format = cd_files
+        if _cd_files_for_format:
+            cd_format_failed = {}
+            for fp in list(_cd_files_for_format):
+                if fp not in files:
+                    continue
+                try:
+                    from mlo.audio import AudioFile as _AFmt2
+                    af2 = _AFmt2(fp)
+                    if af2.audio is None or not hasattr(af2.audio, "info") or af2.audio.info is None:
+                        continue
+                    info2 = af2.audio.info
+                    bits2 = getattr(info2, "bits_per_sample", None)
+                    if bits2 is None:
+                        bits2 = getattr(info2, "bits", None)
+                    rate2 = getattr(info2, "sample_rate", None)
+                    if rate2 is None:
+                        continue
+                    is_ok2 = True
+                    detail2 = ""
+                    if bits2 is not None and bits2 != 16:
+                        is_ok2 = False
+                        detail2 = f"{bits2}-bit"
+                    if rate2 != 44100:
+                        is_ok2 = False
+                        detail2 = f"{detail2} {rate2}Hz".strip() if detail2 else f"{rate2}Hz"
+                    if not is_ok2:
+                        cd_format_failed[fp] = detail2 or "not 16/44.1"
+                except Exception:
+                    continue
+        if cd_format_failed:
+            log(c(f"Audit FAIL on CD format: {len(cd_format_failed)} CD track(s) not 16-bit 44.1 kHz — marking as failed (audit_check_cd_format on)", Color.RED))
+            for fp, detail2 in cd_format_failed.items():
+                canon_fp2 = _canon2(fp)
+                try:
+                    rel2 = os.path.relpath(fp, folder)
+                except ValueError:
+                    rel2 = os.path.basename(fp)
+                if file_status_map.get(canon_fp2) == "Fake" and file_severity_map.get(canon_fp2) == "fail":
+                    issue_counts["not 16-bit 44.1 kHz"] = issue_counts.get("not 16-bit 44.1 kHz", 0) + 1
+                    continue
+                prev_status2 = file_status_map.get(canon_fp2)
+                prev_sev2 = file_severity_map.get(canon_fp2)
+                if canon_fp2 in file_status_map:
+                    if prev_status2 == "Real":
+                        status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
+                        status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                        if prev_sev2 == "warn":
+                            warned = max(0, warned - 1)
+                    elif prev_status2 == "Unknown":
+                        status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
+                        status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                    elif prev_status2 not in ("Fake", "Corrupt", "Optimized"):
+                        status_counts[prev_status2] = max(0, status_counts.get(prev_status2, 0) - 1)
+                        status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                    else:
+                        issue_counts["not 16-bit 44.1 kHz"] = issue_counts.get("not 16-bit 44.1 kHz", 0) + 1
+                        file_status_map[canon_fp2] = "Fake"
+                        file_severity_map[canon_fp2] = "fail"
+                        continue
+                else:
+                    if stats.get("skipped_count", 0) > 0:
+                        stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
+                    stats["total_scanned"] = stats.get("total_scanned", 0) + 1
+                    status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                flagged.append((rel2, f"not 16-bit 44.1 kHz ({detail2})"))
+                issue_counts["not 16-bit 44.1 kHz"] = issue_counts.get("not 16-bit 44.1 kHz", 0) + 1
+                stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
+                file_status_map[canon_fp2] = "Fake"
+                file_severity_map[canon_fp2] = "fail"
+                if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
+                    try:
+                        _write_audit_tag(fp, "FAKE")
+                    except Exception:
+                        pass
+
     stats["grade_dist"]["PASS"] = status_counts["Real"]
     stats["summary_pass"] = max(0, status_counts["Real"] - warned)
     stats["summary_total"] = stats["total_scanned"]

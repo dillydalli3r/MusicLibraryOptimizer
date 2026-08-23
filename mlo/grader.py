@@ -1274,6 +1274,56 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             except Exception:
                 pass
 
+        # CD format: must be 16-bit 44.1 kHz (CD-DA) — helps detect fake rips from hi-res upsampled sources
+        if cfg.get("grade_check_cd_format", True) and media_summary == "CD":
+            try:
+                for ap in audio_paths:
+                    tr_track = next(
+                        (t for t in tracks
+                         if t.get("unreadable") is False
+                         and os.path.join(album_dir, t["file"]) == ap),
+                        None)
+                    if tr_track is None:
+                        continue
+                    # Get audio format details via mutagen
+                    try:
+                        af_fmt = AudioFile(ap)
+                        if af_fmt.audio is None or not hasattr(af_fmt.audio, "info") or af_fmt.audio.info is None:
+                            continue
+                        info = af_fmt.audio.info
+                        # mutagen FLAC/OGG: bits_per_sample + sample_rate; MP3: sample_rate; MP4: sample_rate/bits
+                        bits = getattr(info, "bits_per_sample", None)
+                        if bits is None:
+                            bits = getattr(info, "bits_per_sample", None)  # fallback
+                            # For some formats, bits may be in different attr
+                            if bits is None:
+                                bits = getattr(info, "bits", None)
+                        rate = getattr(info, "sample_rate", None)
+                        if rate is None:
+                            rate = getattr(info, "sample_rate", None)
+                        # Only check when we can determine both; CD must be 16/44.1
+                        # For MP3/MP4 where bits not available, check rate only
+                        is_ok = True
+                        detail = ""
+                        if bits is not None and bits != 16:
+                            is_ok = False
+                            detail = f"{bits}-bit"
+                        if rate is not None and rate != 44100:
+                            is_ok = False
+                            detail = f"{detail} {rate}Hz".strip() if detail else f"{rate}Hz"
+                        elif rate is None:
+                            # No rate info: cannot verify, skip
+                            continue
+                        total_checks += 1
+                        if not is_ok:
+                            failed_checks += 1
+                            add_issue(f"CD must be 16-bit 44.1 kHz (found {detail or 'unknown format'})", tr_track["file"])
+                            tr_track["issues"].append("CD_FORMAT")
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
         # Log SHA256 checksum verification (EAC logs have Rijndael checksum)
         if cfg.get("grade_check_log_checksum", cfg.get("audit_verify_log_checksum", True)):
             try:
