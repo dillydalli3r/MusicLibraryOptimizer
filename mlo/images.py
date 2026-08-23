@@ -1914,6 +1914,12 @@ def run_process_images(config):
     if targets is None:
         files = sorted(_walk_files(target_dir, VALID_EXTENSIONS))
 
+    log(f"found {len(files)} image file(s) for processing")
+    for f in files[:10]:
+        log(f"  - {os.path.relpath(f, target_dir) if target_dir in f else f}")
+    if len(files) > 10:
+        log(f"  ... and {len(files)-10} more")
+
     if not files:
         log("No image files found.")
         return stats
@@ -2049,6 +2055,7 @@ def run_process_images(config):
                     f,
                 ))
 
+    log(f"prepared {len(tasks)} task(s) from {len(files)} file(s) (mode: {mode})")
     if not tasks:
         log(f"No active image tasks after skips ({stats['skipped_count']} skipped).")
         return stats
