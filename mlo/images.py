@@ -253,7 +253,12 @@ def _prepare_image_streamlined(src_path, dst_path, config, remove_alpha=False):
                 elif img.mode != "RGB":
                     img = img.convert("RGB")
                 save_kwargs["format"] = "JPEG"
-                save_kwargs["quality"] = 95
+                try:
+                    q = int(config.get("images_jpeg_quality", 95)) if config else 95
+                    q = max(70, min(100, q))
+                except Exception:
+                    q = 95
+                save_kwargs["quality"] = q
                 save_kwargs["optimize"] = True
             elif ext_dst == ".png":
                 save_kwargs["format"] = "PNG"
@@ -488,7 +493,12 @@ def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_t
                             except Exception:
                                 pass
                         save_kwargs["format"] = "JPEG"
-                        save_kwargs["quality"] = 95
+                        try:
+                            q = int(config.get("images_jpeg_quality", 95)) if config else 95
+                            q = max(70, min(100, q))
+                        except Exception:
+                            q = 95
+                        save_kwargs["quality"] = q
                         save_kwargs["optimize"] = True
                         try:
                             save_kwargs["subsampling"] = 0
@@ -588,6 +598,13 @@ def _process_image_to_jxl(args):
         temp_out_path = final_out_path + ".tmp"
 
     temp_files = []
+    # JPEG XL distance from config (0.0 lossless)
+    try:
+        _dist = float(config.get("jpegxl_distance", 0.0)) if config else 0.0
+        _dist = max(0.0, min(2.0, _dist))
+        dist_s = ("%f" % _dist).rstrip("0").rstrip(".") if _dist != 0 else "0"
+    except Exception:
+        dist_s = "0"
 
     try:
         try:
@@ -849,7 +866,7 @@ def _process_image_to_jxl(args):
             cjxl_path,
             input_for_cjxl,
             temp_out_path,
-            "-d", "0",
+            "-d", dist_s,
             "-e", str(effort),
             "-j", str(threads_to_use),
             "--container=1",
@@ -1344,6 +1361,12 @@ def _process_jxl_in_place(args):
     filename = os.path.basename(src_path)
     temp_out_path = src_path + ".opttmp.jxl"
     temp_files = []
+    try:
+        _dist2 = float(config.get("jpegxl_distance", 0.0)) if config else 0.0
+        _dist2 = max(0.0, min(2.0, _dist2))
+        dist_s = ("%f" % _dist2).rstrip("0").rstrip(".") if _dist2 != 0 else "0"
+    except Exception:
+        dist_s = "0"
 
     try:
         try:
@@ -1507,7 +1530,7 @@ def _process_jxl_in_place(args):
             cjxl_path,
             input_for_cjxl,
             temp_out_path,
-            "-d", "0",
+            "-d", dist_s,
             "-e", str(effort),
             "-j", str(threads_to_use),
             "--container=1",

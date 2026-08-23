@@ -127,9 +127,13 @@ CONFIG_FIELDS = [
     # FLAC
     ("flac_level", "FLAC Level (0-8)", "int", (0, 8)),
     ("add_seektables", "Add SeekTables", "bool", None),
+    ("flac_preserve_picture", "Preserve Embedded Covers (don't strip PICTURE block)", "bool", None),
+    ("flac_no_padding", "Strip Padding Blocks", "bool", None),
     ("force_reencode_flac", "Force Re-encode FLACs", "bool", None),
     # Images — global
     ("jpegxl_effort", "JPEG XL Effort (1-10)", "int", (1, 10)),
+    ("jpegxl_distance", "JPEG XL Distance (0.0=lossless, 1.0=visually lossless)", "str", None),
+    ("images_jpeg_quality", "JPEG Quality for Resized Covers (70-100)", "int", (70, 100)),
     ("reencode_images", "Re-encode Images", "bool", None),
     ("reencode_to_jxl", "Re-encode to JXL", "bool", None),
     ("convert_jxl_back", "Convert JXL Back to JPEG/PNG", "bool", None),
@@ -163,6 +167,7 @@ CONFIG_FIELDS = [
     ("lrc_enhanced_word_sync", "Word-Level Timestamps", "bool", None),
     ("lrc_extended_enabled", "Enable Extended LRC", "bool", None),
     ("lrc_add_zero_timestamp", "Add [00:00.00] to First Line", "bool", None),
+    ("lrc_zero_timestamp_blank", "Zero Timestamp is Blank Line", "bool", None),
     ("lrc_zero_timestamp_target", "Zero Timestamp Target", "choice", ("EMBEDDED", "LRC", "BOTH")),
     ("append_final_newline", "Append Final Newline", "bool", None),
     ("fill_empty_source", "Fill Empty SOURCE for Digital Media", "bool", None),
@@ -175,6 +180,8 @@ CONFIG_FIELDS = [
     ("discs_rename_enabled", "Auto-Rename .cue/.log to CD-N", "bool", None),
     ("discs_rename_pattern", "Rename pattern (use {n} for disc number)", "str", None),
     ("discs_rename_single_fallback", "Single-Disc Fallback: lone .cue/.log → CD-1 when no disc data", "bool", None),
+    ("discs_toc_tolerance_s", "TOC Tolerance (s) for log duration match", "str", None),
+    ("discs_toc_unique_margin_s", "TOC Unique Margin (s)", "str", None),
     # Tags — Media/Source + writes
     ("normalize_media_source", "Normalize MEDIA/SOURCE", "bool", None),
     ("digital_media_source_value", "Digital SOURCE Value", "str", None),
@@ -199,6 +206,8 @@ CONFIG_FIELDS = [
     ("grade_check_cue_spaces", "Check CUE for Leading/Trailing Spaces", "bool", None),
     ("grade_check_cue_blank_lines", "Check CUE for Blank Lines", "bool", None),
     ("grade_check_cover_crop", "Check Cover Crop/Size", "bool", None),
+    ("grader_cover_size_tolerance_px", "Grading: Cover Size Tolerance (px)", "int", (0, 5)),
+    ("grader_strict_square_threshold", "Grading: Strict Square Threshold (0.00-0.05)", "str", None),
     # Audio Audit
     ("audit_thorough", "Thorough Audit (slower)", "bool", None),
     ("force_audit", "Force Audit (ignore AUDIT tags)", "bool", None),
@@ -206,6 +215,9 @@ CONFIG_FIELDS = [
     ("audit_verify_cd_checksums", "Verify CD Rips vs .log Checksums", "bool", None),
     ("audit_cd_require_both", "CD: Require Both Log & AudioAuditor = REAL", "bool", None),
     ("audit_integrity", "Verify File Integrity (like foobar2000 Verify Integrity: FLAC CRC, MP3 sync, ffmpeg decode)", "bool", None),
+    ("audit_batch_size", "Audit Batch Size (50-500)", "int", (50, 500)),
+    ("audit_batch_timeout_s", "Audit Batch Timeout (s)", "int", (10, 120)),
+    ("audit_per_file_timeout_s", "Audit Per-File Timeout (s)", "int", (10, 60)),
     ("audit_clipping", "Audit Clipping Detection", "bool", None),
     ("audit_scaled_clipping", "Audit Scaled Clipping Detection", "bool", None),
     ("audit_mqa", "Audit MQA Detection", "bool", None),
@@ -605,9 +617,22 @@ FIELD_DESCRIPTIONS = {
     "force_reencode_flac":
         "Re-encode every FLAC even when its ENCODER marker tags say it is "
         "already optimized. Slow — normally unnecessary.",
+    "flac_preserve_picture":
+        "When on, keep embedded cover PICTURE blocks in FLAC files. When off "
+        "(default), PICTURE blocks are stripped from FLAC — covers are kept as "
+        "separate cover.* files instead.",
+    "flac_no_padding":
+        "When on (default), remove PADDING blocks from FLAC files to save space. "
+        "Keep off if you need padding for quick tag edits without rewriting.",
     "jpegxl_effort":
         "cjxl encoding effort 1-10. Higher effort compresses better but "
         "takes much longer.",
+    "jpegxl_distance":
+        "cjxl distance (0.0 = lossless, 1.0 = visually lossless). 0.0 by default; "
+        "increase for smaller lossy JXL covers.",
+    "images_jpeg_quality":
+        "JPEG quality for resized cover images (70-100). 95 by default. Applies "
+        "when a cover is cropped/resized via Pillow before encoding.",
     "reencode_images":
         "Master switch for image processing. When off, the Process Images "
         "script does nothing.",
@@ -702,6 +727,9 @@ FIELD_DESCRIPTIONS = {
         "is added as the very first line; when off, an existing blank zero is "
         "removed. Works for both standard and enhanced LRCs via the target below. "
         "Detection is literal and idempotent.",
+    "lrc_zero_timestamp_blank":
+        "When on, the zero timestamp line is blank ([00:00.00] alone). When off "
+        "(default), it is tight to the first lyric line text.",
     "lrc_zero_timestamp_target":
         "Where the [00:00.00] zero timestamp is added/removed: EMBEDDED (only embedded "
         "LYRICS tag), LRC (only .lrc sidecar), or BOTH (default, respects your "
@@ -733,6 +761,13 @@ FIELD_DESCRIPTIONS = {
         "Customize the autorename pattern: use {n} as disc number "
         "(e.g. CD-{n} → CD-1.log, Disc {n} → Disc 1.log). Change both .cue "
         "and .log together; grading checks the same pattern. Must contain {n}.",
+    "discs_toc_tolerance_s":
+        "TOC duration tolerance (seconds) for matching a .log's TOC table to "
+        "actual audio durations when renaming logs. 4.0 s default; tighter avoids "
+        "misassignment, looser helps live/gap albums.",
+    "discs_toc_unique_margin_s":
+        "TOC unique margin (seconds) required before a TOC match is trusted. "
+        "Must exceed the second-best match by this amount. 4.0 s default.",
     "normalize_media_source":
         "Enforce the MEDIA/SOURCE rule: albums with MEDIA 'Digital Media' "
         "must have SOURCE populated; all other albums must not have SOURCE.",
@@ -783,6 +818,10 @@ FIELD_DESCRIPTIONS = {
         "When on (default), CUE sheets with blank lines fail grading.",
     "grade_check_cover_crop":
         "When on (default), covers outside the crop threshold or wrong size fail grading.",
+    "grader_cover_size_tolerance_px":
+        "Grading: allowed pixel deviation for cover size check. 1 px default (e.g. 999-1001 passes for 1000).",
+    "grader_strict_square_threshold":
+        "Grading: strict square threshold when Force Exact Size is on. 0.005 (0.5%) default; small values require near-perfect squares.",
     "audit_thorough":
         "Audit Library: enable AudioAuditor's full-track detectors "
         "(silence, dynamic range, true peak, LUFS, BPM). Much slower than "
@@ -811,6 +850,12 @@ FIELD_DESCRIPTIONS = {
         "When on (default), a file that fails integrity (truncated, CRC "
         "mismatch, sync error) is always AUDIT=FAKE, regardless of the "
         "other detectors.",
+    "audit_batch_size":
+        "AudioAuditor batch size: paths per CLI invocation. 250 default (CLI supports up to 50000); smaller batches give finer progress.",
+    "audit_batch_timeout_s":
+        "Timeout (seconds) for each AudioAuditor batch. 30 s default; raise on slow HDD/NAS where fast-scan hangs.",
+    "audit_per_file_timeout_s":
+        "Timeout (seconds) for per-file AudioAuditor fallback (info). 30 s default.",
     "audit_clipping":
         "Audit: detect clipped samples (--no-clipping when off). "
         "Loud modern masters often clip at the true-peak ceiling and are "
@@ -1252,6 +1297,32 @@ class ConfigDialog(tk.Toplevel):
         outer = ttk.Frame(self, padding=16)
         outer.pack(fill=tk.BOTH, expand=True)
 
+        # --- Search + jump navigation (improves 120+ options navigability)
+        top_bar = ttk.Frame(outer)
+        top_bar.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(top_bar, text="Search:", style="Muted.TLabel").pack(side=tk.LEFT)
+        self.search_var = tk.StringVar()
+        search_entry = ttk.Entry(top_bar, textvariable=self.search_var)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        ttk.Button(top_bar, text="Clear", width=6, command=lambda: self.search_var.set("")).pack(side=tk.LEFT)
+        self.search_count_var = tk.StringVar(value="")
+        ttk.Label(top_bar, textvariable=self.search_count_var, style="Muted.TLabel", font=_font(8)).pack(side=tk.LEFT, padx=6)
+        nav_frame = ttk.Frame(outer)
+        nav_frame.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(nav_frame, text="Jump to:", style="Muted.TLabel").pack(side=tk.LEFT)
+        self.nav_var = tk.StringVar()
+        self.nav_combo = ttk.Combobox(nav_frame, textvariable=self.nav_var, state="readonly", width=34)
+        self.nav_combo.pack(side=tk.LEFT, padx=6)
+        btn_expand = ttk.Button(nav_frame, text="Expand All", width=10, command=lambda: self._set_all_groups_collapsed(False))
+        btn_expand.pack(side=tk.RIGHT, padx=2)
+        btn_collapse = ttk.Button(nav_frame, text="Collapse All", width=11, command=lambda: self._set_all_groups_collapsed(True))
+        btn_collapse.pack(side=tk.RIGHT)
+        # Store group header/box for search/collapse/jump
+        self._group_headers = {}
+        self._group_boxes = {}
+        self._group_keys = {}
+        self._group_collapsed = {}
+
         canvas = tk.Canvas(outer, highlightthickness=0, background=PANEL)
         scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
         inner = ttk.Frame(canvas, style="Panel.TFrame")
@@ -1299,21 +1370,22 @@ class ConfigDialog(tk.Toplevel):
         )
         row += 1
 
-        # --- Option groups — v1.2.0 organized, enhanced LRC + zero-timestamp
+        # --- Option groups — v1.5 systematic, categorized by pipeline purpose
         # Force options are intentionally NOT in Settings — use the Library's Force ▾ menu
         groups = [
-            ("FLAC Encoding", ["flac_level", "add_seektables"]),
-            ("Cover Art — Processing", [
-                "jpegxl_effort", "reencode_images", "reencode_to_jxl",
+            ("FLAC Encoding", ["flac_level", "add_seektables", "flac_preserve_picture", "flac_no_padding"]),
+            ("Images — Global", [
+                "jpegxl_effort", "jpegxl_distance", "images_jpeg_quality",
+                "reencode_images", "reencode_to_jxl",
                 "convert_jxl_back", "rename_to_cover", "remove_alpha",
                 "jpeg_progressive", "png_optimization_level",
             ]),
-            ("Cover Art — Resize & Crop", [
+            ("Cover — Resize & Crop", [
                 "cover_resize_enabled", "cover_target_size",
                 "cover_crop_enabled", "cover_crop_threshold",
                 "cover_force_exact_size",
             ]),
-            ("Cover Art — Per-Format", [
+            ("Cover — Per-Format", [
                 "cover_jpeg_enabled", "cover_png_enabled", "cover_jxl_enabled",
                 "cover_jpeg_target_size", "cover_png_target_size",
                 "cover_jxl_target_size",
@@ -1322,7 +1394,7 @@ class ConfigDialog(tk.Toplevel):
                 "optimize_lrc", "optimize_embedded_lyrics", "lyrics_format",
                 "lrc_timestamp_precision", "lrc_strip_metadata",
                 "lrc_collapse_blank_lines", "lrc_add_zero_timestamp",
-                "lrc_zero_timestamp_target",
+                "lrc_zero_timestamp_blank", "lrc_zero_timestamp_target",
                 "append_final_newline",
             ]),
             ("Enhanced LRC", [
@@ -1333,29 +1405,33 @@ class ConfigDialog(tk.Toplevel):
                 "keep_empty_cue_lines", "keep_other_cue_lines", "cue_file_type",
                 "cue_fix_filenames",
             ]),
-            ("CD Rips", [
+            ("CD & Discs", [
                 "discs_rename_enabled", "discs_rename_pattern",
                 "discs_rename_single_fallback",
+                "discs_toc_tolerance_s", "discs_toc_unique_margin_s",
             ]),
-            ("Tags — Media & Source", [
+            ("Tagging — Media & Source", [
                 "normalize_media_source", "digital_media_source_value",
                 "fill_empty_source",
             ]),
-            ("Tags — Writes", [
-                "fix_instrumental_from_lyrics", "write_audit_tag",
+            ("Tagging — Writes", [
+                "write_audit_tag",
                 "write_log_grade", "write_replaygain_tags",
                 "write_dynamic_range_tags",
             ]),
             ("Auto Tagging", [
                 "auto_advisory", "auto_instrumental",
+                "auto_zero_advisory_for_instrumental",
+                "fix_instrumental_from_lyrics",
             ]),
             ("Grading — Allowed Types", [
                 "grade_verbose", "grade_include_music", "grade_include_cover",
                 "grade_include_cue", "grade_include_log", "grade_include_lrc",
                 "grade_include_other",
             ]),
-            ("Grading — Cover Enforce", [
+            ("Grading — Cover", [
                 "cover_enforce_size", "cover_enforce_square",
+                "grader_cover_size_tolerance_px", "grader_strict_square_threshold",
             ]),
             ("Grading — Strict Checks", [
                 "grade_check_tag_spaces", "grade_check_tag_blank_lines",
@@ -1363,19 +1439,28 @@ class ConfigDialog(tk.Toplevel):
                 "grade_check_lyrics_zero", "grade_check_cue_spaces",
                 "grade_check_cue_blank_lines", "grade_check_cover_crop",
             ]),
-            ("Audio Auditor", [
+            ("Auditing — Core", [
                 "audit_thorough", "audit_cutoff_allow",
                 "audit_verify_cd_checksums", "audit_cd_require_both",
+                "audit_integrity",
+            ]),
+            ("Auditing — Detectors", [
                 "audit_clipping", "audit_scaled_clipping", "audit_mqa",
                 "audit_ai", "audit_fake_stereo", "audit_silence",
                 "audit_dynamic_range", "audit_true_peak", "audit_lufs",
                 "audit_bpm",
             ]),
+            ("Auditing — Performance", [
+                "audit_batch_size", "audit_batch_timeout_s", "audit_per_file_timeout_s",
+            ]),
             ("DR & ReplayGain", [
                 "dr_replaygain_enabled", "replaygain_skip_existing",
             ]),
-            ("Interface / Performance", [
-                "auto_advance", "worker_limit", "compact_ui",
+            ("Performance", [
+                "auto_advance", "worker_limit",
+            ]),
+            ("Interface", [
+                "compact_ui",
             ]),
             ("Updates", [
                 "check_updates_on_start", "auto_update_on_start",
@@ -1384,18 +1469,48 @@ class ConfigDialog(tk.Toplevel):
             ]),
         ]
         field_lookup = {f[0]: f for f in CONFIG_FIELDS}
-
-        # Sort keys within each group alphabetically for a tidy, predictable layout
+        # Keep logical pipeline order as defined (not alphabetical) and make groups collapsible/searchable
         for group_title, keys in groups:
-            keys = sorted(keys)
-            ttk.Label(inner, text=group_title, style="H2.Panel.TLabel").grid(
-                row=row, column=0, sticky="w", padx=5, pady=(8, 4)
-            )
+            # header frame with chevron (collapsible)
+            header_frame = ttk.Frame(inner, style="Panel.TFrame")
+            header_frame.grid(row=row, column=0, sticky="ew", padx=5, pady=(8, 4))
+            header_frame.columnconfigure(0, weight=1)
+            collapsed = tk.BooleanVar(value=False)
+            # Start collapsed for verbose groups to reduce initial scroll height
+            if group_title in ("Grading — Strict Checks", "Auditing — Detectors", "Auditing — Performance", "Grading — Cover"):
+                collapsed.set(True)
+            self._group_collapsed[group_title] = collapsed
+            self._group_keys[group_title] = list(keys)
+            chevron = "▸ " if collapsed.get() else "▾ "
+            header_label = ttk.Label(header_frame, text=chevron + group_title + f"  ({len(keys)})", style="H2.Panel.TLabel", cursor="hand2")
+            header_label.grid(row=0, column=0, sticky="w")
+            ToolTip(header_label, f"Click to collapse/expand {group_title} — {FIELD_DESCRIPTIONS.get(keys[0], '')[:60] if keys else ''}")
+            self._group_headers[group_title] = header_frame
             row += 1
             box = ttk.Frame(inner, style="Card.TFrame")
             box.grid(row=row, column=0, sticky="ew", padx=5, pady=(0, 4))
             box.columnconfigure(1, weight=1)
-
+            self._group_boxes[group_title] = box
+            # toggle helper
+            def _make_toggle(title, hdr_label, bx, cvar, hf):
+                def toggle(e=None):
+                    is_collapsed = cvar.get()
+                    cvar.set(not is_collapsed)
+                    if not is_collapsed:
+                        bx.grid_remove()
+                        hdr_label.configure(text="▸ " + title + f"  ({len(self._group_keys[title])})")
+                    else:
+                        bx.grid()
+                        hdr_label.configure(text="▾ " + title + f"  ({len(self._group_keys[title])})")
+                    inner.update_idletasks()
+                    canvas.configure(scrollregion=canvas.bbox("all"))
+                hdr_label.bind("<Button-1>", toggle)
+                hf.bind("<Button-1>", toggle)
+                return toggle
+            _make_toggle(group_title, header_label, box, collapsed, header_frame)
+            if collapsed.get():
+                box.grid_remove()
+                header_label.configure(text="▸ " + group_title + f"  ({len(keys)})")
             for i, key in enumerate(keys):
                 _, label, kind, extra = field_lookup[key]
                 field_label = ttk.Label(box, text=label, style="Card.TLabel")
@@ -1427,6 +1542,123 @@ class ConfigDialog(tk.Toplevel):
                 ToolTip(widget, FIELD_DESCRIPTIONS.get(key, ""))
                 self.vars[key] = var
             row += 1
+        # --- search filter and jump helpers
+        def _filter_search(*args):
+            q = self.search_var.get().strip().lower()
+            shown = 0
+            total = len(groups)
+            for title, keys in groups:
+                hdr = self._group_headers.get(title)
+                bx = self._group_boxes.get(title)
+                if not hdr or not bx:
+                    continue
+                match = False
+                if not q:
+                    match = True
+                else:
+                    if q in title.lower():
+                        match = True
+                    else:
+                        for k in keys:
+                            lbl = field_lookup.get(k, ("", "", "", ""))[1]
+                            if q in k.lower() or q in lbl.lower():
+                                match = True
+                                break
+                            # also search description
+                            desc = FIELD_DESCRIPTIONS.get(k, "").lower()
+                            if q in desc:
+                                match = True
+                                break
+                if match:
+                    hdr.grid()
+                    # expand when searching
+                    if q:
+                        bx.grid()
+                        cvar = self._group_collapsed.get(title)
+                        if cvar and cvar.get():
+                            cvar.set(False)
+                            for child in hdr.winfo_children():
+                                if isinstance(child, ttk.Label) and child.cget("text")[:1] in ("▸","▾"):
+                                    child.configure(text="▾ " + title + f"  ({len(keys)})")
+                                    break
+                    else:
+                        cvar = self._group_collapsed.get(title)
+                        if cvar and cvar.get():
+                            bx.grid_remove()
+                        else:
+                            bx.grid()
+                    shown += 1
+                else:
+                    hdr.grid_remove()
+                    bx.grid_remove()
+            if q:
+                self.search_count_var.set(f"{shown}/{total} groups")
+            else:
+                self.search_count_var.set("")
+            inner.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        self.search_var.trace_add("write", _filter_search)
+        def _set_all_collapsed(collapsed):
+            for title, cvar in self._group_collapsed.items():
+                cvar.set(collapsed)
+                hdr = self._group_headers.get(title)
+                bx = self._group_boxes.get(title)
+                if not hdr or not bx:
+                    continue
+                for child in hdr.winfo_children():
+                    if isinstance(child, ttk.Label) and child.cget("text")[:1] in ("▸","▾"):
+                        child.configure(text=("▸ " if collapsed else "▾ ") + title + f"  ({len(self._group_keys[title])})")
+                        break
+                if collapsed:
+                    bx.grid_remove()
+                else:
+                    # respect search filter
+                    q = self.search_var.get().strip().lower()
+                    if not q:
+                        bx.grid()
+                    else:
+                        # only show if matches search
+                        keys = self._group_keys[title]
+                        match = q in title.lower() or any(q in k.lower() or q in field_lookup[k][1].lower() for k in keys)
+                        if match:
+                            bx.grid()
+            inner.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        self._set_all_groups_collapsed = _set_all_collapsed
+        # populate jump combo and wire
+        nav_titles = [g[0] for g in groups]
+        self.nav_combo["values"] = nav_titles
+        def _jump_to_group(*args):
+            title = self.nav_var.get()
+            hdr = self._group_headers.get(title)
+            if not hdr:
+                return
+            # ensure visible if collapsed
+            cvar = self._group_collapsed.get(title)
+            if cvar and cvar.get():
+                cvar.set(False)
+                for child in hdr.winfo_children():
+                    if isinstance(child, ttk.Label) and child.cget("text")[:1] in ("▸","▾"):
+                        child.configure(text="▾ " + title + f"  ({len(self._group_keys[title])})")
+                        break
+                bx = self._group_boxes.get(title)
+                if bx:
+                    bx.grid()
+                inner.update_idletasks()
+                canvas.configure(scrollregion=canvas.bbox("all"))
+            self.update_idletasks()
+            try:
+                bbox = canvas.bbox("all")
+                if not bbox:
+                    return
+                y = hdr.winfo_y()
+                h = bbox[3]-bbox[1]
+                if h>0:
+                    frac = y / h
+                    canvas.yview_moveto(max(0, min(1, frac - 0.02)))
+            except Exception:
+                pass
+        self.nav_combo.bind("<<ComboboxSelected>>", lambda e: _jump_to_group())
 
         # --- Run All order ----------------------------------------------------
         order_header = ttk.Label(inner, text="Run All Order", style="H2.Panel.TLabel")

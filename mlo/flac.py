@@ -147,7 +147,10 @@ def _optimize_flac(args):
     except OSError as e:
         return (filename, False, f"cannot stat file: {e}", 0, 0)
 
-    flac_args = [f"-{flac_level}", "--no-padding", "-f"]
+    flac_no_pad = bool(config.get("flac_no_padding", True)) if config else True
+    flac_args = [f"-{flac_level}", "-f"]
+    if flac_no_pad:
+        flac_args.append("--no-padding")
 
     if not add_seektables:
         flac_args.append("--no-seektable")
@@ -179,9 +182,19 @@ def _optimize_flac(args):
         # Strip unwanted metadata from the temporary output before replacing
         # the original file. This keeps failure handling safe and accurate.
         if metaflac_exe:
-            blocks = "PICTURE,PADDING,CUESHEET,APPLICATION"
+            preserve_pic = bool(config.get("flac_preserve_picture", False)) if config else False
+            no_pad = bool(config.get("flac_no_padding", True)) if config else True
+            parts = []
+            if not preserve_pic:
+                parts.append("PICTURE")
+            if no_pad:
+                parts.append("PADDING")
+            parts.extend(["CUESHEET", "APPLICATION"])
             if not add_seektables:
-                blocks = "PICTURE,SEEKTABLE,PADDING,CUESHEET,APPLICATION"
+                # SEEKTABLE already handled via flac --no-seektable, but also strip existing
+                if "SEEKTABLE" not in parts:
+                    parts.insert(1 if not preserve_pic else 0, "SEEKTABLE")
+            blocks = ",".join(parts)
 
             try:
                 result = run_tool(

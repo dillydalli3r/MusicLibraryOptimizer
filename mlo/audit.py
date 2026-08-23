@@ -161,20 +161,22 @@ def _audit_batch(cli, paths, config):
     # AudioAuditorCLI 2.0.0 scan/analyze currently hangs for many files
     # (even a single 1-sec test flac times out after 60s with --json --fast).
     # Fall back to per-file `info` (which still works) when the batch times out.
+    batch_timeout = int(config.get("audit_batch_timeout_s", 30) or 30)
+    per_file_timeout = int(config.get("audit_per_file_timeout_s", 30) or 30)
     try:
         proc = run_tool(
             cmd,
             input="\n".join(paths) + "\n",
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30,
+            timeout=batch_timeout,
         )
     except subprocess.TimeoutExpired:
         # Fallback: use `info` per file (slow but reliable, and `info` still works for 2.0.0)
-        log(c("AudioAuditor batch timed out, falling back to per-file info (2.0.0 scan hang)", Color.YELLOW))
+        log(c(f"AudioAuditor batch timed out after {batch_timeout}s, falling back to per-file info (2.0.0 scan hang)", Color.YELLOW))
         items = []
         for p in paths:
             try:
-                proc2 = run_tool([cli, "info", p], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                proc2 = run_tool([cli, "info", p], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=per_file_timeout)
                 if proc2.returncode == 0 and proc2.stdout:
                     # Parse the text output of `info` into a minimal JSON-like item
                     # info always succeeds and shows `Status: REAL/FAKE` — map to Valid/Fake
@@ -560,15 +562,17 @@ def run_audit_library(config):
     flagged = []
     warned = 0
     pbar = _make_pbar(len(todo), "Auditing", unit="file")
+    batch_size = int(config.get("audit_batch_size", BATCH_SIZE) or BATCH_SIZE)
+    batch_size = max(50, min(500, batch_size))
 
-    for start in range(0, len(todo), BATCH_SIZE):
-        batch = todo[start:start + BATCH_SIZE]
+    for start in range(0, len(todo), batch_size):
+        batch = todo[start:start + batch_size]
         try:
             items = _audit_batch(cli, batch, config)
         except Exception as e:
             stats["total_scanned"] += len(batch)
             stats["error_count"] += len(batch)
-            stats["errors"].append((f"batch {start // BATCH_SIZE + 1} "
+            stats["errors"].append((f"batch {start // batch_size + 1} "
                                      f"({len(batch)} files)", str(e)))
             log(c(f"Audit batch failed: {e}", Color.RED))
             counts["fail"] += len(batch)

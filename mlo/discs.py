@@ -481,6 +481,8 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
 
     # 3) unique TOC total-duration match against real audio durations
     if remaining and len(claimed) < len(discs):
+        toc_tol = float(config.get("discs_toc_tolerance_s", TOC_TOLERANCE_S)) if config else TOC_TOLERANCE_S
+        toc_margin = float(config.get("discs_toc_unique_margin_s", TOC_UNIQUE_MARGIN_S)) if config else TOC_UNIQUE_MARGIN_S
         durations = {}
         for d, paths in discs.items():
             if d in claimed:
@@ -493,12 +495,12 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
             if toc <= 0:
                 continue
             candidates = [d for d, s in durations.items()
-                          if abs(s - toc) <= TOC_TOLERANCE_S]
+                          if abs(s - toc) <= toc_tol]
             if len(candidates) == 1:
                 d = candidates[0]
                 margins = sorted(abs(s - toc) for s in durations.values())
                 unique = (len(margins) < 2 or
-                          margins[1] - margins[0] >= TOC_UNIQUE_MARGIN_S)
+                          margins[1] - margins[0] >= toc_margin)
                 if unique and d not in claimed:
                     claimed[d] = f
                     durations.pop(d, None)

@@ -1255,11 +1255,16 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             except Exception:
                 w = h = None
                 cover_read_error = True
-        # Size enforcement: require exact target_size x target_size (1px tolerance)
+        # Size enforcement: require exact target_size x target_size (configurable tolerance)
         if enforce_size and cfg.get("cover_resize_enabled", False) and target_cov > 0:
             total_checks += 1
+            try:
+                tol = int(cfg.get("grader_cover_size_tolerance_px", 1) or 1)
+                tol = max(0, min(5, tol))
+            except Exception:
+                tol = 1
             if w is not None and h is not None:
-                if abs(w - target_cov) > 1 or abs(h - target_cov) > 1:
+                if abs(w - target_cov) > tol or abs(h - target_cov) > tol:
                     failed_checks += 1
                     size_failed = True
                     cover_ok = False
@@ -1270,11 +1275,15 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 size_failed = True
                 cover_ok = False
                 add_issue(f"Cover image unreadable/corrupt (need {target_cov}x{target_cov})", "album")
-        # Square enforcement: aspect within threshold (force_exact uses strict 0 threshold)
+        # Square enforcement: aspect within threshold (force_exact uses strict threshold from config)
         if enforce_square:
             total_checks += 1
             if force_exact:
-                thr_cov = 0.005  # ~0.5% tolerance, effectively require w==h (1px at 1000)
+                try:
+                    thr_cov = float(cfg.get("grader_strict_square_threshold", 0.005) or 0.005)
+                    thr_cov = max(0.0, min(0.05, thr_cov))
+                except (TypeError, ValueError):
+                    thr_cov = 0.005
             else:
                 try:
                     thr_cov = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)

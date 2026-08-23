@@ -137,9 +137,13 @@ DEFAULT_CONFIG = {
     "flac_level": 8,
     "add_seektables": False,
     "force_reencode_flac": False,
+    "flac_preserve_picture": False,
+    "flac_no_padding": True,
 
     # Images — global
     "jpegxl_effort": 10,
+    "jpegxl_distance": 0.0,
+    "images_jpeg_quality": 95,
     "reencode_images": True,
     "reencode_to_jxl": True,
     "convert_jxl_back": False,
@@ -174,6 +178,7 @@ DEFAULT_CONFIG = {
     "lrc_enhanced_word_sync": True,
     "lrc_extended_enabled": True,
     "lrc_add_zero_timestamp": True,
+    "lrc_zero_timestamp_blank": False,
     # Where the zero timestamp is added when enabled: EMBEDDED, LRC, or BOTH.
     # Now works for both standard and enhanced LRCs (per request).
     # When enabled, it always adds a blank "[00:00.00]" as the first line.
@@ -198,6 +203,8 @@ DEFAULT_CONFIG = {
     "discs_rename_enabled": True,
     "discs_rename_pattern": "CD-{n}",
     "discs_rename_single_fallback": True,
+    "discs_toc_tolerance_s": 4.0,
+    "discs_toc_unique_margin_s": 4.0,
     "cue_fix_filenames": True,
 
     # Music-file tag writes
@@ -229,6 +236,8 @@ DEFAULT_CONFIG = {
     "grade_check_tag_blank_lines": True,
     "grade_check_lyrics_blank_lines": True,
     "grade_check_cue_blank_lines": True,
+    "grader_cover_size_tolerance_px": 1,
+    "grader_strict_square_threshold": 0.005,
 
     # Audio audit (AudioAuditor CLI): full-track detectors (silence, DR,
     # true peak, LUFS, BPM) instead of the fast scan; force re-audits files
@@ -246,6 +255,9 @@ DEFAULT_CONFIG = {
     "audit_verify_cd_checksums": True,
     "audit_cd_require_both": True,
     "audit_integrity": True,
+    "audit_batch_size": 250,
+    "audit_batch_timeout_s": 30,
+    "audit_per_file_timeout_s": 30,
     "audit_clipping": True,
     "audit_scaled_clipping": True,
     "audit_mqa": True,
@@ -348,6 +360,11 @@ _INT_RANGES = {
     "lrc_timestamp_precision": (2, 3),
     "png_optimization_level": (0, 6),
     "audit_cutoff_allow": (0, 24000),
+    "audit_batch_size": (50, 500),
+    "audit_batch_timeout_s": (10, 120),
+    "audit_per_file_timeout_s": (10, 60),
+    "images_jpeg_quality": (70, 100),
+    "grader_cover_size_tolerance_px": (0, 5),
     "worker_limit": (0, 64),
     "update_check_interval_days": (1, 30),
     "cover_target_size": (0, 4000),
@@ -427,6 +444,17 @@ def normalize_config(user=None) -> dict:
         cfg["cover_crop_threshold"] = max(0.0, min(0.5, thr))
     except (TypeError, ValueError):
         cfg["cover_crop_threshold"] = 0.05
+    for k, default, lo, hi in (
+        ("discs_toc_tolerance_s", 4.0, 0.5, 10.0),
+        ("discs_toc_unique_margin_s", 4.0, 0.5, 10.0),
+        ("jpegxl_distance", 0.0, 0.0, 2.0),
+        ("grader_strict_square_threshold", 0.005, 0.0, 0.05),
+    ):
+        try:
+            v = float(cfg.get(k, default))
+            cfg[k] = max(lo, min(hi, v))
+        except (TypeError, ValueError):
+            cfg[k] = default
 
     for k in ("cover_target_size", "cover_jpeg_target_size",
               "cover_png_target_size", "cover_jxl_target_size"):
