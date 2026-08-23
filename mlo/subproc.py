@@ -43,6 +43,9 @@ def run_tool(*args, **kwargs):
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.PIPE
     timeout = kwargs.pop("timeout", None)
+    # When input is provided, Popen needs stdin=PIPE to actually feed it
+    if input_data is not None and "stdin" not in kwargs:
+        kwargs["stdin"] = subprocess.PIPE
 
     proc = subprocess.Popen(*args, **kwargs)
     with _ACTIVE_LOCK:
