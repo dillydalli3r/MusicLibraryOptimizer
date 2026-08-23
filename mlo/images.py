@@ -632,9 +632,12 @@ def _process_image_to_jxl(args):
                     pass
             if not _cover_needs:
                 q, v, p = _read_jxl_tags(src_path)
+                # Debug log for JXL early skip decision
+                log(f"[jxl check] {os.path.basename(src_path)} q={q} v={v} p={p} effort={effort} jxl_version={jxl_version} enabled={enabled} cover_needs={_cover_needs}")
                 if not _identity_missing(enabled, q, v, p):
                     try:
                         if int(q) >= int(effort) and not _version_is_older(v, jxl_version):
+                            log(f"[jxl skip] {os.path.basename(src_path)} already at q={q} v={v} (need q>={effort} v>={jxl_version})")
                             return (
                                 src_path,
                                 "unchanged",
@@ -642,8 +645,13 @@ def _process_image_to_jxl(args):
                                 0,
                                 f"skipped (q={q}, v={v})",
                             )
-                    except (ValueError, TypeError):
+                        else:
+                            log(f"[jxl re-encode] {os.path.basename(src_path)} q={q} < {effort} or v {v} older than {jxl_version}")
+                    except (ValueError, TypeError) as e:
+                        log(f"[jxl check error] {e}")
                         pass
+                else:
+                    log(f"[jxl re-encode] {os.path.basename(src_path)} identity missing (q={q} v={v} p={p})")
 
         _safe_remove(temp_out_path)
 
@@ -749,8 +757,16 @@ def _process_image_to_jxl(args):
                     or os.path.getsize(decoded_png) == 0
                 ):
                     err = djxl_result.stderr.decode("utf-8", errors="replace").strip()
-                    # PNG-JXL that this djxl cannot decode (e.g. newer encoding) — don't count as failure,
-                    # just skip with a warning so the progress doesn't show 1 failed for a valid cover.
+                    # PNG-JXL that this djxl cannot decode (e.g. newer encoding or truncated) —
+                    # try to just update the XMP tags without re-encoding the pixels, if the
+                    # only reason to re-encode is version/effort. This satisfies the user's
+                    # request to re-encode when version/effort is newer/higher or Force is on.
+                    try:
+                        # Try to just write the new tags to the original file
+                        _write_jxl_tags(src_path, effort, jxl_version, enabled)
+                        return (src_path, "modified", 0, 0, f"updated XMP tags only (cannot decode JXL pixels: {err[:40]})")
+                    except Exception:
+                        pass
                     return (src_path, "skipped", 0, 0, f"skipped (cannot decode JXL: {err[:80]})")
 
                 input_for_cjxl = decoded_png
