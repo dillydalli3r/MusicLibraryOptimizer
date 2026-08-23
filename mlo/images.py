@@ -631,8 +631,8 @@ def _process_image_to_jxl(args):
                 except Exception:
                     pass
             if not _cover_needs:
-                q, v = _read_jxl_tags(src_path)
-                if not _identity_missing(enabled, q, v):
+                q, v, p = _read_jxl_tags(src_path)
+                if not _identity_missing(enabled, q, v, p):
                     try:
                         if int(q) >= int(effort) and not _version_is_older(v, jxl_version):
                             return (
@@ -934,8 +934,8 @@ def _process_jpeg_in_place(args):
         except Exception:
             pass
     if not force and not _cover_needs:
-        q, v = _read_jpeg_xmp_tags(filepath)
-        if not _identity_missing(enabled, q, v):
+        q, v, p = _read_jpeg_xmp_tags(filepath)
+        if not _identity_missing(enabled, q, v, p):
             try:
                 if int(q) >= JPEG_QUALITY_MARKER and not _version_is_older(v, ljt_version):
                     return (
@@ -1351,8 +1351,8 @@ def _process_jxl_in_place(args):
             except Exception:
                 pass
         if not force and not _cover_needs:
-            q, v = _read_jxl_tags(src_path)
-            if not _identity_missing(enabled, q, v):
+            q, v, p = _read_jxl_tags(src_path)
+            if not _identity_missing(enabled, q, v, p):
                 try:
                     if int(q) >= int(effort) and not _version_is_older(v, jxl_version):
                         return (

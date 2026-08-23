@@ -1261,7 +1261,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     try:
                         if cov_enc_key == "jpeg":
                             from .containers import _read_jpeg_xmp_tags
-                            q, v = _read_jpeg_xmp_tags(cover_path)
+                            q, v, _ = _read_jpeg_xmp_tags(cover_path)
                             if field == "ENCODER_PROGRAM":
                                 # Check XMP for program (parse raw)
                                 try:
@@ -1279,7 +1279,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                             has_enc = field in txt and str(txt[field]).strip() != ""
                         elif cov_enc_key == "jxl":
                             from .containers import _read_jxl_tags
-                            q, v = _read_jxl_tags(cover_path)
+                            q, v, _ = _read_jxl_tags(cover_path)
                             if field == "ENCODER_PROGRAM":
                                 try:
                                     with open(cover_path, "rb") as f:

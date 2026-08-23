@@ -36,7 +36,7 @@ def _build_xmp_packet(quality, version, program, enabled=None):
 
 def _parse_xmp_tags(xmp_str):
     if not xmp_str:
-        return None, None
+        return None, None, None
 
     q = re.search(
         r"<enc:ENCODER_QUALITY>(.*?)</enc:ENCODER_QUALITY>",
@@ -48,7 +48,12 @@ def _parse_xmp_tags(xmp_str):
         xmp_str,
         re.IGNORECASE | re.DOTALL,
     )
-    return (q.group(1) if q else None, v.group(1) if v else None)
+    p = re.search(
+        r"<enc:ENCODER_PROGRAM>(.*?)</enc:ENCODER_PROGRAM>",
+        xmp_str,
+        re.IGNORECASE | re.DOTALL,
+    )
+    return (q.group(1) if q else None, v.group(1) if v else None, p.group(1) if p else None)
 
 
 def _read_flac_tags(filepath):
@@ -210,22 +215,22 @@ def _read_jxl_tags(jxl_path):
         with open(jxl_path, "rb") as f:
             data = f.read()
     except Exception:
-        return None, None
+        return None, None, None
 
     if not data.startswith(JXL_SIG):
-        return None, None
+        return None, None, None
 
     for btype, payload, _, _ in _jxl_iter_boxes(data):
         if btype == b"xml ":
             try:
                 xmp = payload.decode("utf-8", errors="replace")
-                q, v = _parse_xmp_tags(xmp)
-                if q is not None or v is not None:
-                    return q, v
+                q, v, p = _parse_xmp_tags(xmp)
+                if q is not None or v is not None or p is not None:
+                    return q, v, p
             except Exception:
                 continue
 
-    return None, None
+    return None, None, None
 
 
 def _write_jxl_tags(jxl_path, quality, version, enabled=None):
@@ -288,10 +293,10 @@ def _read_jpeg_xmp_tags(jpeg_path):
         with open(jpeg_path, "rb") as f:
             data = f.read()
     except Exception:
-        return None, None
+        return None, None, None
 
     if not data.startswith(b"\xff\xd8"):
-        return None, None
+        return None, None, None
 
     i = 2
     n = len(data)
@@ -318,11 +323,11 @@ def _read_jpeg_xmp_tags(jpeg_path):
 
         if marker == 0xE1 and payload.startswith(XMP_NS):
             xmp = payload[len(XMP_NS):].decode("utf-8", errors="replace")
-            q, v = _parse_xmp_tags(xmp)
-            if q is not None or v is not None:
-                return q, v
+            q, v, p = _parse_xmp_tags(xmp)
+            if q is not None or v is not None or p is not None:
+                return q, v, p
 
-    return None, None
+    return None, None, None
 
 
 def _insert_jpeg_xmp(jpeg_path, quality, version, program, enabled=None):
