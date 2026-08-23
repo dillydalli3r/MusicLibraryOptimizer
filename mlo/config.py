@@ -7,13 +7,10 @@ import tempfile
 from .paths import CONFIG_FILE, DEFAULT_DIGITAL_SOURCE
 from .ui import c, Color
 
-# Run All order — systematic pipeline: 1) textual metadata, 2) media, 3) analysis, 4) report.
-# 1 Format Lyrics + 2 Format CUEs normalize sidecars first so autotag can derive
-# INSTRUMENTAL correctly; 8 Auto Tagging then fixes INSTRUMENTAL/ADVISORY/GENRE;
-# 3 Optimize FLACs + 5 Process Images handle media (FLAC preserves the fixed tags);
-# 7 DR/ReplayGain + 6 Audit Library analyze the final audio; 4 Grade Library last
-# reports 100/0. User can reorder via Settings → Run All Order.
-DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 7, 6, 4]
+# Run All order — strict pipeline v1.6.0: 1 Lyrics → 2 CUEs → 8 Auto Tagging → 3 FLAC → 5 Images → 6 Audit → 4 Grade → 7 DR/ReplayGain.
+# Textual metadata first, then media, then audit/grade, then loudness last so DR reflects final audio.
+# User's strict config default as of v1.6.0; reorder via Settings → Run All Order.
+DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 6, 4, 7]
 
 # Audio tag families that can be toggled per filetype.
 # Each family groups related TAG_MAP keys that are written together.
@@ -143,7 +140,7 @@ DEFAULT_CONFIG = {
     # Images — global
     "jpegxl_effort": 10,
     "jpegxl_distance": 0.0,
-    "images_jpeg_quality": 95,
+    "images_jpeg_quality": 100,
     "reencode_images": True,
     "reencode_to_jxl": True,
     "convert_jxl_back": False,
@@ -156,7 +153,7 @@ DEFAULT_CONFIG = {
     "cover_resize_enabled": True,
     "cover_target_size": 1000,
     "cover_crop_enabled": True,
-    "cover_crop_threshold": 0.05,
+    "cover_crop_threshold": 0.0,
     "cover_force_exact_size": True,
     "cover_enforce_size": True,
     "cover_enforce_square": True,
@@ -177,7 +174,7 @@ DEFAULT_CONFIG = {
     "lrc_enhanced_enabled": True,
     "lrc_enhanced_word_sync": True,
     "lrc_extended_enabled": True,
-    "lrc_add_zero_timestamp": True,
+    "lrc_add_zero_timestamp": False,
     "lrc_zero_timestamp_blank": False,
     # Where the zero timestamp is added when enabled: EMBEDDED, LRC, or BOTH.
     # Now works for both standard and enhanced LRCs (per request).
@@ -236,9 +233,9 @@ DEFAULT_CONFIG = {
     "grade_check_tag_blank_lines": True,
     "grade_check_lyrics_blank_lines": True,
     "grade_check_cue_blank_lines": True,
-    "grader_cover_size_tolerance_px": 1,
-    "grader_strict_square_threshold": 0.005,
-    "grade_log_score_threshold": 0,
+    "grader_cover_size_tolerance_px": 0,
+    "grader_strict_square_threshold": 0.0,
+    "grade_log_score_threshold": 100,
     "grade_check_log_checksum": True,
     "grade_check_accuraterip": True,
     # Comprehensive grading toggles — every check can be disabled individually
@@ -281,7 +278,7 @@ DEFAULT_CONFIG = {
     "audit_fail_on_unscorable_log": True,
     "audit_verify_log_checksum": True,
     "audit_require_accuraterip": True,
-    "audit_log_score_threshold": 0,
+    "audit_log_score_threshold": 100,
     "audit_batch_size": 250,
     "audit_batch_timeout_s": 30,
     "audit_per_file_timeout_s": 30,
@@ -302,10 +299,10 @@ DEFAULT_CONFIG = {
     # format via Settings → Encoder Tags. QUALITY/VERSION remain on (they gate
     # re-optimization: higher effort or newer version).
     "encoder_tags": {
-        "flac": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "jpeg": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "png": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "jxl": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "flac": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "jpeg": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "png": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "jxl": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
     },
     # Per-filetype audio tag writes — which semantic tag families each audio
     # container receives. All True by default; ANDed with the global master

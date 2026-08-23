@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.5.4
+# Music Library Optimizer v1.6.0
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.3`) + command-line app (
 optional interactive console menu. **v1.5.0 fixes Grading Enforce not saving, moves [00:00.00] to Lyrics (on by default, works for standard+enhanced), adds fill-empty-SOURCE toggle (default keep empty), makes Thorough Audit on by default, fixes columns menu, widens TAGS to truly use all space, adds Guide max-effort preset and About Install Latest, and keeps PROGRAM off; v1.4.3 made grading require `ENCODER_PROGRAM` only when that format’s toggle is on (off by default, so existing libraries pass), and ensures optimization writes `PROGRAM` even when skipping re-encode; v1.4.2 made `PROGRAM` off by default and stopped deleting tags.**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.5.4_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.0_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.5.4_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.6.0_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -40,6 +40,15 @@ PATH (the system scope requests admin elevation automatically). See
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.6.0
+
+- **Strict defaults = your config** — `mlo/config.py` now ships `grade_log_score_threshold=100` + `audit_log_score_threshold=100` (perfect rip required), `cover_crop_threshold=0.0` / `grader_cover_size_tolerance_px=0` / `grader_strict_square_threshold=0.0` (pixel-perfect 1000×1000), `images_jpeg_quality=100` (max), `lrc_add_zero_timestamp=False` (no blank lead-in), all `ENCODER_PROGRAM` on, `run_all_order [1,2,8,3,5,6,4,7]` (Grade before DR), plus every `grade_check_*` on. Your `config.json` is now the factory default and also a preset.
+- **Every grading check is a toggle** — 29 `grade_check_*` now cover *all* grading: `unreadable`/`missing_tags`/`encoder`/`audit`/`instrumental`/`lyrics`+`format`/`sidecar_cover`, `media`/`source`/`album_tags`, `cd_log`/`cd_cue`/`disc_naming`/`log_grade`/`crc`/`log_checksum`/`accuraterip`, `cover`/`cue_format`/`disallowed` + `tag/lyrics/cue` spaces/blank/zero/crop. `mlo/grader.py` skips `total_checks`/`failed_checks` when a toggle is off. All 29 appear in `Settings` with descriptions.
+- **Track right-click fixed + Grade details for tracks** — `app.py:_on_tree_menu` fallback derives `album_dir` from hierarchy when cache miss, `app.py:_find_album_for_item` now `normcase` so `F:\Music\…` matches `f:\music\…`; `Grade details…` now opens for `1-01 Track.flac` rows and shows per-track `LOG_GRADE`/`AUDIT`/`ISSUES`.
+- **Grade Details shows ALL checks, auditing + grading, per config** — `app.py:_show_grade_details` now 860×640, `word`-wrap, `✓/✗/○` icons, grouped sections (`Core`, `Media & Album`, `CD & Logs`, etc. for grading; `CD Verification`, `Detectors`, `Performance` for auditing) with `[PASS]` green / `[FAIL]` red / `[OFF]` muted per `cfg`, plus `Auditing checks` evaluated per album via `discs.py:check_log_checksum`/`check_accuraterip`/score threshold/unscorable/`AUDIT` summary. Disabled checks are listed as `OFF` instead of hidden.
+- **Config menus reorganized — pipeline 01-16** — `app.py: ConfigDialog groups` now `01 FLAC` → `02 Images Global` → `03 Cover Resize & Per-Format` (merged cover enforce) → `04 Lyrics` (standard+enhanced) → `05 CUE & Discs` → `06 Tagging` → `07-10 Grading` (General/Core/Content/CD/Strict) → `11-13 Auditing` (Core/Detectors/Performance) → `14 Loudness` → `15 System` (Performance & Updates). Collapsible, searchable `▸/▾`, fewer top-level groups, verbose groups (`Strict`, `Detectors`) start collapsed. Matches `DEFAULT_RUN_ALL_ORDER` order.
+- **Guide preset v1.6.0 Strict** — `app.py:SetupWizard.GENERAL_PRESETS` adds `v1.6.0 Strict — Perfect Scores (100/100, 0px, 100q) — User's Config` applying the strict defaults above (100/100, 0px, 100q, `PROGRAM` on, `run_all_order` 6→4→7). One-click re-apply.
 
 ## New in v1.5.4
 

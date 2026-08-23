@@ -75,7 +75,7 @@
   "audit_fail_on_unscorable_log": true,
   "audit_fake_stereo": true,
   "audit_integrity": true,
-  "audit_log_score_threshold": 0,
+  "audit_log_score_threshold": 100,
   "audit_lufs": true,
   "audit_mqa": true,
   "audit_per_file_timeout_s": 30,
@@ -96,7 +96,7 @@
   "confirm_before_update": true,
   "convert_jxl_back": false,
   "cover_crop_enabled": true,
-  "cover_crop_threshold": 0.05,
+  "cover_crop_threshold": 0.0,
   "cover_enforce_size": true,
   "cover_enforce_square": true,
   "cover_force_exact_size": true,
@@ -119,22 +119,22 @@
   "dr_replaygain_enabled": true,
   "encoder_tags": {
     "flac": {
-      "ENCODER_PROGRAM": false,
+      "ENCODER_PROGRAM": true,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "jpeg": {
-      "ENCODER_PROGRAM": false,
+      "ENCODER_PROGRAM": true,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "jxl": {
-      "ENCODER_PROGRAM": false,
+      "ENCODER_PROGRAM": true,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "png": {
-      "ENCODER_PROGRAM": false,
+      "ENCODER_PROGRAM": true,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     }
@@ -194,11 +194,11 @@
   "grade_include_lrc": true,
   "grade_include_music": true,
   "grade_include_other": false,
-  "grade_log_score_threshold": 0,
+  "grade_log_score_threshold": 100,
   "grade_verbose": true,
-  "grader_cover_size_tolerance_px": 1,
-  "grader_strict_square_threshold": 0.005,
-  "images_jpeg_quality": 95,
+  "grader_cover_size_tolerance_px": 0,
+  "grader_strict_square_threshold": 0.0,
+  "images_jpeg_quality": 100,
   "jpeg_progressive": true,
   "jpegxl_distance": 0.0,
   "jpegxl_effort": 10,
@@ -208,7 +208,7 @@
   "library_columns": {},
   "library_show_all_files": false,
   "library_sort": "name",
-  "lrc_add_zero_timestamp": true,
+  "lrc_add_zero_timestamp": false,
   "lrc_collapse_blank_lines": true,
   "lrc_enhanced_enabled": true,
   "lrc_enhanced_word_sync": true,
@@ -236,9 +236,9 @@
     8,
     3,
     5,
-    7,
     6,
-    4
+    4,
+    7
   ],
   "show_sidecar_files": false,
   "sidebar_visible": true,
