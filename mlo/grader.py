@@ -7,7 +7,7 @@ from .audio import AudioFile
 from .config import should_write_audio_tag
 from .lyrics import _lrc_for, _canonical_lyrics, format_lyrics_text
 from .cue import canonical_cue_text
-from .paths import AUDIO_EXTS, IMAGE_EXTS
+from .paths import AUDIO_EXTS, IMAGE_EXTS, get_sidecar_cover_path
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, is_audio_file,
     _find_albums, _clean_set, _summarize_values, _collect_targets,
@@ -957,6 +957,56 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     add_issue("Lyrics not optimally formatted "
                               "(run Lyrics script)", basename)
                     track["issues"].append("LYRICS")
+
+        # Sidecar track cover (e.g. "01 - Song.flac" → "01 - Song.jpg" in same folder)
+        # Graded with the same cover checks as the album cover.* (size, square, etc.)
+        # when such a sidecar exists for this track. Uses the same config keys
+        # (cover_target_size, cover_enforce_size/square, cover_crop_threshold, etc.)
+        try:
+            sidecar = get_sidecar_cover_path(album_dir, basename)
+            track["sidecar_cover"] = sidecar
+            track["sidecar_cover_file"] = os.path.basename(sidecar) if sidecar else None
+            if sidecar:
+                # Validate the sidecar image with the same cover checks
+                if not _cover_image_ok(sidecar, cfg):
+                    failed_checks += 1
+                    # Differentiate missing vs dimension mismatch for UI
+                    try:
+                        exists = os.path.exists(sidecar) and os.path.getsize(sidecar) > 0
+                    except OSError:
+                        exists = False
+                    if not exists:
+                        detail = "empty"
+                    else:
+                        ext_sc = os.path.splitext(sidecar)[1].lower()
+                        tgt_sc = _get_cover_target_size(ext_sc, cfg)
+                        enforce_size_sc = bool(cfg.get("cover_enforce_size", False)) and bool(cfg.get("cover_resize_enabled", False)) and tgt_sc > 0
+                        enforce_square_sc = bool(cfg.get("cover_enforce_square", False))
+                        try:
+                            if HAS_PIL:
+                                with Image.open(sidecar) as _im_sc:
+                                    _w_sc, _h_sc = _im_sc.size
+                                    if enforce_size_sc and (abs(_w_sc - tgt_sc) > 1 or abs(_h_sc - tgt_sc) > 1):
+                                        detail = f"wrong size {_w_sc}x{_h_sc} (need {tgt_sc}x{tgt_sc})"
+                                    elif enforce_square_sc:
+                                        thr_sc = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)
+                                        thr_sc = max(0.0, min(0.5, thr_sc))
+                                        ratio_sc = _w_sc / _h_sc if _h_sc else 1.0
+                                        if abs(ratio_sc - 1.0) > thr_sc:
+                                            detail = f"not square {_w_sc}x{_h_sc}"
+                                        else:
+                                            detail = "needs resize/crop"
+                                    else:
+                                        detail = "needs resize/crop"
+                            else:
+                                detail = "needs resize/crop"
+                        except Exception:
+                            detail = "needs resize/crop"
+                    add_issue(f"Sidecar cover {os.path.basename(sidecar)} {detail}", basename)
+                    track["issues"].append("COVER")
+        except Exception:
+            track["sidecar_cover"] = None
+            track["sidecar_cover_file"] = None
 
         tracks.append(track)
 

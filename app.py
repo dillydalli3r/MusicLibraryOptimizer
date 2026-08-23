@@ -3343,13 +3343,15 @@ class App(tk.Tk):
         self._item_base[item] = base
         self._path_items.setdefault(path, set()).add(item)
         failed_txt = ", ".join(issues) if issues else ""
+        # Show sidecar cover file for this track if it exists, otherwise —
+        cover_disp = tr.get("sidecar_cover_file") or "—"
         tree.item(item, values=(
             "PASS" if ok else "FAIL",
             audit or "—",
             str(len(issues)) if issues else "",
             "—",
             tr["values"].get("MEDIA") or "",
-            "—",
+            cover_disp,
             self._track_tags_txt(tr, aa_value),
             failed_txt,
         ))
