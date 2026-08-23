@@ -564,6 +564,9 @@ def run_audit_library(config):
     pbar = _make_pbar(len(todo), "Auditing", unit="file")
     batch_size = int(config.get("audit_batch_size", BATCH_SIZE) or BATCH_SIZE)
     batch_size = max(50, min(500, batch_size))
+    # Track per-file severity/status for later unscorable-log handling
+    file_severity_map = {}
+    file_status_map = {}
 
     for start in range(0, len(todo), batch_size):
         batch = todo[start:start + batch_size]
@@ -620,6 +623,9 @@ def run_audit_library(config):
             skey = {"Valid": "Real", "Fake": "Fake", "Corrupt": "Corrupt",
                      "Optimized": "Optimized"}.get(cli_status, "Unknown")
             status_counts[skey] += 1
+            # Track for unscorable-log FAIL handling later
+            file_severity_map[canon(path)] = severity
+            file_status_map[canon(path)] = skey
 
             # Base AA tag value before CD combination.
             tag_value = _audit_tag_value(severity, cli_status)
@@ -784,6 +790,96 @@ def run_audit_library(config):
             log(c(f"  [log] {n}", Color.YELLOW))
         if len(log_notes) > 20:
             log(f"  … and {len(log_notes) - 20} more.")
+
+    # Audit FAIL on unscorable logs — user request: every CD .log must be gradeable
+    def _canon2(p):
+        try:
+            return os.path.normcase(os.path.realpath(p))
+        except OSError:
+            return os.path.normcase(p)
+    if config.get("audit_fail_on_unscorable_log", True) and cd_candidate_dirs:
+        unscorable_albums = set()
+        for d in cd_candidate_dirs:
+            if d not in log_scores:
+                unscorable_albums.add(d)
+            else:
+                try:
+                    from .discs import album_discs as _ad2
+                    discs_here = _ad2(d)
+                    expected = len(discs_here) if discs_here else 1
+                    if len(log_scores[d]) < expected:
+                        unscorable_albums.add(d)
+                except Exception:
+                    pass
+        # Also parse orphan log notes that contain "could not score" but album not in cd_candidate (fallback)
+        for note in log_notes:
+            if "could not score" in note.lower():
+                base = note.split(":", 1)[0].strip()
+                for d in cd_candidate_dirs:
+                    if os.path.basename(d).lower() == base.lower():
+                        unscorable_albums.add(d)
+                        break
+                # orphan filename case: try to find album by file location
+                if base.lower().endswith(".log"):
+                    for d in cd_candidate_dirs:
+                        try:
+                            if base.lower() in (f.lower() for f in os.listdir(d)):
+                                unscorable_albums.add(d)
+                                break
+                        except OSError:
+                            pass
+        if unscorable_albums:
+            log(c(f"Audit FAIL on unscorable logs: {len(unscorable_albums)} CD album(s) have .log that could not be graded — marking their tracks as failed (audit_fail_on_unscorable_log on)", Color.RED))
+            for d in unscorable_albums:
+                try:
+                    album_files = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                except OSError:
+                    continue
+                for fp in album_files:
+                    if fp not in files:
+                        continue
+                    canon_fp = _canon2(fp)
+                    prev_sev = file_severity_map.get(canon_fp)
+                    prev_status = file_status_map.get(canon_fp)
+                    try:
+                        rel = os.path.relpath(fp, folder)
+                    except ValueError:
+                        rel = os.path.basename(fp)
+                    # Adjust counts: move from previous status to Fake
+                    if canon_fp in file_status_map:
+                        if prev_status == "Real":
+                            status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
+                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                            if prev_sev == "warn":
+                                warned = max(0, warned - 1)
+                        elif prev_status == "Unknown":
+                            status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
+                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                        elif prev_status not in ("Fake", "Corrupt", "Optimized"):
+                            status_counts[prev_status] = max(0, status_counts.get(prev_status, 0) - 1)
+                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                        # total_scanned already counted
+                    else:
+                        # Was skipped (already had AUDIT tag) — move from skipped to failed
+                        if stats.get("skipped_count", 0) > 0:
+                            stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
+                        stats["total_scanned"] = stats.get("total_scanned", 0) + 1
+                        # If it was previously counted as Real in skipped, adjust Real/Fake
+                        # We don't have prior status, assume Real -> Fake
+                        if status_counts.get("Real", 0) > 0:
+                            # Only move if we have Real to move; otherwise just increment Fake
+                            # For skipped, status_counts not yet includes it, so just increment Fake
+                            pass
+                        status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                    flagged.append((rel, "unscorable .log (LOG_GRADE missing)"))
+                    issue_counts["unscorable .log"] = issue_counts.get("unscorable .log", 0) + 1
+                    stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
+                    # Write AUDIT=FAKE if allowed (makes next run stay failed until log fixed)
+                    if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
+                        try:
+                            _write_audit_tag(fp, "FAKE")
+                        except Exception:
+                            pass
 
     stats["grade_dist"]["PASS"] = status_counts["Real"]
     stats["summary_pass"] = max(0, status_counts["Real"] - warned)

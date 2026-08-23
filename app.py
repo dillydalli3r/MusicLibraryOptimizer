@@ -215,6 +215,7 @@ CONFIG_FIELDS = [
     ("audit_verify_cd_checksums", "Verify CD Rips vs .log Checksums", "bool", None),
     ("audit_cd_require_both", "CD: Require Both Log & AudioAuditor = REAL", "bool", None),
     ("audit_integrity", "Verify File Integrity (like foobar2000 Verify Integrity: FLAC CRC, MP3 sync, ffmpeg decode)", "bool", None),
+    ("audit_fail_on_unscorable_log", "Fail CD Audit if .log Unscorable", "bool", None),
     ("audit_batch_size", "Audit Batch Size (50-500)", "int", (50, 500)),
     ("audit_batch_timeout_s", "Audit Batch Timeout (s)", "int", (10, 120)),
     ("audit_per_file_timeout_s", "Audit Per-File Timeout (s)", "int", (10, 60)),
@@ -850,6 +851,11 @@ FIELD_DESCRIPTIONS = {
         "When on (default), a file that fails integrity (truncated, CRC "
         "mismatch, sync error) is always AUDIT=FAKE, regardless of the "
         "other detectors.",
+    "audit_fail_on_unscorable_log":
+        "Audit: when on (default per request), a CD rip whose .log cannot be "
+        "graded (no score, unsupported format, or scoring timeout) makes the "
+        "whole disc AUDIT=FAKE. Ensures every CD .log is gradeable; disable to "
+        "keep old behaviour where unscoreable logs only emit [log] warning.",
     "audit_batch_size":
         "AudioAuditor batch size: paths per CLI invocation. 250 default (CLI supports up to 50000); smaller batches give finer progress.",
     "audit_batch_timeout_s":
@@ -1442,7 +1448,7 @@ class ConfigDialog(tk.Toplevel):
             ("Auditing — Core", [
                 "audit_thorough", "audit_cutoff_allow",
                 "audit_verify_cd_checksums", "audit_cd_require_both",
-                "audit_integrity",
+                "audit_integrity", "audit_fail_on_unscorable_log",
             ]),
             ("Auditing — Detectors", [
                 "audit_clipping", "audit_scaled_clipping", "audit_mqa",

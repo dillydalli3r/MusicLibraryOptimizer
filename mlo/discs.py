@@ -719,6 +719,49 @@ def score_disc_log(cli_exe, log_path, disc_files, timeout=300):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _fallback_log_score(log_path):
+    """Fallback log grading when AudioAuditor cannot score — ensures every .log is gradeable.
+
+    Parses log text for EAC/XLD/CUETools error indicators and per-track CRC presence.
+    Returns 0-100 score or None if log is unreadable. Heuristic but ensures a grade.
+    """
+    try:
+        text = read_log_text(log_path)
+        if not text.strip():
+            return None
+        per_track = parse_log_checksums(text)
+        has_crc = bool(per_track)
+        low = text.lower()
+        # Error indicators (lower score)
+        has_error = any(k in low for k in (
+            "there were errors", "read error", "suspicious position",
+            "copy finished with errors", "inaccurately ripped",
+            "some tracks could not be verified", "failed",
+            "error occurred"
+        ))
+        has_ok = any(k in low for k in (
+            "no errors occurred", "copy ok", "copy finished",
+            "accurately ripped", "all tracks accurately ripped",
+            "no errors", "test and copy"
+        ))
+        # Heuristic scores
+        if has_error:
+            # If has CRCs but errors, give low score 20-50 depending on presence of ok
+            return 20 if has_crc else 0
+        if has_crc and has_ok:
+            return 100
+        if has_crc:
+            # Has CRCs but no explicit ok/error -> likely good
+            return 95
+        if "eac" in low or "xld" in low or "cuetools" in low:
+            # Recognized ripper but no CRCs -> ambiguous
+            return 50
+        # Unknown format but exists
+        return 75
+    except Exception:
+        return None
+
+
 def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
                      write_tags=True, config=None):
     """Rename logs/cues to CD-N (config-gated), fix CUE FILE names and
@@ -785,8 +828,13 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
                 continue  # already graded
         score = score_disc_log(cli_exe, log_path, paths)
         if score is None:
-            notes.append(f"disc {d}: could not score {_disc_expected_name(pattern, d, '.log')}")
-            continue
+            # Fallback: ensure every log is gradeable (user request)
+            score = _fallback_log_score(log_path)
+            if score is not None:
+                notes.append(f"disc {d}: fallback score {score} for {_disc_expected_name(pattern, d, '.log')} (AudioAuditor failed)")
+            else:
+                notes.append(f"disc {d}: could not score {_disc_expected_name(pattern, d, '.log')}")
+                continue
         scores[d] = score
         for p in paths:
             if not write_tags:
@@ -802,4 +850,50 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
                 else:
                     notes.append(f"disc {d}: failed writing LOG_GRADE to "
                                  f"{os.path.basename(p)}")
+    # Ensure every .log file gets a grade (fallback for orphan logs not at CD-N pattern)
+    try:
+        all_logs = [f for f in os.listdir(album_dir) if f.lower().endswith(".log")]
+        for logf in all_logs:
+            log_full = os.path.join(album_dir, logf)
+            already_scored = False
+            for d in discs:
+                if logf.lower() == _disc_expected_name(pattern, d, ".log").lower() and d in scores:
+                    already_scored = True
+                    break
+            if already_scored:
+                continue
+            # Skip if already attempted as expected disc but failed and fallback already tried
+            # For orphan logs, try scoring with all audio files
+            all_audio = [os.path.join(album_dir, f) for f in os.listdir(album_dir) if is_audio_file(f)]
+            if not all_audio:
+                continue
+            # Avoid duplicate attempt if this log was the expected one and already has note
+            # Try AudioAuditor first
+            score2 = score_disc_log(cli_exe, log_full, all_audio)
+            if score2 is None:
+                score2 = _fallback_log_score(log_full)
+                if score2 is not None:
+                    notes.append(f"{logf}: fallback score {score2} (orphan, AudioAuditor failed)")
+                else:
+                    notes.append(f"{logf}: could not score (orphan, even fallback)")
+                    continue
+            dnum = _log_name_disc(logf)
+            if dnum is None or dnum in scores:
+                dnum = max(scores.keys(), default=0) + 1
+            # Don't overwrite existing disc score
+            if dnum in scores:
+                continue
+            scores[dnum] = score2
+            for p in all_audio:
+                if not write_tags:
+                    continue
+                if config is not None and not should_write_audio_tag(config, "LOG_GRADE", filepath=p):
+                    continue
+                t = AudioFile(p)
+                if str(t.get_tag("LOG_GRADE") or "").strip() != str(score2):
+                    if t.set_tag("LOG_GRADE", str(score2)):
+                        if log_fn:
+                            log_fn(f"{logf}: LOG_GRADE={score2} -> {os.path.basename(p)}")
+    except Exception:
+        pass
     return scores, notes

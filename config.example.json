@@ -72,6 +72,7 @@
   "audit_clipping": true,
   "audit_cutoff_allow": 0,
   "audit_dynamic_range": true,
+  "audit_fail_on_unscorable_log": true,
   "audit_fake_stereo": true,
   "audit_integrity": true,
   "audit_lufs": true,
