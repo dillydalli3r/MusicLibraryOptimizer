@@ -148,6 +148,7 @@
   "flac_no_padding": true,
   "flac_preserve_picture": false,
   "foobar2000_path": "",
+  "force_accurip": false,
   "force_audit": false,
   "force_audit_ui": false,
   "force_auto_tag": false,
@@ -191,6 +192,7 @@
   "grade_check_tag_blank_lines": true,
   "grade_check_tag_spaces": true,
   "grade_check_unreadable": true,
+  "grade_include_accurip": true,
   "grade_include_cover": true,
   "grade_include_cue": true,
   "grade_include_log": true,
@@ -243,7 +245,8 @@
     5,
     6,
     4,
-    7
+    7,
+    9
   ],
   "show_sidecar_files": false,
   "sidebar_visible": true,
@@ -252,6 +255,7 @@
   "update_check_interval_days": 7,
   "update_close_other_instances": true,
   "worker_limit": 0,
+  "write_accurip_files": true,
   "write_audit_tag": true,
   "write_dynamic_range_tags": true,
   "write_log_grade": true,
