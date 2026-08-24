@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.6.4
+# Music Library Optimizer v1.6.5
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.3`) + command-line app (
 optional interactive console menu. **v1.5.0 fixes Grading Enforce not saving, moves [00:00.00] to Lyrics (on by default, works for standard+enhanced), adds fill-empty-SOURCE toggle (default keep empty), makes Thorough Audit on by default, fixes columns menu, widens TAGS to truly use all space, adds Guide max-effort preset and About Install Latest, and keeps PROGRAM off; v1.4.3 made grading require `ENCODER_PROGRAM` only when that format’s toggle is on (off by default, so existing libraries pass), and ensures optimization writes `PROGRAM` even when skipping re-encode; v1.4.2 made `PROGRAM` off by default and stopped deleting tags.**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.4_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.5_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.6.4_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.6.5_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -40,6 +40,10 @@ PATH (the system scope requests admin elevation automatically). See
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.6.5
+
+- **CD `SOURCE` must be empty — auto-cleared** — `mlo/config.py` adds `strip_source_on_cd` `True` default (`Settings → Tagging` `06` + `v1.6.0 Strict` preset), `mlo/lyrics.py:_normalize_album_media_source` now `CD` + `strip_source_on_cd` → `delete_tag SOURCE` per track (via `should_write_audio_tag`), `mlo/grader.py` already fails `SOURCE present but MEDIA is not Digital Media` for `MEDIA=CD` when `grade_check_source` `True`. `CD=16/44.1` + `no SOURCE` = true `CD-DA`.
 
 ## New in v1.6.4
 

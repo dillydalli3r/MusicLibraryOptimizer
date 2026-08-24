@@ -32,7 +32,7 @@ from .loudness import run_calc_dr_replaygain
 from .lyrics import run_format_lyrics
 from .audit import run_audit_library
 
-__version__ = "1.6.4"
+__version__ = "1.6.5"
 __all__ = [
     "load_config", "save_config", "DEFAULT_CONFIG",
     "run_auto_tagging",

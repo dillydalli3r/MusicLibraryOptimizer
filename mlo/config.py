@@ -195,6 +195,8 @@ DEFAULT_CONFIG = {
     # When True, empty SOURCE on Digital Media is filled with the value above;
     # when False (default, per request), empty stays empty.
     "fill_empty_source": False,
+    # Strip SOURCE on CD rips — CD must never carry SOURCE (per user request, on by default)
+    "strip_source_on_cd": True,
 
     # CD rips (MEDIA=CD): deterministic CD-N renaming of .log/.cue and
     # conservative CUE FILE-name correction. Both are content-derived —

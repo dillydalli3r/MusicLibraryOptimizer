@@ -190,6 +190,8 @@ CONFIG_FIELDS = [
     # Tags — Media/Source + writes
     ("normalize_media_source", "Normalize MEDIA/SOURCE", "bool", None),
     ("digital_media_source_value", "Digital SOURCE Value", "str", None),
+    ("fill_empty_source", "Fill Empty SOURCE for Digital Media", "bool", None),
+    ("strip_source_on_cd", "Strip SOURCE on CD (CD must not carry SOURCE)", "bool", None),
     ("fix_instrumental_from_lyrics", "Fix INSTRUMENTAL from Lyrics", "bool", None),
     ("write_audit_tag", "Write AUDIT Tags", "bool", None),
     ("write_log_grade", "Write LOG_GRADE Tags", "bool", None),
@@ -816,6 +818,9 @@ FIELD_DESCRIPTIONS = {
     "digital_media_source_value":
         "Fallback SOURCE value written on Digital Media albums whose tracks "
         "are missing SOURCE. Existing values are never overwritten.",
+    "strip_source_on_cd":
+        "When on (default), strip SOURCE from CD rips (MEDIA=CD must never carry SOURCE). "
+        "When off, SOURCE on CD is left as-is (grading will still fail it if SOURCE present).",
     "fix_instrumental_from_lyrics":
         "When lyrics are present, change INSTRUMENTAL=1 to INSTRUMENTAL=0 "
         "during lyric formatting.",
@@ -1519,7 +1524,7 @@ class ConfigDialog(tk.Toplevel):
             ]),
             ("06 — Tagging  ·  Media/Source + Writes + Auto", [
                 "normalize_media_source", "digital_media_source_value",
-                "fill_empty_source",
+                "fill_empty_source", "strip_source_on_cd",
                 "write_audit_tag", "write_log_grade", "write_replaygain_tags",
                 "write_dynamic_range_tags",
                 "auto_advisory", "auto_instrumental",
@@ -2276,6 +2281,7 @@ class SetupWizard(tk.Toplevel):
             {"grade_log_score_threshold": 100, "audit_log_score_threshold": 100,
              "grader_cover_size_tolerance_px": 0, "grader_strict_square_threshold": 0.0,
              "cover_crop_threshold": 0.0, "images_jpeg_quality": 100, "cover_jpeg_quality": 100,
+             "strip_source_on_cd": True, "fill_empty_source": False,
              "lrc_add_zero_timestamp": False,
              "encoder_tags": {"flac": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
                               "jpeg": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},

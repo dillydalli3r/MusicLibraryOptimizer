@@ -689,6 +689,31 @@ def _normalize_album_media_source(args):
                         bytes_removed += b_rem
                         bytes_added += b_add
 
+        elif media_summary == "CD" and cfg is not None and cfg.get("strip_source_on_cd", True):
+            # CD must never carry SOURCE (per user request, on by default) — strip it
+            for path, af, source_clean in entries:
+                if source_clean:
+                    if not should_write_audio_tag(cfg, "SOURCE", filepath=path):
+                        continue
+                    original_size = os.path.getsize(path)
+                    if not af.delete_tag("SOURCE"):
+                        return (
+                            album_dir,
+                            "failed",
+                            0,
+                            0,
+                            f"failed removing SOURCE in {os.path.basename(path)}: {af.error}",
+                        )
+                    final_size = os.path.getsize(path)
+                    b_rem, b_add = _diff_bytes(original_size, final_size)
+                    modified_files += 1
+                    bytes_removed += b_rem
+                    bytes_added += b_add
+
+        elif media_summary == "CD":
+            # CD with strip_source_on_cd off — leave SOURCE as-is (grading will still fail it if present)
+            pass
+
         else:
             for path, af, source_clean in entries:
                 if source_clean:

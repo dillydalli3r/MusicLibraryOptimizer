@@ -247,6 +247,7 @@
   ],
   "show_sidecar_files": false,
   "sidebar_visible": true,
+  "strip_source_on_cd": true,
   "theme": "dark",
   "update_check_interval_days": 7,
   "update_close_other_instances": true,
