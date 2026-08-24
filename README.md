@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.6.3
+# Music Library Optimizer v1.6.4
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.3`) + command-line app (
 optional interactive console menu. **v1.5.0 fixes Grading Enforce not saving, moves [00:00.00] to Lyrics (on by default, works for standard+enhanced), adds fill-empty-SOURCE toggle (default keep empty), makes Thorough Audit on by default, fixes columns menu, widens TAGS to truly use all space, adds Guide max-effort preset and About Install Latest, and keeps PROGRAM off; v1.4.3 made grading require `ENCODER_PROGRAM` only when that format’s toggle is on (off by default, so existing libraries pass), and ensures optimization writes `PROGRAM` even when skipping re-encode; v1.4.2 made `PROGRAM` off by default and stopped deleting tags.**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.3_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.4_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.6.3_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.6.4_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -40,6 +40,10 @@ PATH (the system scope requests admin elevation automatically). See
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.6.4
+
+- **All scripts respect FORCE + image conversions + separate JPEG qualities** — `mlo/autotag.py` `force` now rewrites `ALBUMITUNESADVISORY` even when already correct (was empty `need_write` loop), `mlo/loudness.py` `rsgain` with `force` now counts album as `modified` even when no files were missing, `mlo/images.py` `BMP/GIF/TIFF/WEBP→JPEG/PNG` now respects `force` (skips if target `cover.jpg`/`cover_1.png` already exists) and `reserved_targets` + `WinError 32` fallback for `cover.bmp`+`cover.tiff`→`cover.png`/`cover_1.png` (was clobber/`WinError 32`), and cover `JPEG` quality correctly split `cover_jpeg_quality 100` for `did_cover`/cover files vs `images_jpeg_quality 100` for re-encoded (was `95`/`100` mix). Verified `cover.jpg 2000×1500→1000×1000` `12741B` `q100` vs `other.jpg 500×500` `q70` `2558B`, `front.bmp`→`front.jpg` `BMP→JPEG` and `back.tiff`→`back.jpg` (or `cover.png`/`cover_1.png`), `Enhanced LRC` word-sync `<00:12.60>` order/precision validated, `Lyrics`/`CUE`/`FLAC` `FORCE` correctly `modified` vs `skipped`.
 
 ## New in v1.6.3
 
