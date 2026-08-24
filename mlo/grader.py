@@ -364,9 +364,9 @@ def _cue_formatted(path, cfg):
 
 
 # Non-audio files that the viewer can show alongside the tracks.
-SIDECAR_EXTS = (".cue", ".log", ".lrc", ".jxl", ".jpg", ".jpeg", ".png")
+SIDECAR_EXTS = (".cue", ".log", ".lrc", ".accurip", ".jxl", ".jpg", ".jpeg", ".png")
 SIDECAR_TYPES = {
-    ".cue": "cue", ".log": "log", ".lrc": "lrc",
+    ".cue": "cue", ".log": "log", ".lrc": "lrc", ".accurip": "accurip",
     ".jxl": "image", ".jpg": "image", ".jpeg": "image", ".png": "image",
 }
 
@@ -378,12 +378,13 @@ CATEGORY_INCLUDE_KEYS = {
     "cue": "grade_include_cue",
     "log": "grade_include_log",
     "lrc": "grade_include_lrc",
+    "accurip": "grade_include_accurip",
     "other": "grade_include_other",
 }
 
 
 def _classify_file(f):
-    """Category of a filename: music / cover / cue / log / lrc / other."""
+    """Category of a filename: music / cover / cue / log / lrc / accurip / other."""
     low = f.lower()
     if low.endswith(AUDIO_EXTS):
         return "music"
@@ -395,6 +396,8 @@ def _classify_file(f):
         return "log"
     if low.endswith(".lrc"):
         return "lrc"
+    if low.endswith(".accurip"):
+        return "accurip"
     return "other"
 
 
@@ -606,6 +609,20 @@ def _grade_sidecars(album_dir, all_files, cfg):
         elif category == "log":
             ok = _log_file_ok(full)
             detail = "present" if ok else "empty"
+        elif category == "accurip":
+            # Check .accurip is canonical (no leading/trailing spaces, no extra blanks)
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                    acc_text = fh.read()
+                from mlo.accurip import _canonical_accurip_text
+                keep_empty = bool(cfg.get("keep_empty_cue_lines", False))
+                ok = acc_text == _canonical_accurip_text(acc_text, keep_empty_lines=keep_empty)
+                # Also check not empty
+                if ok:
+                    ok = bool(acc_text and acc_text.strip())
+            except OSError:
+                ok = False
+            detail = "formatted" if ok else "needs formatting"
         elif category == "cover":
             ok = _cover_image_ok(full, cfg)
             if ok:

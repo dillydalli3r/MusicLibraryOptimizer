@@ -7,10 +7,10 @@ import tempfile
 from .paths import CONFIG_FILE, DEFAULT_DIGITAL_SOURCE
 from .ui import c, Color
 
-# Run All order — strict pipeline v1.6.0: 1 Lyrics → 2 CUEs → 8 Auto Tagging → 3 FLAC → 5 Images → 6 Audit → 4 Grade → 7 DR/ReplayGain.
+# Run All order — strict pipeline v1.6.0: 1 Lyrics → 2 CUEs → 8 Auto Tagging → 3 FLAC → 5 Images → 6 Audit → 9 AccurateRip → 4 Grade → 7 DR/ReplayGain.
 # Textual metadata first, then media, then audit/grade, then loudness last so DR reflects final audio.
 # User's strict config default as of v1.6.0; reorder via Settings → Run All Order.
-DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 6, 4, 7]
+DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 6, 4, 7, 9]
 
 # Audio tag families that can be toggled per filetype.
 # Each family groups related TAG_MAP keys that are written together.
@@ -226,6 +226,7 @@ DEFAULT_CONFIG = {
     "grade_include_cue": True,
     "grade_include_log": True,
     "grade_include_lrc": True,
+    "grade_include_accurip": True,
     "grade_include_other": False,
     # Configurable strict checks for grading (all on by default, per request)
     # These make trailing/leading spaces, blank lines, cropping and zero timestamp
@@ -299,6 +300,8 @@ DEFAULT_CONFIG = {
     "audit_true_peak": True,
     "audit_lufs": True,
     "audit_bpm": True,
+    "write_accurip_files": True,
+    "force_accurip": False,
 
     # Encoder marker tags written per file type (ENCODER_PROGRAM /
     # ENCODER_QUALITY / ENCODER_VERSION) — ENCODER_PROGRAM off by default

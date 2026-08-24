@@ -31,6 +31,10 @@ from .images import run_process_images
 from .loudness import run_calc_dr_replaygain
 from .lyrics import run_format_lyrics
 from .audit import run_audit_library
+try:
+    from .accurip import run_generate_accurip
+except ImportError:
+    run_generate_accurip = None
 
 __version__ = "1.6.6"
 __all__ = [
@@ -38,7 +42,7 @@ __all__ = [
     "run_auto_tagging",
     "run_format_lyrics", "run_format_cues", "run_optimize_flacs",
     "run_grade_library", "run_process_images", "run_audit_library",
-    "run_calc_dr_replaygain",
+    "run_calc_dr_replaygain", "run_generate_accurip",
 ]
 
 

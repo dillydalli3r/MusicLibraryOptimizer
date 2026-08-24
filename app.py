@@ -49,6 +49,10 @@ try:
 except ImportError:
     from mlo.loudness import run_calc_dr_replaygain
     from mlo.autotag import run_auto_tagging
+try:
+    from mlo.accurip import run_generate_accurip
+except ImportError:
+    run_generate_accurip = None
 from mlo import stats as stats_mod
 from mlo import tools as tools_mod
 from mlo import fetchdeps
@@ -67,6 +71,7 @@ SCRIPT_NAMES = {
     6: "Audit Library",
     7: "DR & ReplayGain",
     8: "Auto Tagging",
+    9: "Generate AccurateRip",
 }
 
 RUNNERS = {
@@ -78,6 +83,7 @@ RUNNERS = {
     6: ("Audit Library", run_audit_library),
     7: ("DR & ReplayGain", run_calc_dr_replaygain),
     8: ("Auto Tagging", run_auto_tagging),
+    9: ("Generate AccurateRip", run_generate_accurip),
 }
 
 # Tag keys offered by the "Add tag" menu of the full tag editor.
@@ -204,6 +210,7 @@ CONFIG_FIELDS = [
     ("grade_include_cue", "Grading: Allow .cue Files", "bool", None),
     ("grade_include_log", "Grading: Allow .log Files", "bool", None),
     ("grade_include_lrc", "Grading: Allow .lrc Files", "bool", None),
+    ("grade_include_accurip", "Grading: Allow .accurip Files", "bool", None),
     ("grade_include_other", "Grading: Allow Other Files", "bool", None),
     ("grade_check_tag_spaces", "Check Tags for Leading/Trailing Spaces", "bool", None),
     ("grade_check_tag_blank_lines", "Check Tags for Blank Lines", "bool", None),
@@ -250,6 +257,8 @@ CONFIG_FIELDS = [
     ("audit_require_accuraterip", "Require AccurateRip Match for All Tracks", "bool", None),
     ("audit_log_score_threshold", "Audit Log Score Minimum to Pass (0-100)", "int", (0, 100)),
     ("audit_check_cd_format", "Auditing: CD Must Be 16-bit 44.1 kHz", "bool", None),
+    ("write_accurip_files", "Generate .accurip Files for CD Rips", "bool", None),
+    ("force_accurip", "Force Generate .accurip (even if exists)", "bool", None),
     ("audit_batch_size", "Audit Batch Size (50-500)", "int", (50, 500)),
     ("audit_batch_timeout_s", "Audit Batch Timeout (s)", "int", (10, 120)),
     ("audit_per_file_timeout_s", "Audit Per-File Timeout (s)", "int", (10, 60)),
@@ -1530,6 +1539,9 @@ class ConfigDialog(tk.Toplevel):
                 "auto_advisory", "auto_instrumental",
                 "auto_zero_advisory_for_instrumental",
                 "fix_instrumental_from_lyrics",
+            ]),
+            ("06b — AccurateRip  ·  .accurip Files", [
+                "write_accurip_files", "force_accurip",
             ]),
             ("07 — Grading  ·  General & Includes", [
                 "grade_verbose", "grade_include_music", "grade_include_cover",
