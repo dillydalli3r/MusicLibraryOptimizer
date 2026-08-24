@@ -200,6 +200,8 @@
   "grade_verbose": true,
   "grader_cover_size_tolerance_px": 0,
   "grader_strict_square_threshold": 0.0,
+  "images_convert_lossless_to_png": false,
+  "images_convert_to_jpeg": false,
   "images_jpeg_quality": 100,
   "jpeg_progressive": true,
   "jpegxl_distance": 0.0,

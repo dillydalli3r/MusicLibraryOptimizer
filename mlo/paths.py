@@ -65,8 +65,20 @@ AUDIO_EXTS = (".flac", ".ogg", ".opus", ".aac", ".m4a", ".mp3")
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".jxl")
 
+# All image types that Pillow can read and that we can convert to JPEG/PNG
+# Lossy types: jpg, jpeg, webp (lossy), avif, heic, heif
+# Lossless types: png, bmp, gif, tiff, tif, webp (lossless), ppm, pgm, pbm, avif (lossless)
+ALL_IMAGE_EXTS = (
+    ".jpg", ".jpeg", ".png", ".jxl",
+    ".bmp", ".gif", ".tiff", ".tif", ".webp", ".avif", ".heic", ".heif",
+    ".ppm", ".pgm", ".pbm", ".svg",
+)
+
+# Lossless source types that we consider for lossless-to-PNG conversion
+LOSSLESS_IMAGE_EXTS = (".png", ".bmp", ".gif", ".tiff", ".tif", ".ppm", ".pgm", ".pbm")
 
 VALID_EXTENSIONS = IMAGE_EXTS
+CONVERTIBLE_EXTENSIONS = ALL_IMAGE_EXTS
 
 # Sidecar track covers: for a track like "01 - Song.flac" a sidecar cover
 # is an image file in the same album folder with the same basename but an

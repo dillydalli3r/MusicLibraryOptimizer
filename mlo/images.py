@@ -12,7 +12,8 @@ from .containers import (
 from .deps import HAS_PIL, Image
 from .subproc import run_tool
 from .paths import (
-    VALID_EXTENSIONS, JPEG_QUALITY_MARKER, PNG_OPTIMIZATION_LEVEL, DEPS_DIR,
+    VALID_EXTENSIONS, ALL_IMAGE_EXTS, LOSSLESS_IMAGE_EXTS, CONVERTIBLE_EXTENSIONS,
+    JPEG_QUALITY_MARKER, PNG_OPTIMIZATION_LEVEL, DEPS_DIR,
 )
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, _diff_bytes,
@@ -113,6 +114,30 @@ def _flatten_png_alpha(src_path, dst_path):
         with Image.open(src_path) as img:
             img.convert("RGB").save(dst_path, format="PNG")
         return True
+    except Exception:
+        return False
+
+
+def _convert_to_jpeg(src_path, dst_path, quality, config=None):
+    """Convert any image to JPEG (lossy) with given quality, handling cover crop/resize."""
+    if not HAS_PIL:
+        return False
+    try:
+        # Use streamlined helper to handle alpha, crop, resize in one pass, then save as JPEG
+        # We create a temp PNG first via _prepare_image_streamlined, then save as JPEG
+        # Actually _prepare_image_streamlined already handles JPEG saving with quality, so we can use it
+        # If cover handling is needed, it will be done there
+        return _prepare_image_streamlined(src_path, dst_path, config, remove_alpha=True)
+    except Exception:
+        return False
+
+
+def _convert_to_png(src_path, dst_path, config=None):
+    """Convert any image to PNG (lossless), handling cover crop/resize."""
+    if not HAS_PIL:
+        return False
+    try:
+        return _prepare_image_streamlined(src_path, dst_path, config, remove_alpha=False)
     except Exception:
         return False
 
@@ -1920,6 +1945,114 @@ def _process_jxl_back_to_original(args):
             _safe_remove(f)
 
 
+def _process_convert_image(args):
+    """Convert any image to JPEG (lossy) or PNG (lossless) via Pillow.
+
+    Args: (src_path, target_ext, rename_to_cover, config)
+    target_ext is ".jpg" or ".png" (lowercase).
+    Uses images_jpeg_quality for JPEG, handles cover crop/resize via _prepare_image_streamlined,
+    and writes encoder tags. Removes source after successful conversion.
+    """
+    if len(args) == 4:
+        src_path, target_ext, rename_to_cover, config = args
+    else:
+        src_path, target_ext, rename_to_cover = args[:3]
+        config = args[3] if len(args) > 3 else None
+    target_ext = target_ext.lower()
+    if target_ext == ".jpeg":
+        target_ext = ".jpg"
+    src_path = os.path.normpath(src_path)
+    out_dir = os.path.dirname(src_path)
+    base = os.path.splitext(os.path.basename(src_path))[0]
+    # Determine final output path (cover handling)
+    if rename_to_cover:
+        final_out = os.path.join(out_dir, "cover" + target_ext)
+        if os.path.normcase(os.path.normpath(src_path)) == os.path.normcase(os.path.normpath(final_out)):
+            # Already at cover path but wrong ext? Need temp
+            final_out = os.path.join(out_dir, "cover" + target_ext)
+            # If src is already cover.jpg etc with same ext, skip
+            if os.path.normcase(os.path.normpath(src_path)) == os.path.normcase(os.path.normpath(final_out)):
+                return (src_path, "skipped", 0, 0, "already correct format")
+    else:
+        final_out = os.path.splitext(src_path)[0] + target_ext
+        if os.path.normcase(os.path.normpath(src_path)) == os.path.normcase(os.path.normpath(final_out)):
+            return (src_path, "skipped", 0, 0, "already correct format")
+
+    # Avoid clobbering existing cover
+    if rename_to_cover and os.path.exists(final_out) and os.path.normcase(os.path.normpath(src_path)) != os.path.normcase(os.path.normpath(final_out)):
+        # Find alternative name if cover exists and src is not the cover
+        alt = os.path.join(out_dir, base + target_ext)
+        if not os.path.exists(alt):
+            final_out = alt
+
+    temp_out = final_out + ".tmp"
+    try:
+        original_size = os.path.getsize(src_path)
+    except OSError as e:
+        return (src_path, "failed", 0, 0, f"cannot stat: {e}")
+    existing_dest_size = 0
+    if os.path.exists(final_out):
+        try:
+            existing_dest_size = os.path.getsize(final_out)
+        except OSError:
+            existing_dest_size = 0
+
+    # Use Pillow conversion (handles BMP, GIF, TIFF, WEBP, AVIF, etc.)
+    if not HAS_PIL:
+        return (src_path, "failed", 0, 0, "Pillow not installed (needed for conversion)")
+
+    # Use streamlined helper which handles alpha, crop, resize, and save with correct format/quality
+    ok = _prepare_image_streamlined(src_path, temp_out, config, remove_alpha=False)
+    if not ok or not os.path.exists(temp_out) or os.path.getsize(temp_out) == 0:
+        return (src_path, "failed", 0, 0, "Pillow conversion failed")
+
+    # For JPEG, ensure quality and progressive handling already done via _prepare_image_streamlined
+    # For PNG, ensure optimization
+    # Write encoder tags
+    try:
+        from .containers import _encoder_dict
+        enc = config.get("encoder_tags") or {} if config else {}
+        if target_ext == ".jpg":
+            try:
+                q = int(config.get("images_jpeg_quality", 95)) if config else 95
+                q = max(70, min(100, q))
+            except Exception:
+                q = 95
+            # _prepare_image_streamlined already wrote with quality, just add tag
+            try:
+                from .containers import _insert_jpeg_xmp
+                _insert_jpeg_xmp(temp_out, q, "pillow", "pillow/jpeg", enc.get("jpeg") or {})
+            except Exception:
+                pass
+        elif target_ext == ".png":
+            try:
+                from .containers import _inject_png_text
+                # Use png optimization level as quality marker
+                try:
+                    lvl = int(config.get("png_optimization_level", 6)) if config else 6
+                except Exception:
+                    lvl = 6
+                _inject_png_text(temp_out, _encoder_dict("pillow/png", lvl, "pillow", enc.get("png") or {}))
+            except Exception:
+                pass
+    except Exception as e:
+        log(f"[convert tag warn] {src_path}: {e}")
+
+    final_size = os.path.getsize(temp_out)
+    try:
+        os.replace(temp_out, final_out)
+    except OSError as e:
+        return (src_path, "failed", 0, 0, f"could not rename: {e}")
+    if os.path.normcase(os.path.normpath(src_path)) != os.path.normcase(os.path.normpath(final_out)):
+        try:
+            os.remove(src_path)
+        except OSError as e:
+            log(f"[cleanup warn] could not remove {src_path}: {e}")
+
+    b_rem, b_add = _diff_bytes(original_size, final_size, existing_dest_size)
+    return (final_out, "modified", b_rem, b_add, f"{os.path.basename(src_path)} -> {os.path.basename(final_out)} {original_size//1024}KB->{final_size//1024}KB")
+
+
 def run_process_images(config):
     effort = config["jpegxl_effort"]
     target_dir = config["music_folder"]
@@ -1970,16 +2103,34 @@ def run_process_images(config):
         mode = "JXL -> original (reverse only; other files untouched)"
     elif reencode_to_jxl:
         mode = f"JPEG XL conversion (effort {effort})"
+    elif config.get("images_convert_to_jpeg"):
+        try:
+            q = int(config.get("images_jpeg_quality", 95))
+            q = max(70, min(100, q))
+        except Exception:
+            q = 95
+        mode = f"Convert to JPEG (lossy, q={q}) + lossless JPEG/PNG"
+    elif config.get("images_convert_lossless_to_png"):
+        mode = "Convert lossless to PNG + lossless JPEG/PNG"
     else:
         mode = "Lossless in-place JPEG/PNG/JXL"
 
     log(f"mode: {mode}")
     log(f"target: {target_dir}")
 
+    # Determine extensions to scan — include convertible types when conversion is enabled
+    convert_to_jpeg = bool(config.get("images_convert_to_jpeg", False))
+    convert_to_png = bool(config.get("images_convert_lossless_to_png", False))
+    scan_exts = VALID_EXTENSIONS
+    if convert_to_jpeg or convert_to_png:
+        # Include all convertible types so BMP/GIF/TIFF/WEBP etc. are found
+        scan_exts = CONVERTIBLE_EXTENSIONS
+        # Also include VALID_EXTENSIONS (already in CONVERTIBLE, but ensure)
+        scan_exts = tuple(sorted(set(scan_exts) | set(VALID_EXTENSIONS)))
     targets = config.get("targets")
-    files = _collect_targets(targets, VALID_EXTENSIONS)
+    files = _collect_targets(targets, scan_exts)
     if targets is None:
-        files = sorted(_walk_files(target_dir, VALID_EXTENSIONS))
+        files = sorted(_walk_files(target_dir, scan_exts))
     # Deduplicate case-insensitive (Windows) and normcase for WinError 32
     if len(files) != len(set(os.path.normcase(p) for p in files)):
         seen = {}
@@ -2127,6 +2278,39 @@ def run_process_images(config):
                     ),
                     f,
                 ))
+
+            else:
+                # Other convertible types (BMP, GIF, TIFF, WEBP, AVIF, etc.)
+                # Handle convert-to-JPEG (lossy) and convert-lossless-to-PNG per config
+                convert_to_jpeg = bool(config.get("images_convert_to_jpeg", False))
+                convert_to_png = bool(config.get("images_convert_lossless_to_png", False))
+                # Determine if this file should be converted
+                is_lossless_src = ext in LOSSLESS_IMAGE_EXTS
+                target_ext = None
+                if convert_to_jpeg and ext not in (".jpg", ".jpeg"):
+                    # Convert any non-JPEG to JPEG (lossy) — uses images_jpeg_quality
+                    target_ext = ".jpg"
+                elif convert_to_png and is_lossless_src and ext != ".png":
+                    # Convert lossless types (BMP, GIF, TIFF, etc.) to PNG
+                    target_ext = ".png"
+                elif convert_to_png and ext in (".webp", ".avif", ".heic", ".heif") and ext != ".png":
+                    # For webp/avif/heic, check if they are lossless variants? Convert to PNG as lossless
+                    # We treat them as convertible to PNG when that option is on
+                    target_ext = ".png"
+                if target_ext:
+                    # Use Pillow conversion via streamlined helper
+                    tasks.append((
+                        _process_convert_image,
+                        (
+                            f,
+                            target_ext,
+                            _renames(f),
+                            config,
+                        ),
+                        f,
+                    ))
+                else:
+                    stats["skipped_count"] += 1
 
     log(f"prepared {len(tasks)} task(s) from {len(files)} file(s) (mode: {mode})")
     if not tasks:

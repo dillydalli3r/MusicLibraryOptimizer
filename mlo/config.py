@@ -144,6 +144,8 @@ DEFAULT_CONFIG = {
     "reencode_images": True,
     "reencode_to_jxl": True,
     "convert_jxl_back": False,
+    "images_convert_to_jpeg": False,
+    "images_convert_lossless_to_png": False,
     "rename_to_cover": True,
     "remove_alpha": True,
     "jpeg_progressive": True,

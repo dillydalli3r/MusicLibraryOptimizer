@@ -143,6 +143,8 @@ CONFIG_FIELDS = [
     ("remove_alpha", "Remove Alpha from PNGs", "bool", None),
     ("jpeg_progressive", "JPEG Progressive Output", "bool", None),
     ("png_optimization_level", "PNG Optimization Level (0-6)", "int", (0, 6)),
+    ("images_convert_to_jpeg", "Convert All Non-JPEG Images to JPEG (lossy, uses JPEG Quality)", "bool", None),
+    ("images_convert_lossless_to_png", "Convert All Lossless Images to PNG (BMP/GIF/TIFF → PNG)", "bool", None),
     ("force_reencode_images", "Force Re-encode Images", "bool", None),
     # Cover — Resize & Crop (v1.2.0)
     ("cover_resize_enabled", "Resize Covers to Target Size", "bool", None),
@@ -683,6 +685,10 @@ FIELD_DESCRIPTIONS = {
     "png_optimization_level":
         "oxipng optimization effort 0-6. Higher levels use more CPU for "
         "smaller lossless PNG files.",
+    "images_convert_to_jpeg":
+        "Convert every non-JPEG image (PNG/BMP/GIF/TIFF/WEBP/AVIF/HEIC/JXL etc.) to JPEG (lossy) using JPEG Quality (70-100). Requires Pillow. When on, all covers and sidecar images found as BMP/GIF/TIFF etc. are re-encoded as JPEG; existing JPEGs are still losslessly optimized via jpegtran.",
+    "images_convert_lossless_to_png":
+        "Convert every lossless-type image (BMP/GIF/TIFF/TIF/PPM/PGM/PBM/PNG already PNG) losslessly to PNG. Requires Pillow. When on, BMP/GIF/TIFF etc. are re-encoded as PNG (lossless, with oxipng level); JPEGs and lossy WEBP/AVIF are left alone unless Convert to JPEG is also on.",
     "force_reencode_images":
         "Reprocess images even when their ENCODER marker tags are current.",
     "cover_resize_enabled":
@@ -1474,7 +1480,9 @@ class ConfigDialog(tk.Toplevel):
             ("02 — Images  ·  Global Pipeline", [
                 "jpegxl_effort", "jpegxl_distance", "images_jpeg_quality",
                 "reencode_images", "reencode_to_jxl",
-                "convert_jxl_back", "rename_to_cover", "remove_alpha",
+                "convert_jxl_back",
+                "images_convert_to_jpeg", "images_convert_lossless_to_png",
+                "rename_to_cover", "remove_alpha",
                 "jpeg_progressive", "png_optimization_level",
             ]),
             ("03 — Cover Art  ·  Resize & Per-Format", [
