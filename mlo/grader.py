@@ -1374,22 +1374,40 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             # AccurateRip viewer: REAL if all ok, FAKE if any mismatch, else NONE
             has_ar = False
             has_mismatch = False
-            for lp in sorted(csum_logs_v):
-                ok, reason, _per = _check_ar_v(lp)
-                if ok is True:
-                    has_ar = True
-                elif ok is False:
-                    # Distinguish NONE (missing) vs FAKE (mismatch) via reason
-                    low = (reason or "").lower()
-                    if "track not present" in low or "missing accuraterip" in low or "no track sections" in low:
-                        # Missing AR data -> NONE, not FAKE (don't set has_mismatch)
-                        has_ar = False  # keep as NONE unless other log has REAL
+            # Prefer .accurip file if present for this disc (more reliable than log, per user request)
+            accurip_files = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".accurip")]
+            if accurip_files:
+                for ap in sorted(accurip_files):
+                    try:
+                        txt_ar = open(ap, "r", encoding="utf-8", errors="replace").read()
+                        low_ar = txt_ar.lower()
+                        if "verified" in low_ar:
+                            has_ar = True
+                        elif "mismatch" in low_ar or "cannot be verified" in low_ar or "not accurately" in low_ar:
+                            has_mismatch = True
+                            has_ar = True
+                            break
+                        elif "not present" in low_ar:
+                            # NONE, not FAKE
+                            continue
+                        elif txt_ar.strip():
+                            has_ar = True
+                    except OSError:
                         continue
-                    else:
-                        has_mismatch = True
+            if not has_ar and not has_mismatch:
+                for lp in sorted(csum_logs_v):
+                    ok, reason, _per = _check_ar_v(lp)
+                    if ok is True:
                         has_ar = True
-                        break
-                # None -> unsupported, ignore
+                    elif ok is False:
+                        low = (reason or "").lower()
+                        if "track not present" in low or "missing accuraterip" in low or "no track sections" in low:
+                            has_ar = False
+                            continue
+                        else:
+                            has_mismatch = True
+                            has_ar = True
+                            break
             if has_mismatch:
                 accuraterip_status = "FAKE"
             elif has_ar:

@@ -3050,11 +3050,13 @@ class App(tk.Tk):
             value=self.config.get("force_dr_ui", False))
         self.force_autotag_var = tk.BooleanVar(
             value=self.config.get("force_auto_tag_ui", False))
+        self.force_accurip_var = tk.BooleanVar(
+            value=self.config.get("force_accurip_ui", False))
         self.force_var = tk.BooleanVar(
             value=(self.force_flac_var.get() and self.force_images_var.get()
                    and self.force_audit_var.get() and self.force_lyrics_var.get()
                    and self.force_cue_var.get() and self.force_dr_var.get()
-                   and self.force_autotag_var.get()))
+                   and self.force_autotag_var.get() and self.force_accurip_var.get()))
         force_toggle = ToggleSwitch(
             force_box, self.force_var, bg=BG, command=self._on_force_master)
         force_toggle.pack(side=tk.LEFT)
@@ -4174,6 +4176,7 @@ class App(tk.Tk):
         self.force_cue_var.set(on)
         self.force_dr_var.set(on)
         self.force_autotag_var.set(on)
+        self.force_accurip_var.set(on)
         self._save_force_config()
 
     def _on_force_option(self):
@@ -4185,7 +4188,8 @@ class App(tk.Tk):
                            and self.force_lyrics_var.get()
                            and self.force_cue_var.get()
                            and self.force_dr_var.get()
-                           and self.force_autotag_var.get())
+                           and self.force_autotag_var.get()
+                           and self.force_accurip_var.get())
         self._save_force_config()
 
     def _save_force_config(self):
@@ -4197,6 +4201,7 @@ class App(tk.Tk):
         self.config["force_cue_ui"] = self.force_cue_var.get()
         self.config["force_dr_ui"] = self.force_dr_var.get()
         self.config["force_auto_tag_ui"] = self.force_autotag_var.get()
+        self.config["force_accurip_ui"] = self.force_accurip_var.get()
         save_config(self.config)
 
     def _show_force_menu(self):
@@ -4204,7 +4209,7 @@ class App(tk.Tk):
                        activebackground=ACCENT_DARK, activeforeground="#ffffff")
         menu.add_command(label="Force options", state=tk.DISABLED)
         menu.add_separator()
-        # Order matches RUN SCRIPTS (1,2,3,5,6,7,8) — Grade Library (4) has no Force
+        # Order matches RUN SCRIPTS (1,2,3,5,6,7,8,9) — Grade Library (4) has no Force
         # Labels must exactly match RUN SCRIPTS names (per user request)
         for var, label in (
             (self.force_lyrics_var, "Format Lyrics"),
@@ -4214,6 +4219,7 @@ class App(tk.Tk):
             (self.force_audit_var, "Audit Library"),
             (self.force_dr_var, "DR & ReplayGain"),
             (self.force_autotag_var, "Auto Tagging"),
+            (self.force_accurip_var, "Generate AccurateRip"),
         ):
             menu.add_checkbutton(label=label, variable=var, onvalue=True,
                                  offvalue=False,
@@ -5447,7 +5453,8 @@ class App(tk.Tk):
                   self.force_lyrics_var.get(),
                   self.force_cue_var.get(),
                   self.force_dr_var.get(),
-                  self.force_autotag_var.get()),
+                  self.force_autotag_var.get(),
+                  self.force_accurip_var.get()),
             daemon=True
         )
         t.start()
@@ -5488,6 +5495,9 @@ class App(tk.Tk):
                 "missing media", "media inconsistent", "unrecognized media",
                 "missing source", "source present but", "source inconsistent",
                 "missing instrumental", "missing albumitunesadvisory"))
+        if script_id == 9:  # Generate AccurateRip
+            return any(k in issues_blob for k in (
+                "accuraterip", "log checksum", "not accurately", "accurate rip", "mismatch", "track not present"))
         if script_id == 4:  # Grade Library — always needed if requested explicitly
             return True
         return True
@@ -5506,6 +5516,7 @@ class App(tk.Tk):
             6: self.force_audit_var.get(),
             7: self.force_dr_var.get(),
             8: self.force_autotag_var.get(),
+            9: self.force_accurip_var.get() if hasattr(self, 'force_accurip_var') else False,
             4: True,  # grade never forced-filtered
         }
         if force_map.get(script_id, False):
@@ -5620,7 +5631,8 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     def _worker(self, script_ids, title, targets=None, force_flac=False,
                 force_images=False, force_audit=False, force_lyrics=False,
-                force_cue=False, force_dr=False, force_autotag=False):
+                force_cue=False, force_dr=False, force_autotag=False,
+                force_accurip=False):
         started = time.monotonic()
         prev_tqdm, prev_hook = stats_mod.tqdm, stats_mod.progress_hook
         stats_mod.tqdm = None
@@ -5632,7 +5644,7 @@ class App(tk.Tk):
         # Runners never mutate the config; a copy lets us scope a run to
         # user-selected directories/tracks without affecting the app.
         run_cfg = self.config
-        if targets or force_flac or force_images or force_audit or force_lyrics or force_cue or force_dr or force_autotag:
+        if targets or force_flac or force_images or force_audit or force_lyrics or force_cue or force_dr or force_autotag or force_accurip:
             run_cfg = self.config.copy()
             if targets:
                 run_cfg["targets"] = list(targets)
@@ -5648,6 +5660,8 @@ class App(tk.Tk):
                 run_cfg["force_cue"] = True
             if force_dr:
                 run_cfg["force_dr_replaygain"] = True
+            if force_accurip:
+                run_cfg["force_accurip"] = True
             if force_autotag:
                 run_cfg["force_auto_tag"] = True
 

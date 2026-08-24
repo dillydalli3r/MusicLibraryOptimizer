@@ -523,6 +523,66 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
     return notes
 
 
+def rename_accurip_for_discs(album_dir, discs=None, log_fn=None, config=None):
+    """Rename .accurip files to <pattern>.accurip using same logic as logs."""
+    if config is not None and not config.get("discs_rename_enabled", True):
+        return []
+    pattern = _disc_pattern_for(config)
+    discs = discs if discs is not None else album_discs(album_dir)
+    if not discs:
+        if config is not None and not config.get("discs_rename_single_fallback", True):
+            return []
+        aud = [f for f in os.listdir(album_dir) if is_audio_file(f)]
+        if len(aud) > 0:
+            tmp = [f for f in os.listdir(album_dir) if f.lower().endswith(".accurip")]
+            if len(tmp) == 1 and len(aud) >= 1:
+                discs = {1: [os.path.join(album_dir, f) for f in aud]}
+            else:
+                return []
+    files = [f for f in sorted(os.listdir(album_dir)) if f.lower().endswith(".accurip")]
+    notes = []
+    # Reuse same logic as logs: explicit disc numbers, single-disc fallback, TOC match
+    # 1) explicit
+    remaining = []
+    claimed = {}
+    for f in files:
+        if _is_expected_disc_file(f, pattern, ".accurip"):
+            d = _log_name_disc(f)
+            if d:
+                claimed.setdefault(d, f)
+            continue
+        d = _log_name_disc(f)
+        if d and d in discs and d not in claimed:
+            claimed[d] = f
+        else:
+            remaining.append(f)
+    if len(discs) == 1 and len(remaining) == 1 and 1 not in claimed:
+        claimed[1] = remaining.pop(0)
+    if remaining and len(claimed) < len(discs):
+        toc_tol = float(config.get("discs_toc_tolerance_s", TOC_TOLERANCE_S)) if config else TOC_TOLERANCE_S
+        toc_margin = float(config.get("discs_toc_unique_margin_s", TOC_UNIQUE_MARGIN_S)) if config else TOC_UNIQUE_MARGIN_S
+        durations = {}
+        for d, paths in discs.items():
+            if d in claimed:
+                continue
+            secs = _audio_seconds(paths)
+            if secs:
+                durations[d] = secs
+        for f in remaining:
+            # For .accurip, we don't have TOC, so use file content's track count? Skip TOC matching for accurip
+            continue
+    for d, f in sorted(claimed.items()):
+        dst = os.path.join(album_dir, _disc_expected_name(pattern, d, ".accurip"))
+        if os.path.normcase(dst) == os.path.normcase(os.path.join(album_dir, f)):
+            continue
+        if not os.path.exists(dst):
+            _rename(os.path.join(album_dir, f), dst, notes)
+    if log_fn and notes:
+        for old, new in notes:
+            log_fn(f"accurip: {old} -> {new}")
+    return notes
+
+
 # ----------------------------------------------------------------------
 # CUE FILE-name correction (conservative, evidence-based)
 # ----------------------------------------------------------------------
@@ -970,6 +1030,7 @@ def grade_album_logs(cli_exe, album_dir, force=False, log_fn=None,
     fix_cue_filenames(album_dir, log_fn=log_fn, config=config)
     rename_logs_for_discs(album_dir, discs, log_fn=log_fn, config=config)
     rename_cues_for_discs(album_dir, discs, log_fn=log_fn, config=config)
+    rename_accurip_for_discs(album_dir, discs, log_fn=log_fn, config=config)
 
     scores = {}
     pattern = _disc_pattern_for(config)

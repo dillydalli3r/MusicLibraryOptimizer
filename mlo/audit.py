@@ -1036,17 +1036,36 @@ def run_audit_library(config):
                             logs_to_check_ar.append((full, all_tr))
                 except OSError:
                     continue
+            # Check for .accurip file for this album first (per user request: use .accurip values instead of log when present)
+            has_accurip = False
+            is_accurip_mismatch = False
+            for f in os.listdir(d):
+                if f.lower().endswith(".accurip"):
+                    ap = os.path.join(d, f)
+                    try:
+                        txt_ar = open(ap, "r", encoding="utf-8", errors="replace").read()
+                        low_ar = txt_ar.lower()
+                        has_accurip = True
+                        if "mismatch" in low_ar or "cannot be verified" in low_ar or "not accurately" in low_ar:
+                            is_accurip_mismatch = True
+                            break
+                        # If .accurip exists and is not empty, consider it as source of truth (even if just Verified)
+                    except OSError:
+                        continue
+            if has_accurip:
+                if is_accurip_mismatch:
+                    ar_failed.setdefault(d, []).append((ap, "AccurateRip mismatch in .accurip"))
+                # Use .accurip as source of truth, skip log's AR check for this album
+                continue
             for lp, trs in logs_to_check_ar:
                 ok, reason, per = _chk_ar(lp)
                 if ok is False:
                     # Only FAKE (mismatch) fails auditing; NONE (missing) is OK per user request
-                    # Missing: "Track not present", "missing AccurateRip", "no Track sections"
                     low_r = (reason or "").lower()
                     if "track not present" in low_r or "missing accuraterip" in low_r or "no track sections" in low_r:
-                        # NONE -> not a failure, just less verifiable
                         continue
                     ar_failed.setdefault(d, []).append((lp, reason))
-                # ok True / None is pass (None = unsupported, NONE)
+                # ok True / None is pass
         if ar_failed:
             log(c(f"Audit FAIL on AccurateRip: {sum(len(v) for v in ar_failed.values())} log(s) in {len(ar_failed)} CD album(s) not accurately ripped — marking their disc(s) as failed (audit_require_accuraterip on)", Color.RED))
             for d, lst in ar_failed.items():
