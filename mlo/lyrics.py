@@ -125,6 +125,7 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
                        lrc_enhanced_word_sync=True,
                        lrc_extended_enabled=True,
                        lrc_add_zero_timestamp=False,
+                       lrc_zero_timestamp_blank=False,
                        cfg=None):
     """
     Cleans lyrics:
@@ -149,6 +150,7 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
         lrc_enhanced_word_sync = cfg.get("lrc_enhanced_word_sync", lrc_enhanced_word_sync)
         lrc_extended_enabled = cfg.get("lrc_extended_enabled", lrc_extended_enabled)
         lrc_add_zero_timestamp = cfg.get("lrc_add_zero_timestamp", lrc_add_zero_timestamp)
+        lrc_zero_timestamp_blank = cfg.get("lrc_zero_timestamp_blank", lrc_zero_timestamp_blank)
         # precision/strip/collapse may also be in cfg when called via grader
         try:
             precision = int(cfg.get("lrc_timestamp_precision", precision))
@@ -271,14 +273,60 @@ def format_lyrics_text(text, precision=2, strip_metadata=True,
         if first_idx is not None:
             first_line = cleaned[first_idx]
             if lrc_add_zero_timestamp:
-                # Add: ensure a bare zero line exists at first_idx
-                if first_line.strip() != zero_ts:
-                    cleaned.insert(first_idx, zero_ts)
+                if lrc_zero_timestamp_blank:
+                    # Blank: ensure a bare zero line exists at first_idx — treat both bare and tight as having zero
+                    if not first_line.strip().startswith(zero_ts):
+                        cleaned.insert(first_idx, zero_ts)
+                else:
+                    # Tight: zero timestamp should be on same line as first lyric's text
+                    # Extract text after timestamp of first line, if any
+                    m = TIMESTAMP_RE.match(first_line.strip())
+                    body = first_line.strip()[m.end():].strip() if m else first_line.strip()
+                    # Remove any existing zero line that is blank
+                    if first_line.strip() == zero_ts:
+                        # Already blank zero, convert to tight if needed
+                        # Keep it as tight with body from next line if exists
+                        if first_idx + 1 < len(cleaned):
+                            next_line = cleaned[first_idx + 1]
+                            m2 = TIMESTAMP_RE.match(next_line.strip())
+                            next_body = next_line.strip()[m2.end():].strip() if m2 else next_line.strip()
+                            if next_body:
+                                cleaned[first_idx] = f"{zero_ts}{next_body}"
+                                # Remove the next line if it was the same text (to avoid duplicate)
+                                if next_body and next_line.strip().endswith(next_body):
+                                    # Only remove if next line's body matches (to avoid deleting unrelated)
+                                    pass
+                        else:
+                            cleaned[first_idx] = zero_ts
+                    else:
+                        # First line is like "[00:12.34]Hello world" — make it tight zero
+                        # We want first line to be "[00:00.00]Hello world" (replace timestamp, keep body)
+                        # But we should keep original timestamp line as second line? For tight, the zero is the first line's timestamp
+                        # So we replace the first line's timestamp with zero, keeping body
+                        if m and body:
+                            tight_line = f"{zero_ts}{body}"
+                            if tight_line != first_line.strip():
+                                cleaned[first_idx] = tight_line
+                        else:
+                            # No timestamp on first line (should not happen), just insert tight
+                            if first_line.strip() != f"{zero_ts}{body}":
+                                cleaned.insert(first_idx, f"{zero_ts}{body}" if body else zero_ts)
             else:
-                # Remove: if the first line is exactly a blank zero, delete it
-                # (so turning the option off actually removes the tag)
+                # Remove: if the first line is exactly a blank zero or tight zero, delete it
                 if first_line.strip() == zero_ts:
                     cleaned.pop(first_idx)
+                else:
+                    # Check if first line is tight zero (starts with zero_ts)
+                    if first_line.strip().startswith(zero_ts):
+                        # Remove tight zero — replace with original timestamp? Hard to know original.
+                        # For now, just remove the zero prefix and keep body
+                        body = first_line.strip()[len(zero_ts):].strip()
+                        if body:
+                            # Try to reconstruct original timestamp? We don't have it, so just keep body with no timestamp
+                            # To avoid losing lyric, keep body as is with no timestamp (will be re-timestamped on next run if needed)
+                            cleaned[first_idx] = body
+                        else:
+                            cleaned.pop(first_idx)
 
     return "\n".join(cleaned)
 

@@ -279,9 +279,16 @@ def _prepare_image_streamlined(src_path, dst_path, config, remove_alpha=False):
                     img = img.convert("RGB")
                 save_kwargs["format"] = "JPEG"
                 try:
-                    # Use cover_jpeg_quality when this save was triggered by cover crop/resize,
-                    # otherwise use images_jpeg_quality for general re-encoded JPEGs
-                    if did_cover and config and "cover_jpeg_quality" in config:
+                    # Use cover_jpeg_quality for covers (cropped/resized or cover-named), else images_jpeg_quality for re-encoded
+                    is_cover_file = False
+                    try:
+                        dst_base = os.path.splitext(os.path.basename(dst_path).lower())[0]
+                        src_base = os.path.splitext(os.path.basename(src_path).lower())[0]
+                        if dst_base in ("cover", "front", "folder") or src_base in ("cover", "front", "folder"):
+                            is_cover_file = True
+                    except Exception:
+                        pass
+                    if (did_cover or is_cover_file) and config and "cover_jpeg_quality" in config:
                         q = int(config.get("cover_jpeg_quality", 100))
                     else:
                         q = int(config.get("images_jpeg_quality", 95)) if config else 95
@@ -1986,6 +1993,16 @@ def _process_convert_image(args):
         final_out = os.path.splitext(src_path)[0] + target_ext
         if os.path.normcase(os.path.normpath(src_path)) == os.path.normcase(os.path.normpath(final_out)):
             return (src_path, "skipped", 0, 0, "already correct format")
+        # Handle collision when two files with same base but different ext convert to same target (e.g., cover.bmp + cover.tiff -> cover.png)
+        if os.path.exists(final_out):
+            # Try base + target_ext, then base + _1 + target_ext, etc., up to 10 tries
+            for i in range(1, 11):
+                alt = os.path.join(out_dir, f"{base}_{i}{target_ext}")
+                if not os.path.exists(alt):
+                    final_out = alt
+                    break
+            else:
+                return (src_path, "skipped", 0, 0, f"target exists: {os.path.basename(final_out)}")
 
     # Avoid clobbering existing cover
     if rename_to_cover and os.path.exists(final_out) and os.path.normcase(os.path.normpath(src_path)) != os.path.normcase(os.path.normpath(final_out)):
@@ -1993,6 +2010,13 @@ def _process_convert_image(args):
         alt = os.path.join(out_dir, base + target_ext)
         if not os.path.exists(alt):
             final_out = alt
+        else:
+            # Also handle collision for cover case
+            for i in range(1, 11):
+                alt2 = os.path.join(out_dir, f"{base}_{i}{target_ext}")
+                if not os.path.exists(alt2):
+                    final_out = alt2
+                    break
 
     temp_out = final_out + ".tmp"
     try:
@@ -2048,10 +2072,40 @@ def _process_convert_image(args):
         log(f"[convert tag warn] {src_path}: {e}")
 
     final_size = os.path.getsize(temp_out)
+    # Handle concurrent collision: if final_out already exists (e.g., cover.bmp + cover.tiff both -> cover.png
+    # but second task's check at creation time saw no file, now first task has created it), find alternative
+    # Also handle WinError 32 where file is being used by another concurrent task
+    if os.path.exists(final_out):
+        base2 = os.path.splitext(os.path.basename(final_out))[0]
+        dir2 = os.path.dirname(final_out)
+        if os.path.normcase(os.path.normpath(final_out)) != os.path.normcase(os.path.normpath(src_path)):
+            for i in range(1, 11):
+                alt = os.path.join(dir2, f"{base2}_{i}{target_ext}")
+                if not os.path.exists(alt):
+                    final_out = alt
+                    break
+            else:
+                return (src_path, "failed", 0, 0, f"target exists: {os.path.basename(final_out)}")
     try:
         os.replace(temp_out, final_out)
     except OSError as e:
-        return (src_path, "failed", 0, 0, f"could not rename: {e}")
+        # If WinError 32 (file in use) or FileExistsError due to concurrent creation, try alternative
+        if getattr(e, 'winerror', None) == 32 or "being used by another process" in str(e) or os.path.exists(final_out):
+            base2 = os.path.splitext(os.path.basename(final_out))[0]
+            dir2 = os.path.dirname(final_out)
+            for i in range(1, 11):
+                alt = os.path.join(dir2, f"{base2}_{i}{target_ext}")
+                if not os.path.exists(alt):
+                    try:
+                        os.replace(temp_out, alt)
+                        final_out = alt
+                        break
+                    except OSError:
+                        continue
+            else:
+                return (src_path, "failed", 0, 0, f"could not rename: {e} (target collision)")
+        else:
+            return (src_path, "failed", 0, 0, f"could not rename: {e}")
     if os.path.normcase(os.path.normpath(src_path)) != os.path.normcase(os.path.normpath(final_out)):
         try:
             os.remove(src_path)
@@ -2181,6 +2235,9 @@ def run_process_images(config):
         return rename_to_cover and f == cover_map.get(os.path.dirname(f))
 
     tasks = []
+    # Track reserved conversion targets to avoid collisions when multiple files with same base
+    # (e.g., cover.bmp + cover.tiff both → cover.png) would overwrite each other
+    reserved_targets = set(os.path.normcase(p) for p in files)
 
     for f in files:
         ext = os.path.splitext(f)[1].lower()
@@ -2307,6 +2364,28 @@ def run_process_images(config):
                     # We treat them as convertible to PNG when that option is on
                     target_ext = ".png"
                 if target_ext:
+                    # Check for target collision with already-reserved files (e.g., cover.bmp + cover.tiff → cover.png)
+                    # Reserve the target so subsequent files with same base don't clobber
+                    base = os.path.splitext(os.path.basename(f))[0]
+                    # Determine final target path as _process_convert_image would (respecting rename_to_cover)
+                    if _renames(f):
+                        tentative = os.path.join(os.path.dirname(f), "cover" + target_ext)
+                    else:
+                        tentative = os.path.splitext(f)[0] + target_ext
+                    norm_tent = os.path.normcase(tentative)
+                    if norm_tent in reserved_targets:
+                        # Find alternative with suffix
+                        for i in range(1, 11):
+                            alt = os.path.join(os.path.dirname(f), f"{base}_{i}{target_ext}")
+                            if os.path.normcase(alt) not in reserved_targets and not os.path.exists(alt):
+                                tentative = alt
+                                break
+                        else:
+                            stats["skipped_count"] += 1
+                            continue
+                    reserved_targets.add(norm_tent)
+                    # Also reserve the tentative if we used alternative
+                    reserved_targets.add(os.path.normcase(tentative))
                     # Use Pillow conversion via streamlined helper
                     tasks.append((
                         _process_convert_image,

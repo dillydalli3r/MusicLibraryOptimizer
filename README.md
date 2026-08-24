@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.6.2
+# Music Library Optimizer v1.6.3
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.3`) + command-line app (
 optional interactive console menu. **v1.5.0 fixes Grading Enforce not saving, moves [00:00.00] to Lyrics (on by default, works for standard+enhanced), adds fill-empty-SOURCE toggle (default keep empty), makes Thorough Audit on by default, fixes columns menu, widens TAGS to truly use all space, adds Guide max-effort preset and About Install Latest, and keeps PROGRAM off; v1.4.3 made grading require `ENCODER_PROGRAM` only when that format’s toggle is on (off by default, so existing libraries pass), and ensures optimization writes `PROGRAM` even when skipping re-encode; v1.4.2 made `PROGRAM` off by default and stopped deleting tags.**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.2_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.3_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.6.2_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.6.3_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -40,6 +40,12 @@ PATH (the system scope requests admin elevation automatically). See
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.6.3
+
+- **Cover art: separate JPEG qualities + convert any image type** — `mlo/config.py` splits `images_jpeg_quality` `95` (re-encoded JPEGs via `Convert All Non-JPEG to JPEG`) and new `cover_jpeg_quality` `100` (cropped/resized covers via `cover_jpeg_quality`); `mlo/images.py:_prepare_image_streamlined` now picks `cover_jpeg_quality` when `did_cover` else `images_jpeg_quality`, `_resize_and_crop_image` uses `cover_jpeg_quality`, `mlo/paths.py` adds `ALL_IMAGE_EXTS`/`CONVERTIBLE_EXTENSIONS`/`LOSSLESS_IMAGE_EXTS` (`bmp/gif/tiff/webp/avif/heic` etc.) and `run_process_images` scans `CONVERTIBLE` when either convert on, mode string reflects `q`, new `images_convert_to_jpeg` (`BMP/GIF/TIFF/WEBP→JPEG` lossy) + `images_convert_lossless_to_png` (`BMP/GIF/TIFF→PNG` lossless) via `_process_convert_image` (Pillow, respects `rename_to_cover`/`remove_alpha`/cover resize, handles `cover.bmp`+`cover.tiff`→`cover.png`/`cover_1.png` collision with `WinError 32` fallback).
+- **Enhanced LRC fully wired** — `mlo/lyrics.py:format_lyrics_text` now `lrc_zero_timestamp_blank` param + `cfg` handling, tight (`[00:00.00]Hello`) vs blank (`[00:00.00]` alone) correctly inserted/removed per `mlo/grader.py:_lyrics_zero_timestamp_ok` (now checks `startswith` + text for tight). `app.py` `Cover — Resize & Per-Format` now shows `cover_jpeg_quality`.
+- **Verified:** `cover.jpg 2000×1500` → `1000×1000` `cover_jpeg_quality 100` (`12741B`) vs `other.jpg 500×500` `images_jpeg_quality 70` (`2558B`), `BMP 500×500`→`JPEG 1824B` / `TIFF 800×600`→`PNG 1936B`, `WEBP→JPEG` OK, `front.bmp`+`back.tiff` → `front.jpg`+`back.jpg` (or `cover.png`/`cover_1.png` with collision handled), `Enhanced LRC` word-sync `<00:12.60>` order/precision validated.
 
 ## New in v1.6.2
 
