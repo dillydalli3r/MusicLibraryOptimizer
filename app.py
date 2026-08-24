@@ -2404,6 +2404,8 @@ class SetupWizard(tk.Toplevel):
 
         btns = ttk.Frame(outer)
         btns.pack(fill=tk.X, pady=(16, 0))
+        ttk.Button(btns, text="Apply Defaults", command=self._apply_defaults).pack(side=tk.LEFT, padx=(0, 8))
+        ToolTip(btns.winfo_children()[0], "Reset all settings to factory defaults (your current strict config: 100/100, 0px, 100q, no zero, PROGRAM on, 16/44.1, etc.) — previewed in summary, nothing saved until Save & Close.")
         ttk.Button(btns, text="Skip (use current settings)", command=self.destroy).pack(side=tk.LEFT)
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btns, text="Save & Close", style="Accent.TButton", command=self._save).pack(side=tk.RIGHT, padx=5)
@@ -2446,6 +2448,36 @@ class SetupWizard(tk.Toplevel):
                 if cur != v:
                     parts.append(f"{k}: {cur!r} → {v!r}")
             self.summary_var.set(";  ".join(parts) if parts else "Selected preset matches current settings — nothing new to change.")
+
+    def _apply_defaults(self):
+        """Fill pending with every factory default (preserving music_folder) for Save preview."""
+        from mlo.config import DEFAULT_CONFIG
+        # Preserve the folder the user picked in the wizard (don't overwrite it with DEFAULT_CONFIG's empty)
+        folder = self.folder_var.get().strip()
+        # Clear preset radios (so pending is purely defaults, not a preset mix)
+        for var in (self._music_var, self._cover_var, self._lyrics_var, self._cue_var, self._cd_var, self._general_var):
+            var.set("")
+        self._pending.clear()
+        # Copy every default except music_folder/first_run_done (handled separately)
+        for k, v in DEFAULT_CONFIG.items():
+            if k in ("music_folder", "first_run_done", "last_update_check"):
+                continue
+            # Deep copy nested dicts
+            import copy
+            self._pending[k] = copy.deepcopy(v)
+        # Keep the wizard's folder
+        if folder:
+            self._pending["music_folder"] = folder
+        # Refresh summary to show what would change
+        self._on_preset_pick()
+        # Also show a count
+        pending_n = len(self._pending)
+        cur = self.summary_var.get()
+        prefix = f"Defaults staged ({pending_n} keys) — "
+        if cur.startswith("Library folder only"):
+            self.summary_var.set(prefix + "all factory defaults (your strict 100/100, 0px, 100q) will be applied on Save.")
+        else:
+            self.summary_var.set(prefix + cur)
 
     def _validate_folder(self):
         p = self.folder_var.get().strip()

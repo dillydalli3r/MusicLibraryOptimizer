@@ -1,4 +1,4 @@
-# Music Library Optimizer v1.6.5
+# Music Library Optimizer v1.6.6
 
 > ## ⚠️ VIBE CODED
 >
@@ -18,11 +18,11 @@ Desktop GUI (Tkinter, dark-themed, titlebar shows `v1.4.3`) + command-line app (
 optional interactive console menu. **v1.5.0 fixes Grading Enforce not saving, moves [00:00.00] to Lyrics (on by default, works for standard+enhanced), adds fill-empty-SOURCE toggle (default keep empty), makes Thorough Audit on by default, fixes columns menu, widens TAGS to truly use all space, adds Guide max-effort preset and About Install Latest, and keeps PROGRAM off; v1.4.3 made grading require `ENCODER_PROGRAM` only when that format’s toggle is on (off by default, so existing libraries pass), and ensures optimization writes `PROGRAM` even when skipping re-encode; v1.4.2 made `PROGRAM` off by default and stopped deleting tags.**
 ## Quick Start
 
-**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.5_x64.exe`
+**Desktop app (installer):** Download `MusicLibraryOptimizer_Setup_v1.6.6_x64.exe`
 from [Releases](https://github.com/dillydalli3r/MusicLibraryOptimizer/releases),
 run it, and follow the first-launch wizard to pick your music folder.
 
-**Portable:** Download `MusicLibraryOptimizer_v1.6.5_portable_x64.exe` and run it
+**Portable:** Download `MusicLibraryOptimizer_v1.6.6_portable_x64.exe` and run it
 directly from any folder — it is fully **self-contained**: it creates
 `config.json` and `.dependencies/` next to itself on first run and uses no
 external folders. Keep the whole folder together to move it anywhere.
@@ -40,6 +40,10 @@ PATH (the system scope requests admin elevation automatically). See
 > **64-bit only.** The app and every bundled tool (FLAC, libjxl, libjpeg-turbo,
 > oxipng, AudioAuditor, rsgain, ffmpeg) are Windows x64 builds. A 32-bit
 > build is not provided — the whole toolchain is 64-bit only.
+
+## New in v1.6.6
+
+- **All procedures now fully configurable + defaults = your `config.json` + Apply Defaults** — `mlo/config.py` now `reencode_to_jxl False` / `convert_jxl_back True` / `images_convert_to_jpeg True` (were `True`/`False`/`False`) to match your strict `config.json` (`convert_jxl_back` + `images_convert_to_jpeg` on, `reencode_to_jxl` off), `164` keys `config.example.json` regenerated. Every formatting (`Lyrics`, `CUE`, `FLAC`, `Images`), grading (`29 grade_check_*` + `grade_include_*` + `cover_enforce` + thresholds) and auditing (`19 audit_*`) procedure now has a toggle in `Settings` to control whether it is counted (`total_checks`/`AUDIT`); disabled = `○ OFF` in `Grade Details`. `app.py:SetupWizard` now `Apply Defaults` button (`_apply_defaults`) — stages `DEFAULT_CONFIG` (your `100/100, 0px, 100q` etc.) for `Save` preview, preserving `music_folder`.
 
 ## New in v1.6.5
 
