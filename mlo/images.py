@@ -279,7 +279,12 @@ def _prepare_image_streamlined(src_path, dst_path, config, remove_alpha=False):
                     img = img.convert("RGB")
                 save_kwargs["format"] = "JPEG"
                 try:
-                    q = int(config.get("images_jpeg_quality", 95)) if config else 95
+                    # Use cover_jpeg_quality when this save was triggered by cover crop/resize,
+                    # otherwise use images_jpeg_quality for general re-encoded JPEGs
+                    if did_cover and config and "cover_jpeg_quality" in config:
+                        q = int(config.get("cover_jpeg_quality", 100))
+                    else:
+                        q = int(config.get("images_jpeg_quality", 95)) if config else 95
                     q = max(70, min(100, q))
                 except Exception:
                     q = 95
@@ -519,7 +524,11 @@ def _resize_and_crop_image(src_path, dst_path, target_size, crop_enabled, crop_t
                                 pass
                         save_kwargs["format"] = "JPEG"
                         try:
-                            q = int(config.get("images_jpeg_quality", 95)) if config else 95
+                            # For cover resize, use cover_jpeg_quality if present, else images_jpeg_quality
+                            if config and "cover_jpeg_quality" in config:
+                                q = int(config.get("cover_jpeg_quality", 100))
+                            else:
+                                q = int(config.get("images_jpeg_quality", 95)) if config else 95
                             q = max(70, min(100, q))
                         except Exception:
                             q = 95

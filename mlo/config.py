@@ -140,7 +140,8 @@ DEFAULT_CONFIG = {
     # Images — global
     "jpegxl_effort": 10,
     "jpegxl_distance": 0.0,
-    "images_jpeg_quality": 100,
+    "images_jpeg_quality": 95,
+    "cover_jpeg_quality": 100,
     "reencode_images": True,
     "reencode_to_jxl": True,
     "convert_jxl_back": False,
@@ -392,6 +393,7 @@ _INT_RANGES = {
     "audit_batch_timeout_s": (10, 120),
     "audit_per_file_timeout_s": (10, 60),
     "images_jpeg_quality": (70, 100),
+    "cover_jpeg_quality": (70, 100),
     "grader_cover_size_tolerance_px": (0, 5),
     "grade_log_score_threshold": (0, 100),
     "audit_log_score_threshold": (0, 100),

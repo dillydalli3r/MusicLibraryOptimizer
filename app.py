@@ -135,7 +135,8 @@ CONFIG_FIELDS = [
     # Images — global
     ("jpegxl_effort", "JPEG XL Effort (1-10)", "int", (1, 10)),
     ("jpegxl_distance", "JPEG XL Distance (0.0=lossless, 1.0=visually lossless)", "str", None),
-    ("images_jpeg_quality", "JPEG Quality for Resized Covers (70-100)", "int", (70, 100)),
+    ("images_jpeg_quality", "JPEG Quality for Re-encoded Images (70-100)", "int", (70, 100)),
+    ("cover_jpeg_quality", "JPEG Quality for Cropped/Resized Covers (70-100)", "int", (70, 100)),
     ("reencode_images", "Re-encode Images", "bool", None),
     ("reencode_to_jxl", "Re-encode to JXL", "bool", None),
     ("convert_jxl_back", "Convert JXL Back to JPEG/PNG", "bool", None),
@@ -663,8 +664,13 @@ FIELD_DESCRIPTIONS = {
         "cjxl distance (0.0 = lossless, 1.0 = visually lossless). 0.0 by default; "
         "increase for smaller lossy JXL covers.",
     "images_jpeg_quality":
-        "JPEG quality for resized cover images (70-100). 95 by default. Applies "
-        "when a cover is cropped/resized via Pillow before encoding.",
+        "JPEG quality for re-encoded JPEGs (70-100). 95 by default. Applies "
+        "when converting any non-JPEG image to JPEG (BMP/GIF/TIFF/WEBP/etc. → JPEG) "
+        "or when re-encoding JPEGs lossily. Cropped covers use Cover JPEG Quality separately.",
+    "cover_jpeg_quality":
+        "JPEG quality for cropped/resized covers (70-100). 100 by default. Applies "
+        "only when a cover is cropped or resized (cover_jpeg_quality), so you can keep "
+        "cropped covers at 100 while re-encoded JPEGs use a different quality.",
     "reencode_images":
         "Master switch for image processing. When off, the Process Images "
         "script does nothing.",
@@ -1486,7 +1492,7 @@ class ConfigDialog(tk.Toplevel):
                 "jpeg_progressive", "png_optimization_level",
             ]),
             ("03 — Cover Art  ·  Resize & Per-Format", [
-                "cover_resize_enabled", "cover_target_size",
+                "cover_resize_enabled", "cover_target_size", "cover_jpeg_quality",
                 "cover_crop_enabled", "cover_crop_threshold",
                 "cover_force_exact_size",
                 "cover_jpeg_enabled", "cover_png_enabled", "cover_jxl_enabled",
@@ -2269,7 +2275,7 @@ class SetupWizard(tk.Toplevel):
             "Applies v1.6.0 strict defaults — your config.json: Log scores must be 100/100 (perfect rip) • cover size tolerance 0px / strict square 0.0 / crop 0.0 • JPEG quality 100 (max) • no [00:00.00] zero timestamp • all ENCODER_PROGRAM on • run order 1→2→8→3→5→6→4→7 (Grade before DR). CD must be 16-bit 44.1 kHz (true CD-DA). All grading checks remain on. Matches new defaults.",
             {"grade_log_score_threshold": 100, "audit_log_score_threshold": 100,
              "grader_cover_size_tolerance_px": 0, "grader_strict_square_threshold": 0.0,
-             "cover_crop_threshold": 0.0, "images_jpeg_quality": 100,
+             "cover_crop_threshold": 0.0, "images_jpeg_quality": 100, "cover_jpeg_quality": 100,
              "lrc_add_zero_timestamp": False,
              "encoder_tags": {"flac": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
                               "jpeg": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
