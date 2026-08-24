@@ -114,6 +114,8 @@ RAW_TAGS = [
 TREE_COLUMNS = {
     "grade": ("GRADE", 74, True),
     "audit": ("AUDIT", 80, True),
+    "checksum": ("CHECKSUM", 90, False),
+    "accuraterip": ("ACCURATERIP", 100, False),
     "checks": ("CHECKS", 88, False),
     "tracks": ("TRACKS", 58, True),
     "media": ("MEDIA", 100, True),
@@ -853,9 +855,9 @@ FIELD_DESCRIPTIONS = {
     "grade_log_score_threshold":
         "Minimum Logchecker score (0-100) for a CD rip to pass grading. 0 (default) means any score 0-100 passes if log exists; 80 requires good rip, 100 requires perfect. Applies per disc via LOG_GRADE tag; failing logs fail the album. 0 disables threshold.",
     "grade_check_log_checksum":
-        "Grading: verify the SHA256 checksum at the bottom of EAC logs (==== Log checksum ... ====). When on (default), a log whose checksum is invalid or missing (EAC V1.0+ expected) makes the album FAIL. Disable to ignore log checksum in grading.",
+        "Viewer: show CHECKSUM column (REAL/NONE/FAKE) for CD logs. When on (default), the Library viewer CHECKSUM column is available via right-click → Columns. Grading no longer fails on checksum (see Auditing). Auditing still fails only on FAKE (invalid).",
     "grade_check_accuraterip":
-        "Grading: require every track to be Accurately Ripped (AR confidence ≥1). When on (default), if even one track is 'Track not present' or 'Cannot be verified' the album FAILS. Disable to allow non-AR rips in grading.",
+        "Viewer: show ACCURATERIP column (REAL/NONE/FAKE) for CD logs. When on (default), the Library viewer ACCURATERIP column is available. Grading no longer fails on AR (see Auditing). Auditing fails only on FAKE (mismatch), not on NONE (not present).",
     "grade_check_unreadable":
         "Grading: fail if an audio file cannot be read/parsed. When off, unreadable files still warn but don't fail grading.",
     "grade_check_missing_tags":
@@ -930,9 +932,9 @@ FIELD_DESCRIPTIONS = {
         "whole disc AUDIT=FAKE. Ensures every CD .log is gradeable; disable to "
         "keep old behaviour where unscoreable logs only emit [log] warning.",
     "audit_verify_log_checksum":
-        "Audit: verify the SHA256 checksum at the bottom of EAC/XLD logs (==== Log checksum ... ====) via Logchecker. When on (default), a log whose checksum is invalid or missing makes the disc AUDIT=FAKE. Disable to ignore log checksum.",
+        "Audit: verify the SHA256 checksum at the bottom of EAC logs (==== Log checksum ... ====). When on (default), only an invalid checksum (FAKE) makes the disc AUDIT=FAKE; missing/unsupported (NONE) is OK — not all logs have checksums. Disable to ignore even FAKE.",
     "audit_require_accuraterip":
-        "Audit: require every track to be Accurately Ripped (AR confidence ≥1, present in DB). When on (default), if even one track is 'Track not present', 'Cannot be verified', or 'Rip may not be accurate' (Logchecker Details), the whole disc AUDIT=FAKE. Disable to allow non-AR rips.",
+        "Audit: require AccurateRip match. When on (default), only a mismatch (FAKE — e.g., 'Cannot be verified', 'Rip may not be accurate') makes AUDIT=FAKE; 'Track not present in AccurateRip database' (NONE, not in DB) is OK — not all rips are in AR. Disable to ignore even FAKE.",
     "audit_log_score_threshold":
         "Audit: minimum Logchecker score (0-100) for a CD rip to pass auditing. 0 (default) means any score passes; 80/100 require good/perfect rip. Per-disc via LOG_GRADE tag; failing logs make disc AUDIT=FAKE. 0 disables threshold.",
     "audit_check_cd_format":
@@ -1520,7 +1522,6 @@ class ConfigDialog(tk.Toplevel):
                 "grade_check_unreadable", "grade_check_missing_tags",
                 "grade_check_encoder", "grade_check_audit",
                 "grade_check_cover", "grade_check_disallowed",
-                "grade_check_log_checksum", "grade_check_accuraterip",
             ]),
             ("09 — Grading  ·  Content (Lyrics/Media/CD)", [
                 "grade_check_instrumental", "grade_check_lyrics",
@@ -1537,26 +1538,29 @@ class ConfigDialog(tk.Toplevel):
                 "grade_check_lyrics_zero", "grade_check_cue_spaces",
                 "grade_check_cue_blank_lines", "grade_check_cover_crop",
             ]),
-            ("11 — Auditing  ·  Core & CD Verification", [
+            ("11 — Viewer  ·  CD Info (CHECKSUM / ACCURATERIP)", [
+                "grade_check_log_checksum", "grade_check_accuraterip",
+            ]),
+            ("12 — Auditing  ·  Core & CD Verification", [
                 "audit_thorough", "audit_cutoff_allow",
                 "audit_verify_cd_checksums", "audit_cd_require_both",
                 "audit_integrity", "audit_fail_on_unscorable_log",
                 "audit_verify_log_checksum", "audit_require_accuraterip",
                 "audit_log_score_threshold", "audit_check_cd_format",
             ]),
-            ("12 — Auditing  ·  Detectors", [
+            ("13 — Auditing  ·  Detectors", [
                 "audit_clipping", "audit_scaled_clipping", "audit_mqa",
                 "audit_ai", "audit_fake_stereo", "audit_silence",
                 "audit_dynamic_range", "audit_true_peak", "audit_lufs",
                 "audit_bpm",
             ]),
-            ("13 — Auditing  ·  Performance", [
+            ("14 — Auditing  ·  Performance", [
                 "audit_batch_size", "audit_batch_timeout_s", "audit_per_file_timeout_s",
             ]),
-            ("14 — Loudness  ·  DR & ReplayGain", [
+            ("15 — Loudness  ·  DR & ReplayGain", [
                 "dr_replaygain_enabled", "replaygain_skip_existing",
             ]),
-            ("15 — System  ·  Performance & Updates", [
+            ("16 — System  ·  Performance & Updates", [
                 "auto_advance", "worker_limit",
                 "compact_ui",
                 "check_updates_on_start", "auto_update_on_start",
@@ -1573,7 +1577,7 @@ class ConfigDialog(tk.Toplevel):
             header_frame.columnconfigure(0, weight=1)
             collapsed = tk.BooleanVar(value=False)
             # Start collapsed for verbose groups to reduce initial scroll height
-            if group_title in ("10 — Grading  ·  Strict Formatting", "12 — Auditing  ·  Detectors", "13 — Auditing  ·  Performance", "03 — Cover Art  ·  Resize & Per-Format"):
+            if group_title in ("10 — Grading  ·  Strict Formatting", "13 — Auditing  ·  Detectors", "14 — Auditing  ·  Performance", "03 — Cover Art  ·  Resize & Per-Format"):
                 collapsed.set(True)
             self._group_collapsed[group_title] = collapsed
             self._group_keys[group_title] = list(keys)
@@ -3657,12 +3661,15 @@ class App(tk.Tk):
 
     def _apply_album_grade(self, tree, item, album_dir, res):
         if "error" in res:
-            tree.item(item, values=("ERR", "ERR", "", "", "", "", "", ""),
+            tree.item(item, values=("ERR", "ERR", "—", "—", "", "", "", "", "", ""),
                       tags=("fail",))
             return
         ok = res["pass_count"] == res["total_checks"]
         audit = res.get("audit_summary")
         aa_value = (res.get("album_values") or {}).get("ALBUMITUNESADVISORY")
+        # Viewer columns for CD log checksum / AccurateRip — REAL/NONE/FAKE
+        checksum_disp = res.get("checksum_status") or "—"
+        ar_disp = res.get("accuraterip_status") or "—"
         # FAILED column: show all failed checks (multiple values), wrap as needed, empty if PASS
         failed_txt = ""
         if not ok:
@@ -3679,6 +3686,8 @@ class App(tk.Tk):
         tree.item(item, values=(
             "PASS" if ok else "FAIL",
             audit or "—",
+            checksum_disp,
+            ar_disp,
             f"{res['pass_count']}/{res['total_checks']}",
             res["track_count"],
             res["media"],
@@ -3721,9 +3730,14 @@ class App(tk.Tk):
         failed_txt = ", ".join(issues) if issues else ""
         # Show sidecar cover file for this track if it exists, otherwise —
         cover_disp = tr.get("sidecar_cover_file") or "—"
+        # Per-track checksum / AR display (REAL/NONE/FAKE) — fallback to album's value if not per-track
+        checksum_tr = tr.get("checksum_status") or "—"
+        ar_tr = tr.get("accuraterip_status") or "—"
         tree.item(item, values=(
             "PASS" if ok else "FAIL",
             audit or "—",
+            checksum_tr,
+            ar_tr,
             str(len(issues)) if issues else "",
             "—",
             tr["values"].get("MEDIA") or "",
@@ -4573,8 +4587,6 @@ class App(tk.Tk):
                     ("grade_check_log_grade", "LOG_GRADE"),
                     ("grade_check_crc", "CRC coverage"),
                     ("grade_check_cd_format", "CD 16-bit 44.1 kHz"),
-                    ("grade_check_log_checksum", "SHA256 checksum"),
-                    ("grade_check_accuraterip", "AccurateRip"),
                     ("grade_check_cue_format", "CUE canonical"),
                     ("grade_check_cover_crop", "Cover crop"),
                     ("grade_check_lyrics_spaces", "Lyrics spaces (strict)"),
@@ -4633,6 +4645,28 @@ class App(tk.Tk):
                         emit(f"  {'✕' if is_f else '✓'}  {label}", "fail" if is_f else "pass")
                 else:
                     emit(f"  ✓  {label}", "pass")
+
+            # Viewer columns — CHECKSUM / ACCURATERIP (REAL/NONE/FAKE) — always shown, not grading
+            emit("", None)
+            emit("Viewer — CD Info  ·  CHECKSUM / ACCURATERIP (REAL/NONE/FAKE):", "header")
+            try:
+                csum_disp = res.get("checksum_status") or "—"
+                ar_disp = res.get("accuraterip_status") or "—"
+                # For track, use per-track values if available
+                if track_file:
+                    for tr in res.get("tracks", []):
+                        if os.path.join(res.get("path",""), tr.get("file","")) == track_file:
+                            csum_disp = tr.get("checksum_status") or csum_disp
+                            ar_disp = tr.get("accuraterip_status") or ar_disp
+                            break
+                # Color based on value (FAKE red, REAL green, NONE muted)
+                csum_style = "fail" if csum_disp == "FAKE" else ("pass" if csum_disp == "REAL" else "off")
+                ar_style = "fail" if ar_disp == "FAKE" else ("pass" if ar_disp == "REAL" else "off")
+                emit(f"  CHECKSUM: {csum_disp}  —  {'invalid' if csum_disp=='FAKE' else 'valid' if csum_disp=='REAL' else 'missing/unsupported'}", csum_style)
+                emit(f"  ACCURATERIP: {ar_disp}  —  {'mismatch' if ar_disp=='FAKE' else 'all accurately ripped' if ar_disp=='REAL' else 'not present / missing'}", ar_style)
+                emit(f"  (Auditing fails only on FAKE — NONE is OK per new behavior)", "section")
+            except Exception:
+                pass
 
             emit("", None)
             emit("─" * 60, "muted")

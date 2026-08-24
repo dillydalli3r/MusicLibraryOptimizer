@@ -926,24 +926,11 @@ def run_audit_library(config):
                     continue
             for lp, trs in logs_to_check:
                 state, detail = check_log_checksum(lp)
-                # 'unsupported' (XLD/no checksum) and 'missing' (no checksum line) are not fails — only 'invalid' is a hard fail.
-                # Missing on an EAC log that declares a checksum but can't be parsed is treated as invalid for strictness,
-                # but XLD/unsupported is passed to avoid false-failing non-EAC collections.
+                # Only 'invalid' (FAKE) fails auditing; 'missing' (NONE) / 'unsupported' / 'ok' are passes per user request
+                # Missing checksum doesn't mean fake, just less verifiable
                 if state == "invalid":
                     checksum_failed.setdefault(d, []).append((lp, detail))
-                elif state == "missing":
-                    # EAC log claims no checksum line but should have one — treat as fail only if log is EAC
-                    # check_log_checksum already returns 'unsupported' for XLD; 'missing' here means EAC without checksum (old version)
-                    # We still fail it when strict (user asked fail if checksum verification failed) — but allow turn off via toggle.
-                    # To avoid failing ancient rips with no checksum ever, we only fail if the log text contains 'Exact Audio Copy V1.0' (version where checksum expected)
-                    try:
-                        from .discs import read_log_text as _rlt
-                        txt_tmp = _rlt(lp)
-                        if "Exact Audio Copy V1.0" in txt_tmp:
-                            checksum_failed.setdefault(d, []).append((lp, detail))
-                    except Exception:
-                        pass
-                # 'ok', 'unsupported', None are passes
+                # 'ok', 'missing', 'unsupported', None are passes (NONE)
         if checksum_failed:
             log(c(f"Audit FAIL on log checksum: {sum(len(v) for v in checksum_failed.values())} log(s) in {len(checksum_failed)} CD album(s) have invalid SHA256 checksum — marking their disc(s) as failed (audit_verify_log_checksum on)", Color.RED))
             for d, lst in checksum_failed.items():
@@ -1052,8 +1039,14 @@ def run_audit_library(config):
             for lp, trs in logs_to_check_ar:
                 ok, reason, per = _chk_ar(lp)
                 if ok is False:
+                    # Only FAKE (mismatch) fails auditing; NONE (missing) is OK per user request
+                    # Missing: "Track not present", "missing AccurateRip", "no Track sections"
+                    low_r = (reason or "").lower()
+                    if "track not present" in low_r or "missing accuraterip" in low_r or "no track sections" in low_r:
+                        # NONE -> not a failure, just less verifiable
+                        continue
                     ar_failed.setdefault(d, []).append((lp, reason))
-                # ok True / None is pass (None = couldn't read, not strict)
+                # ok True / None is pass (None = unsupported, NONE)
         if ar_failed:
             log(c(f"Audit FAIL on AccurateRip: {sum(len(v) for v in ar_failed.values())} log(s) in {len(ar_failed)} CD album(s) not accurately ripped — marking their disc(s) as failed (audit_require_accuraterip on)", Color.RED))
             for d, lst in ar_failed.items():

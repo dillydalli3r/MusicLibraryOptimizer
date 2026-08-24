@@ -1324,86 +1324,62 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             except Exception:
                 pass
 
-        # Log SHA256 checksum verification (EAC logs have Rijndael checksum)
-        if cfg.get("grade_check_log_checksum", cfg.get("audit_verify_log_checksum", True)):
-            try:
-                from .discs import check_log_checksum as _check_csum, read_log_text as _read_lt
-                # Re-collect log paths for this check (outside previous try's scope)
-                csum_logs = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".log")]
-                for lp in sorted(csum_logs):
-                    state, detail = _check_csum(lp)
-                    # 'unsupported' (XLD/no header) is not a failure — avoids false-failing XLD collections
-                    # 'missing' only fails when the log is EAC V1.0+ where checksum is expected
-                    should_fail = False
-                    if state == "invalid":
-                        should_fail = True
-                    elif state == "missing":
-                        try:
-                            txt_tmp = _read_lt(lp)
-                            if "Exact Audio Copy V1.0" in txt_tmp:
-                                should_fail = True
-                        except Exception:
-                            pass
-                    # Only count when checksum concept applies (skip XLD/unsupported)
-                    if state not in ("unsupported", None):
-                        total_checks += 1
-                        if should_fail:
-                            failed_checks += 1
-                            add_issue(f"Log checksum invalid ({os.path.basename(lp)}: {detail or 'mismatch'})", "album")
-                            # Also tag each track of the affected disc so FAILED shows per-track
-                            for tr in tracks:
-                                if not tr.get("unreadable") and "LOG_CHECKSUM" not in tr.get("issues", []):
-                                    # Mark disc tracks — for multi-disc only mark its disc's tracks
-                                    try:
-                                        from .discs import disc_of_filename as _dof_c, _disc_pattern_for as _pat_c, _disc_expected_name as _exp_c, album_discs as _ad_c
-                                        dnum = _dof_c(tr["file"])
-                                        discs_tmp = _ad_c(album_dir)
-                                        if discs_tmp:
-                                            exp = os.path.join(album_dir, _exp_c(_pat_c(cfg), dnum or 1, ".log"))
-                                            if os.path.normcase(exp) == os.path.normcase(lp):
-                                                tr["issues"].append("LOG_CHECKSUM")
-                                        else:
-                                            tr["issues"].append("LOG_CHECKSUM")
-                                    except Exception:
-                                        tr["issues"].append("LOG_CHECKSUM")
-            except Exception:
-                pass
-
-        # AccurateRip verification — every track must be 'Accurately ripped'
-        if cfg.get("grade_check_accuraterip", cfg.get("audit_require_accuraterip", True)):
-            try:
-                from .discs import check_accuraterip as _check_ar
-                ar_logs = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".log")]
-                for lp in sorted(ar_logs):
-                    ok, reason, per = _check_ar(lp)
-                    # Count AR check for every log (unsupported -> 'no Track sections' is False, but still counted)
-                    # Only EAC/XLD logs with tracks: ok True = pass, False = fail, None = unsupported -> not counted
-                    if ok is not None:
-                        total_checks += 1
-                        if ok is False:
-                            failed_checks += 1
-                            add_issue(f"Not accurately ripped ({os.path.basename(lp)}: {reason or 'AR mismatch'})", "album")
-                            for tr in tracks:
-                                if tr.get("unreadable"):
-                                    continue
-                                # Only fail tracks belonging to this log's disc when multi-disc
-                                try:
-                                    from .discs import disc_of_filename as _dof_ar, _disc_pattern_for as _pat_ar, _disc_expected_name as _exp_ar, album_discs as _ad_ar
-                                    dnum = _dof_ar(tr["file"])
-                                    discs_tmp = _ad_ar(album_dir)
-                                    if discs_tmp:
-                                        exp = os.path.join(album_dir, _exp_ar(_pat_ar(cfg), dnum or 1, ".log"))
-                                        if os.path.normcase(exp) == os.path.normcase(lp):
-                                            if "AR" not in tr.get("issues", []):
-                                                tr["issues"].append("AR")
-                                    else:
-                                        if "AR" not in tr.get("issues", []):
-                                            tr["issues"].append("AR")
-                                except Exception:
-                                    if "AR" not in tr.get("issues", []):
-                                        tr["issues"].append("AR")
-            except Exception:
-                pass
+        # Viewer columns for CD log checksum / AccurateRip — REAL/NONE/FAKE (not grading, just display)
+        # These are NOT grading checks per user request; missing (NONE) is fine, only wrong (FAKE) fails auditing
+        checksum_status = "NONE"
+        accuraterip_status = "NONE"
+        try:
+            from .discs import check_log_checksum as _check_csum_v, check_accuraterip as _check_ar_v
+            csum_logs_v = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".log")]
+            # Checksum viewer: REAL if all ok, FAKE if any invalid, else NONE
+            has_csum = False
+            has_invalid = False
+            for lp in sorted(csum_logs_v):
+                state, _det = _check_csum_v(lp)
+                if state == "ok":
+                    has_csum = True
+                elif state == "invalid":
+                    has_invalid = True
+                    has_csum = True
+                    break
+                # missing/unsupported/None -> NONE, ignore
+            if has_invalid:
+                checksum_status = "FAKE"
+            elif has_csum:
+                checksum_status = "REAL"
+            else:
+                checksum_status = "NONE"
+            # AccurateRip viewer: REAL if all ok, FAKE if any mismatch, else NONE
+            has_ar = False
+            has_mismatch = False
+            for lp in sorted(csum_logs_v):
+                ok, reason, _per = _check_ar_v(lp)
+                if ok is True:
+                    has_ar = True
+                elif ok is False:
+                    # Distinguish NONE (missing) vs FAKE (mismatch) via reason
+                    low = (reason or "").lower()
+                    if "track not present" in low or "missing accuraterip" in low or "no track sections" in low:
+                        # Missing AR data -> NONE, not FAKE (don't set has_mismatch)
+                        has_ar = False  # keep as NONE unless other log has REAL
+                        continue
+                    else:
+                        has_mismatch = True
+                        has_ar = True
+                        break
+                # None -> unsupported, ignore
+            if has_mismatch:
+                accuraterip_status = "FAKE"
+            elif has_ar:
+                accuraterip_status = "REAL"
+            else:
+                accuraterip_status = "NONE"
+            # Store for viewer columns (album-level and per-track)
+            for tr in tracks:
+                tr["checksum_status"] = checksum_status
+                tr["accuraterip_status"] = accuraterip_status
+        except Exception:
+            pass
 
     elif media_summary == "Digital Media":
         # SOURCE requirements already checked per-track.
@@ -1619,6 +1595,23 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
 
     pass_count = max(0, total_checks - failed_checks)
 
+    # Ensure viewer columns have values even for non-CD albums
+    try:
+        if "checksum_status" not in locals():
+            checksum_status = "NONE"
+        if "accuraterip_status" not in locals():
+            accuraterip_status = "NONE"
+        # For non-CD, ensure per-track values exist
+        if media_summary != "CD":
+            for tr in tracks:
+                if "checksum_status" not in tr:
+                    tr["checksum_status"] = "NONE"
+                if "accuraterip_status" not in tr:
+                    tr["accuraterip_status"] = "NONE"
+    except Exception:
+        checksum_status = "NONE"
+        accuraterip_status = "NONE"
+
     # Per-file grades for the non-audio files shown in the viewer (only
     # computed when the viewer toggle is enabled, to avoid extra I/O).
     sidecars = []
@@ -1642,6 +1635,8 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         "cover_ok": cover_ok,
         "has_log": has_log,
         "has_cue": has_cue,
+        "checksum_status": checksum_status if 'checksum_status' in locals() else "NONE",
+        "accuraterip_status": accuraterip_status if 'accuraterip_status' in locals() else "NONE",
         "lyrics_present": lyrics_present_count,
         "lyrics_expected": lyrics_expected_count,
         "instrumental_count": instrumental_count,
