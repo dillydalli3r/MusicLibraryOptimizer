@@ -161,6 +161,22 @@ def detect_all_tools():
                 "php_exe": tools.get("php", {}).get("php_exe"),
             }
 
+    ct_v, ct_f = _detect_tool("cuetools", DEPS_DIR)
+    if ct_f:
+        d = os.path.join(DEPS_DIR, ct_f)
+        # CUETools.exe is the main exe, may be in CUETools or nested
+        exe = None
+        for cand in [os.path.join(d, "CUETools.exe"), os.path.join(d, "cuetools", "CUETools.exe")]:
+            if os.path.isfile(cand):
+                exe = cand
+                break
+        if exe or os.path.isdir(d):
+            tools["cuetools"] = {
+                "version": ct_v,
+                "exe": exe or os.path.join(d, "CUETools.exe"),
+                "dir": d,
+            }
+
     with _CACHE_LOCK:
         _TOOLS_CACHE = tools
     return tools

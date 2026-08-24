@@ -48,6 +48,7 @@ DISPLAY_NAMES = {
     "simpledrmeter": "simple-dr-meter",
     "logchecker": "Logchecker",
     "php": "PHP",
+    "cuetools": "CUETools",
 }
 
 REPOS = {
@@ -59,6 +60,7 @@ REPOS = {
     "rsgain": "complexlogic/rsgain",
     "ffmpeg": "BtbN/FFmpeg-Builds",
     "logchecker": "OPSnet/Logchecker",
+    "cuetools": "gchudov/cuetools.net",
 }
 
 # Ordered asset-name preferences (regex, matched case-insensitively).
@@ -74,6 +76,7 @@ ASSET_PATTERNS = {
     "rsgain": [r"^rsgain-[\d.]+-win64\.zip$"],
     "ffmpeg": [r"^ffmpeg-master-latest-win64-gpl\.zip$"],
     "logchecker": [r"^logchecker\.phar$"],
+    "cuetools": [r"^CUETools\.zip$", r"^cuetools.*\.zip$"],
 }
 
 INSTALL_PREFIX = {
@@ -86,6 +89,7 @@ INSTALL_PREFIX = {
     "ffmpeg": "ffmpeg",
     "logchecker": "Logchecker",
     "php": "php",
+    "cuetools": "CUETools",
 }
 
 TOOL_DIRS = INSTALL_PREFIX  # backward compat for app.py (use installed_path() for versioned folder)
@@ -117,6 +121,7 @@ MARKER_EXES = {
     "ffmpeg": ("ffmpeg.exe", "ffprobe.exe"),
     "logchecker": ("logchecker.phar",),
     "php": ("php.exe",),
+    "cuetools": ("CUETools.exe",),
 }
 
 # Tools whose release asset is a single bare exe - no archive to extract.
@@ -176,6 +181,11 @@ PINNED = {
         "tag": "8.1.28",
         "asset": "php-8.1.28-nts-Win32-vs16-x64.zip",
         "version": "8.1.28",
+    },
+    "cuetools": {
+        "tag": "v2.1.6",
+        "asset": "CUETools.zip",
+        "version": "2.1.6",
     },
 }
 
