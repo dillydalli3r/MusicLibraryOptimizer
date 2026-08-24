@@ -664,7 +664,7 @@ FIELD_DESCRIPTIONS = {
         "cjxl distance (0.0 = lossless, 1.0 = visually lossless). 0.0 by default; "
         "increase for smaller lossy JXL covers.",
     "images_jpeg_quality":
-        "JPEG quality for re-encoded JPEGs (70-100). 95 by default. Applies "
+        "JPEG quality for re-encoded JPEGs (70-100). 100 by default (max quality). Applies "
         "when converting any non-JPEG image to JPEG (BMP/GIF/TIFF/WEBP/etc. → JPEG) "
         "or when re-encoding JPEGs lossily. Cropped covers use Cover JPEG Quality separately.",
     "cover_jpeg_quality":

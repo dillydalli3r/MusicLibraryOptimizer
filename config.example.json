@@ -203,7 +203,7 @@
   "grader_strict_square_threshold": 0.0,
   "images_convert_lossless_to_png": false,
   "images_convert_to_jpeg": false,
-  "images_jpeg_quality": 95,
+  "images_jpeg_quality": 100,
   "jpeg_progressive": true,
   "jpegxl_distance": 0.0,
   "jpegxl_effort": 10,
