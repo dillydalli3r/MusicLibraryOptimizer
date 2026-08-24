@@ -92,13 +92,14 @@ def canonical_cue_text(content, keep_empty_lines, keep_other_lines,
                 formatted.append(f"    {stripped}")
 
         else:
-            # Keep structural directives (PREGAP, POSTGAP, FLAGS,
-            # PERFORMER, TITLE, CATALOG, ISRC, SONGWRITER, ...)
-            # unconditionally — dropping them corrupts the sheet.
-            # Only REM comment lines are stripped when keep_other_lines
-            # is off.
-            if not (upper.startswith("REM ") and not keep_other_lines):
+            # When keep_other_lines is off (default per request), only
+            # REM DISCID, FILE, TRACK and INDEX are kept. All other
+            # structural directives (PERFORMER, TITLE, CATALOG, ISRC,
+            # SONGWRITER, PREGAP, POSTGAP, FLAGS, REM other, etc.) are
+            # dropped to produce a minimal canonical sheet.
+            if keep_other_lines:
                 formatted.append(stripped)
+            # else: drop the line (only the 4 types above are kept)
 
     if discid_line:
         formatted.insert(0, discid_line)
