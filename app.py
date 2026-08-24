@@ -3527,7 +3527,7 @@ class App(tk.Tk):
         self._item_base[self._root_item] = root_text
         self._agg[self._root_item] = [0, 0, 0, 0, 0, set(), 0,
                                       set(), set(), set(), set(), 0, 0,
-                                      set()]
+                                      set(), set(), set()]
         self._agg_total[self._root_item] = 0
 
         shown_any = False
@@ -3553,7 +3553,7 @@ class App(tk.Tk):
             self._item_base[artist_item] = artist_name
             self._agg[artist_item] = [0, 0, 0, 0, 0, set(), 0,
                                       set(), set(), set(), set(), 0, 0,
-                                      set()]
+                                      set(), set(), set()]
             count_for_total = len(visible) if self.bad_only_var.get() else len(album_dirs)
             self._agg_total[artist_item] = count_for_total
             self._agg_total[self._root_item] += count_for_total
@@ -3854,6 +3854,11 @@ class App(tk.Tk):
             agg[12] += res.get("track_count") or 0
             if res.get("audit_summary"):
                 agg[13].add(str(res["audit_summary"]))
+            # Aggregate CHECKSUM / ACCURATERIP for viewer
+            if res.get("checksum_status"):
+                agg[14].add(str(res["checksum_status"]))
+            if res.get("accuraterip_status"):
+                agg[15].add(str(res["accuraterip_status"]))
         self._apply_agg(item)
 
     def _apply_agg(self, item):
@@ -3862,7 +3867,7 @@ class App(tk.Tk):
             return
         (albums, passed, checks, pass_checks, tracks, media_set, covers,
          aa_set, ta_set, genre_set, inst_set, lyrics, track_total,
-         audit_set) = agg
+         audit_set, csum_set, ar_set) = agg
         grade_txt = f"{passed}/{albums}" if albums else "—"
         from mlo.grader import summarize_audits
         audit_txt = summarize_audits(audit_set) or "—"
@@ -3886,8 +3891,33 @@ class App(tk.Tk):
                 failed_agg = audit_txt
             elif grade_txt.startswith("0/"):
                 failed_agg = "gen"
+        # New columns CHECKSUM/ACCURATERIP are after AUDIT, before CHECKS
+        # For aggregates, show aggregated CHECKSUM/AR if available
+        if len(csum_set) == 1:
+            checksum_agg = next(iter(csum_set))
+        elif len(csum_set) > 1:
+            # Mixed: show REAL if any REAL, else FAKE if any FAKE, else NONE
+            if "REAL" in csum_set:
+                checksum_agg = "Mixed"
+            elif "FAKE" in csum_set:
+                checksum_agg = "Mixed"
+            else:
+                checksum_agg = "Mixed"
+        else:
+            checksum_agg = "—"
+        if len(ar_set) == 1:
+            ar_agg = next(iter(ar_set))
+        elif len(ar_set) > 1:
+            if "REAL" in ar_set:
+                ar_agg = "Mixed"
+            elif "FAKE" in ar_set:
+                ar_agg = "Mixed"
+            else:
+                ar_agg = "Mixed"
+        else:
+            ar_agg = "—"
         self.library_tree.item(item, values=(
-            grade_txt, audit_txt, checks_txt, tracks or "—", media_txt,
+            grade_txt, audit_txt, checksum_agg, ar_agg, checks_txt, tracks or "—", media_txt,
             cover_txt, tags_txt, failed_agg))
         expected = self._agg_total.get(item, albums)
         if albums and albums >= expected:
