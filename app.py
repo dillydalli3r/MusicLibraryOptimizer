@@ -1072,7 +1072,7 @@ class DependenciesDialog(tk.Toplevel):
     """Download / update the external toolchain from GitHub."""
 
     KEYS = ("flac", "libjxl", "libjpeg_turbo", "oxipng", "audioauditor",
-            "rsgain", "ffmpeg", "simpledrmeter", "logchecker", "php")
+            "rsgain", "ffmpeg", "simpledrmeter", "logchecker", "php", "cuetools")
 
     def __init__(self, app):
         super().__init__(app)
@@ -1081,8 +1081,8 @@ class DependenciesDialog(tk.Toplevel):
         self.configure(background=PANEL)
         self.transient(app)
         self.grab_set()
-        self.minsize(720, 520)
-        self.geometry("760x560")
+        self.minsize(720, 560)
+        self.geometry("760x620")
         self.busy = False
         self.q = queue.Queue()
         self.latest = {}
