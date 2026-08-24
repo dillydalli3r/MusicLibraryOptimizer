@@ -1196,7 +1196,11 @@ class DependenciesDialog(tk.Toplevel):
     def _show_details(self, key):
         inst = self.rows[key]["installed_version"] or "—"
         latest = self.latest.get(key, "…")
-        path = os.path.join(DEPS_DIR, fetchdeps.TOOL_DIRS.get(key, key))
+        # Use versioned folder if available
+        try:
+            path = fetchdeps.installed_path(key) or os.path.join(DEPS_DIR, fetchdeps.TOOL_DIRS.get(key, key))
+        except Exception:
+            path = os.path.join(DEPS_DIR, key)
         try:
             exists = os.path.isdir(path)
             files = ", ".join(os.listdir(path)[:6]) if exists else "—"
@@ -1231,7 +1235,10 @@ class DependenciesDialog(tk.Toplevel):
             lines = []
             for k in self.KEYS:
                 ver = installed.get(k, "—")
-                path = os.path.join(DEPS_DIR, fetchdeps.TOOL_DIRS.get(k, k))
+                try:
+                    path = fetchdeps.installed_path(k) or os.path.join(DEPS_DIR, fetchdeps.TOOL_DIRS.get(k, k))
+                except Exception:
+                    path = os.path.join(DEPS_DIR, k)
                 lines.append(f"{fetchdeps.DISPLAY_NAMES.get(k,k)}: {ver} @ {path}")
             text = "\n".join(lines)
             self.clipboard_clear()

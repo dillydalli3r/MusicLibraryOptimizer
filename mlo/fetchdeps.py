@@ -88,6 +88,24 @@ INSTALL_PREFIX = {
     "php": "php",
 }
 
+TOOL_DIRS = INSTALL_PREFIX  # backward compat for app.py (use installed_path() for versioned folder)
+
+def installed_path(key):
+    """Return the actual versioned folder for an installed tool, or None."""
+    prefix = INSTALL_PREFIX.get(key, key)
+    if not os.path.isdir(DEPS_DIR):
+        return None
+    # Find folder starting with prefix (e.g. "php v8.1.28")
+    try:
+        for entry in os.listdir(DEPS_DIR):
+            full = os.path.join(DEPS_DIR, entry)
+            if os.path.isdir(full) and entry.lower().startswith(prefix.lower()):
+                # Prefer exact prefix match with version
+                return full
+    except OSError:
+        pass
+    return os.path.join(DEPS_DIR, prefix)
+
 # Exe files that must be present after installation.
 MARKER_EXES = {
     "flac": ("flac.exe", "metaflac.exe"),
@@ -212,8 +230,8 @@ def get_latest_release(key):
 
 def latest_versions():
     """{tool key: pinned version string} for all tools (no network needed)."""
-    out = {key: PINNED[key]["version"] for key in REPOS}
-    out["simpledrmeter"] = PINNED["simpledrmeter"]["version"]
+    # Return pinned versions for every tool we track (REPOS + php/simpledrmeter)
+    out = {key: PINNED[key]["version"] for key in PINNED}
     return out
 
 
