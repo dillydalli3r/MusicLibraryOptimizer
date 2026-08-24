@@ -334,6 +334,11 @@ def run_calc_dr_replaygain(config):
                     if not ok:
                         album_failed = f"rsgain: {err}"
                 if rsgain and album_failed is None:
+                    # When force is True, rsgain rewrites even if no files were missing — count as modified
+                    if force and rg_missing.get(album) == []:
+                        # Check if album still has audio files (it does if we are here)
+                        if any(is_audio_file(f) for f in os.listdir(album)):
+                            album_modified += 1
                     for path in rg_missing.get(album, []):
                         if not _file_missing_rgain(path):
                             if should_write_audio_tag(config, "REPLAYGAIN_TRACK_GAIN", filepath=path):
@@ -347,6 +352,10 @@ def run_calc_dr_replaygain(config):
                                             af.delete_tag(tk)
                                 except Exception:
                                     pass
+                        elif force:
+                            # Force re-ran but file still missing (e.g., write disabled per-type) -> count as modified attempt
+                            if should_write_audio_tag(config, "REPLAYGAIN_TRACK_GAIN", filepath=path):
+                                album_modified += 1
                 if dr_script and ffmpeg and album_failed is None:
                     audio_files = [f for f in os.listdir(album) if is_audio_file(f)]
                     if audio_files and (force or any(_file_missing_dr(

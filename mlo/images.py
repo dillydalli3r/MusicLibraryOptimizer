@@ -2364,6 +2364,40 @@ def run_process_images(config):
                     # We treat them as convertible to PNG when that option is on
                     target_ext = ".png"
                 if target_ext:
+                    # Respect FORCE: if not force and target already exists with correct format, skip
+                    if not force:
+                        # Check if a file with the target name already exists (e.g., cover.jpg for cover.bmp)
+                        # For convert-to-JPEG/PNG, the target is base + new ext or cover + new ext
+                        base = os.path.splitext(os.path.basename(f))[0]
+                        if _renames(f):
+                            tentative = os.path.join(os.path.dirname(f), "cover" + target_ext)
+                        else:
+                            tentative = os.path.splitext(f)[0] + target_ext
+                        # Also check alternative names (cover_1 etc.) if tentative exists due to collision handling
+                        # If tentative exists and is a valid image, consider it already converted and skip
+                        if os.path.exists(tentative):
+                            # Check if tentative is a valid image (not a temp file)
+                            try:
+                                if os.path.getsize(tentative) > 0:
+                                    # Consider already converted, skip unless force
+                                    stats["skipped_count"] += 1
+                                    continue
+                            except OSError:
+                                pass
+                        # Also check for alternative with suffix if tentative exists
+                        # We already handle collision at worker, but for FORCE=False we should skip if any converted version exists
+                        for i in range(1, 11):
+                            alt = os.path.join(os.path.dirname(f), f"{base}_{i}{target_ext}")
+                            if os.path.exists(alt):
+                                try:
+                                    if os.path.getsize(alt) > 0:
+                                        stats["skipped_count"] += 1
+                                        target_ext = None
+                                        break
+                                except OSError:
+                                    pass
+                        if target_ext is None:
+                            continue
                     # Check for target collision with already-reserved files (e.g., cover.bmp + cover.tiff → cover.png)
                     # Reserve the target so subsequent files with same base don't clobber
                     base = os.path.splitext(os.path.basename(f))[0]

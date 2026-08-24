@@ -186,8 +186,10 @@ def run_auto_tagging(config):
             for d in info:
                 if d["album_advisory"] != str(advisory_value) and should_write_audio_tag(config, "ALBUMITUNESADVISORY", filepath=d["af"].path):
                     need_write.append(d)
-            if force or need_write:
-                for d in need_write:
+            # When force is True, rewrite even if already correct (count as modified for stats)
+            write_list = need_write if not force else [d for d in info if should_write_audio_tag(config, "ALBUMITUNESADVISORY", filepath=d["af"].path)]
+            if write_list:
+                for d in write_list:
                     if d["af"].set_tag("ALBUMITUNESADVISORY", str(advisory_value)):
                         modified += 1
                         advisory_modified += 1
