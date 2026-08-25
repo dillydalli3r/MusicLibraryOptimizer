@@ -184,7 +184,7 @@ PINNED = {
     },
     "cuetools": {
         "tag": "v2.1.6",
-        "asset": "CUETools.zip",
+        "asset": "CUETools_2.1.6.zip",
         "version": "2.1.6",
     },
 }
