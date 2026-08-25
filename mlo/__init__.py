@@ -36,7 +36,7 @@ try:
 except ImportError:
     run_generate_accurip = None
 
-__version__ = "1.7.0"
+__version__ = "1.7.1"
 __all__ = [
     "load_config", "save_config", "DEFAULT_CONFIG",
     "run_auto_tagging",
