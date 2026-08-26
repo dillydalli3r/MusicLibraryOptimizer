@@ -7,10 +7,10 @@ import tempfile
 from .paths import CONFIG_FILE, DEFAULT_DIGITAL_SOURCE
 from .ui import c, Color
 
-# Run All order — strict pipeline v1.6.0: 1 Lyrics → 2 CUEs → 8 Auto Tagging → 3 FLAC → 5 Images → 6 Audit → 9 AccurateRip → 4 Grade → 7 DR/ReplayGain.
-# Textual metadata first, then media, then audit/grade, then loudness last so DR reflects final audio.
+# Run All order — strict pipeline v1.7.0: 1 Lyrics → 2 CUEs → 8 Auto Tagging → 3 FLAC → 5 Images → 9 AccurateRip → 6 Audit → 4 Grade → 7 DR/ReplayGain → 10 Format All.
+# AccurateRip must run before Audit/Grade so the .accurip is present for real-time AUDIT; Grade after Audit so AUDIT tags are fresh; Format All at end does final canonical trims.
 # User's strict config default as of v1.6.0; reorder via Settings → Run All Order.
-DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 6, 4, 7, 9]
+DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]
 
 # Audio tag families that can be toggled per filetype.
 # Each family groups related TAG_MAP keys that are written together.
@@ -187,6 +187,7 @@ DEFAULT_CONFIG = {
     "append_final_newline": False,
     "keep_empty_cue_lines": False,
     "keep_other_cue_lines": False,
+    "keep_empty_accurip_lines": False,
     "cue_file_type": "WAVE",
 
     # MEDIA / SOURCE normalization
@@ -248,7 +249,7 @@ DEFAULT_CONFIG = {
     "grade_check_unreadable": True,
     "grade_check_missing_tags": True,
     "grade_check_encoder": True,
-    "grade_check_audit": True,
+    "grade_check_audit": False,
     "grade_check_instrumental": True,
     "grade_check_lyrics": True,
     "grade_check_lyrics_format": True,
@@ -309,10 +310,10 @@ DEFAULT_CONFIG = {
     # format via Settings → Encoder Tags. QUALITY/VERSION remain on (they gate
     # re-optimization: higher effort or newer version).
     "encoder_tags": {
-        "flac": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "jpeg": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "png": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
-        "jxl": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "flac": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "jpeg": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "png": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
+        "jxl": {"ENCODER_PROGRAM": False, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
     },
     # Per-filetype audio tag writes — which semantic tag families each audio
     # container receives. All True by default; ANDed with the global master
@@ -554,11 +555,20 @@ def normalize_config(user=None) -> dict:
                 script_id = int(value)
             except (TypeError, ValueError):
                 continue
-            if 1 <= script_id <= 8 and script_id not in clean_order:
+            if 1 <= script_id <= 10 and script_id not in clean_order:
                 clean_order.append(script_id)
     # Migrate legacy sequential default [1..8] to systematic pipeline
     if clean_order == [1, 2, 3, 4, 5, 6, 7, 8] and clean_order != list(DEFAULT_RUN_ALL_ORDER):
         clean_order = list(DEFAULT_RUN_ALL_ORDER)
+    # Migrate old 8-item order without AccurateRip to new 10-item order
+    if clean_order == [1, 2, 8, 3, 5, 6, 4, 7]:
+        clean_order = list(DEFAULT_RUN_ALL_ORDER)
+    # Ensure new Format All (10) is present at end for existing installs that had old 9-item order
+    if 10 not in clean_order and clean_order == [1, 2, 8, 3, 5, 9, 6, 4, 7]:
+        clean_order.append(10)
+    # Also handle case where user had old 9 at end: [1,2,8,3,5,6,4,7,9] -> migrate to new order with 10 at end
+    if clean_order == [1, 2, 8, 3, 5, 6, 4, 7, 9]:
+        clean_order = [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]
     cfg["run_all_order"] = clean_order or list(DEFAULT_RUN_ALL_ORDER)
     return cfg
 

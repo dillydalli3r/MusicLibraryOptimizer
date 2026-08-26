@@ -183,9 +183,9 @@ PINNED = {
         "version": "8.1.28",
     },
     "cuetools": {
-        "tag": "v2.1.6",
-        "asset": "CUETools_2.1.6.zip",
-        "version": "2.1.6",
+        "tag": "v2.2.6",
+        "asset": "CUETools_2.2.6.zip",
+        "version": "2.2.6",
     },
 }
 

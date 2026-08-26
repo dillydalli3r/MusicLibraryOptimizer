@@ -35,6 +35,10 @@ try:
     from .accurip import run_generate_accurip
 except ImportError:
     run_generate_accurip = None
+try:
+    from .format_all import run_format_all
+except ImportError:
+    run_format_all = None
 
 __version__ = "1.7.1"
 __all__ = [
@@ -42,7 +46,7 @@ __all__ = [
     "run_auto_tagging",
     "run_format_lyrics", "run_format_cues", "run_optimize_flacs",
     "run_grade_library", "run_process_images", "run_audit_library",
-    "run_calc_dr_replaygain", "run_generate_accurip",
+    "run_calc_dr_replaygain", "run_generate_accurip", "run_format_all",
 ]
 
 

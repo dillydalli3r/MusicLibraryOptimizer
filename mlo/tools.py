@@ -166,14 +166,38 @@ def detect_all_tools():
         d = os.path.join(DEPS_DIR, ct_f)
         # CUETools.exe is the main exe, may be in CUETools or nested
         exe = None
+        arcue = None
         for cand in [os.path.join(d, "CUETools.exe"), os.path.join(d, "cuetools", "CUETools.exe")]:
             if os.path.isfile(cand):
                 exe = cand
                 break
-        if exe or os.path.isdir(d):
+        for cand in [
+            os.path.join(d, "CUETools.ARCUE.exe"),
+            os.path.join(d, "cuetools", "CUETools.ARCUE.exe"),
+            os.path.join(d, "ArCueDotNet.exe"),
+            os.path.join(d, "cuetools", "ArCueDotNet.exe"),
+            os.path.join(d, "CUETools.ARCUE.exe".lower()),
+        ]:
+            if os.path.isfile(cand):
+                arcue = cand
+                break
+        # Fallback scan for any ARCUE-named exe
+        if not arcue:
+            try:
+                for entry in os.listdir(d):
+                    low = entry.lower()
+                    if "arcue" in low and low.endswith(".exe"):
+                        cand = os.path.join(d, entry)
+                        if os.path.isfile(cand):
+                            arcue = cand
+                            break
+            except OSError:
+                pass
+        if exe or arcue or os.path.isdir(d):
             tools["cuetools"] = {
                 "version": ct_v,
                 "exe": exe or os.path.join(d, "CUETools.exe"),
+                "arcue_exe": arcue,
                 "dir": d,
             }
 

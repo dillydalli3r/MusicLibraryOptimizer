@@ -53,6 +53,10 @@ try:
     from mlo.accurip import run_generate_accurip
 except ImportError:
     run_generate_accurip = None
+try:
+    from mlo.format_all import run_format_all
+except ImportError:
+    run_format_all = None
 from mlo import stats as stats_mod
 from mlo import tools as tools_mod
 from mlo import fetchdeps
@@ -72,6 +76,7 @@ SCRIPT_NAMES = {
     7: "DR & ReplayGain",
     8: "Auto Tagging",
     9: "Generate AccurateRip",
+    10: "Format All",
 }
 
 RUNNERS = {
@@ -84,6 +89,7 @@ RUNNERS = {
     7: ("DR & ReplayGain", run_calc_dr_replaygain),
     8: ("Auto Tagging", run_auto_tagging),
     9: ("Generate AccurateRip", run_generate_accurip),
+    10: ("Format All", run_format_all),
 }
 
 # Tag keys offered by the "Add tag" menu of the full tag editor.
@@ -181,10 +187,10 @@ CONFIG_FIELDS = [
     ("lrc_zero_timestamp_blank", "Zero Timestamp is Blank Line", "bool", None),
     ("lrc_zero_timestamp_target", "Zero Timestamp Target", "choice", ("EMBEDDED", "LRC", "BOTH")),
     ("append_final_newline", "Append Final Newline", "bool", None),
-    ("fill_empty_source", "Fill Empty SOURCE for Digital Media", "bool", None),
     # CUE
     ("keep_empty_cue_lines", "Keep Empty CUE Lines", "bool", None),
     ("keep_other_cue_lines", "Keep Other CUE Lines", "bool", None),
+    ("keep_empty_accurip_lines", "Keep Empty .accurip Lines", "bool", None),
     ("cue_file_type", "CUE FILE Type", "choice", ("WAVE", "MP3")),
     ("cue_fix_filenames", "Fix CUE FILE Names to Match Tracks", "bool", None),
     # CD rips — disc handling
@@ -795,6 +801,10 @@ FIELD_DESCRIPTIONS = {
     "keep_other_cue_lines":
         "Preserve non-standard CUE lines (PREGAP, REM, etc.) instead of "
         "dropping them.",
+    "keep_empty_accurip_lines":
+        "Preserve blank lines when formatting .accurip files. When off (default), "
+        "all blank lines at the top and bottom are removed and no extra blank line "
+        "is left at the bottom — matching .cue final-line handling (no trailing blank).",
     "cue_file_type":
         "FILE line type written by the CUE formatter: WAVE or MP3.",
     "cue_fix_filenames":
@@ -827,6 +837,10 @@ FIELD_DESCRIPTIONS = {
     "digital_media_source_value":
         "Fallback SOURCE value written on Digital Media albums whose tracks "
         "are missing SOURCE. Existing values are never overwritten.",
+    "fill_empty_source":
+        "When on, fill an empty SOURCE on Digital Media albums with the value "
+        "above; when off (default), empty SOURCE stays empty and grading only "
+        "checks consistency, not presence.",
     "strip_source_on_cd":
         "When on (default), strip SOURCE from CD rips (MEDIA=CD must never carry SOURCE). "
         "When off, SOURCE on CD is left as-is (grading will still fail it if SOURCE present).",
@@ -853,6 +867,10 @@ FIELD_DESCRIPTIONS = {
         "Allow .log rip logs when grading.",
     "grade_include_lrc":
         "Allow .lrc lyric sidecars when grading.",
+    "grade_include_accurip":
+        "Allow AccurateRip .accurip files (CUETools logs) when grading. When off, "
+        ".accurip files are treated as disallowed and fail grading; when on, they "
+        "are allowed and their formatting + REAL/FAKE status is checked.",
     "grade_include_other":
         "Allow every other file type when grading. When off, any file that "
         "is not music/cover/cue/log/lrc fails the album (extra files).",
@@ -958,13 +976,21 @@ FIELD_DESCRIPTIONS = {
         "whole disc AUDIT=FAKE. Ensures every CD .log is gradeable; disable to "
         "keep old behaviour where unscoreable logs only emit [log] warning.",
     "audit_verify_log_checksum":
-        "Audit: verify the SHA256 checksum at the bottom of EAC logs (==== Log checksum ... ====). When on (default), only an invalid checksum (FAKE) makes the disc AUDIT=FAKE; missing/unsupported (NONE) is OK — not all logs have checksums. Disable to ignore even FAKE.",
+        "Audit: verify the SHA256 checksum at the bottom of EAC logs (==== Log checksum ... ====). When on (default, required), any invalid or missing checksum makes the disc AUDIT=FAKE — a CD rip without a verifiable SHA256 cannot be considered accurate; 'unsupported' (XLD/non-EAC, no checksum concept) stays PASS. Disable to ignore even FAKE/missing.",
     "audit_require_accuraterip":
-        "Audit: require AccurateRip match. When on (default), only a mismatch (FAKE — e.g., 'Cannot be verified', 'Rip may not be accurate') makes AUDIT=FAKE; 'Track not present in AccurateRip database' (NONE, not in DB) is OK — not all rips are in AR. Disable to ignore even FAKE.",
+        "Audit: require AccurateRip match via .accurip (CUETools only). When on (default, required), any mismatch (FAKE — 'No match' / 'No match (V2 was not tested)') or missing/unscorable (NONE — 'Track not present', no ID, empty) makes AUDIT=FAKE — a CD rip without a REAL AccurateRip cannot pass. Disable to ignore even FAKE/NONE.",
     "audit_log_score_threshold":
         "Audit: minimum Logchecker score (0-100) for a CD rip to pass auditing. 0 (default) means any score passes; 80/100 require good/perfect rip. Per-disc via LOG_GRADE tag; failing logs make disc AUDIT=FAKE. 0 disables threshold.",
     "audit_check_cd_format":
         "Auditing: for MEDIA=CD require audio is exactly 16-bit 44.1 kHz (CD-DA). When on (default), any CD track not 16/44.1 is AUDIT=FAKE — helps detect fake rips from hi-res upsampled sources. Disable to allow non-CD rates.",
+    "write_accurip_files":
+        "Generate .accurip files for CD rips via CUETools (CUETools.ARCUE). When on (default), "
+        "the AccurateRip script writes CD-{n}.accurip per disc; when off, the script is a no-op "
+        "and existing .accurip files are left as-is.",
+    "force_accurip":
+        "Force Generate AccurateRip even when a correctly formatted CUETools .accurip "
+        "already exists. The Force ▾ menu in the Library tab sets this per-run; when off, "
+        "existing REAL/FAKE .accurip files are reused.",
     "audit_batch_size":
         "AudioAuditor batch size: paths per CLI invocation. 250 default (CLI supports up to 50000); smaller batches give finer progress.",
     "audit_batch_timeout_s":
@@ -1059,9 +1085,9 @@ FIELD_DESCRIPTIONS = {
     "run_all_order":
         "Execution order used by the Run All button. Default pipeline: "
         "1 Lyrics → 2 CUEs → 8 Auto Tagging (fixes INSTRUMENTAL from lyrics) → "
-        "3 FLAC → 5 Images (media optimization) → 7 DR → 6 Audit (analysis) → "
-        "4 Grade (report). Text → media → analysis → report is systematic; "
-        "grade last so audit/DR results are included. Reorder via Settings.",
+        "3 FLAC → 5 Images (media optimization) → 9 AccurateRip (CUETools .accurip before audit) → "
+        "6 Audit (analysis + .accurip) → 4 Grade (report includes audit + DR) → 7 DR → 10 Format All (final canonical trims). "
+        "Text → media → analysis → report is systematic; Format All last guarantees grading passes. Reorder via Settings.",
 }
 
 
@@ -1525,7 +1551,7 @@ class ConfigDialog(tk.Toplevel):
                 "lrc_extended_enabled",
             ]),
             ("05 — CUE & Discs", [
-                "keep_empty_cue_lines", "keep_other_cue_lines", "cue_file_type",
+                "keep_empty_cue_lines", "keep_other_cue_lines", "keep_empty_accurip_lines", "cue_file_type",
                 "cue_fix_filenames",
                 "discs_rename_enabled", "discs_rename_pattern",
                 "discs_rename_single_fallback",
@@ -1546,8 +1572,8 @@ class ConfigDialog(tk.Toplevel):
             ("07 — Grading  ·  General & Includes", [
                 "grade_verbose", "grade_include_music", "grade_include_cover",
                 "grade_include_cue", "grade_include_log", "grade_include_lrc",
-                "grade_include_other",
-                "grade_log_score_threshold", "audit_log_score_threshold",
+                "grade_include_accurip", "grade_include_other",
+                "grade_log_score_threshold",
             ]),
             ("08 — Grading  ·  Core Checks", [
                 "grade_check_unreadable", "grade_check_missing_tags",
@@ -1798,24 +1824,32 @@ class ConfigDialog(tk.Toplevel):
         row += 1
         order_box = ttk.Frame(inner, style="Card.TFrame")
         order_box.grid(row=row, column=0, sticky="ew", padx=5, pady=(0, 4))
-        # Only base scripts 1-6 auto-fill; 7/8 (DR & Auto Tagging) are opt-in
+        # Ensure every script 1-10 is represented; missing IDs are appended in default pipeline order
         current = [s for s in (config.get("run_all_order") or DEFAULT_RUN_ALL_ORDER)
                    if isinstance(s, int) and s in SCRIPT_NAMES]
-        for sid in (1, 2, 3, 4, 5, 6, 7, 8):
+        for sid in DEFAULT_RUN_ALL_ORDER:
+            if sid not in current:
+                current.append(sid)
+        for sid in sorted(SCRIPT_NAMES):
             if sid not in current:
                 current.append(sid)
         self.order_vars = []
+        # Layout as 5 + 5 grid so 10 scripts fit without horizontal overflow
+        cols_per_row = 5
         for i, sid in enumerate(current[:len(SCRIPT_NAMES)]):
+            r, c = divmod(i, cols_per_row)
             ttk.Label(order_box, text=f"{i + 1}.", style="Card.TLabel").grid(
-                row=0, column=i, padx=(10, 2) if i == 0 else (0, 2), pady=6
+                row=r, column=c * 2, padx=(10, 2) if c == 0 else (0, 2), pady=6, sticky="e"
             )
             sv = tk.StringVar(value=SCRIPT_NAMES[sid])
             self.order_vars.append(sv)
             ttk.Combobox(
-                order_box, textvariable=sv, width=12, state="readonly",
+                order_box, textvariable=sv, width=14, state="readonly",
                 values=[SCRIPT_NAMES[n] for n in sorted(SCRIPT_NAMES)],
-            ).grid(row=0, column=i, padx=(0, 8), pady=6)
+            ).grid(row=r, column=c * 2 + 1, padx=(0, 8), pady=6, sticky="w")
         row += 1
+        ttk.Label(order_box, text="Pipeline: 1→2→8→3→5→9→6→4→7→10  (default). 10 Format All must stay last for a clean grade.",
+                  style="Muted.Card.TLabel", font=_font(8)).grid(row=2, column=0, columnspan=10, sticky="w", padx=10, pady=(0, 6))
 
         # --- Encoder Tags ------------------------------------------------------
         tag_header = ttk.Label(inner, text="Encoder Tags", style="H2.Panel.TLabel")
@@ -2288,8 +2322,8 @@ class SetupWizard(tk.Toplevel):
              "audit_thorough": True, "lrc_add_zero_timestamp": True, "fill_empty_source": False},
         ),
         (
-            "v1.6.0 Strict — Perfect Scores (100/100, 0px, 100q)",
-            "Applies v1.6.0 strict defaults — your config.json: Log scores must be 100/100 (perfect rip) • cover size tolerance 0px / strict square 0.0 / crop 0.0 • JPEG quality 100 (max) • no [00:00.00] zero timestamp • all ENCODER_PROGRAM on • run order 1→2→8→3→5→6→4→7 (Grade before DR). CD must be 16-bit 44.1 kHz (true CD-DA). All grading checks remain on. Matches new defaults.",
+            "v1.7 Strict — Perfect Scores (100/100, 0px, 100q)",
+            "Applies strict defaults — your config.json: Log scores must be 100/100 (perfect rip) • cover size tolerance 0px / strict square 0.0 / crop 0.0 • JPEG quality 100 (max) • no [00:00.00] zero timestamp • all ENCODER_PROGRAM on • run order 1→2→8→3→5→9→6→4→7→10 (AccurateRip before Audit, Format All last). CD must be 16-bit 44.1 kHz (true CD-DA). All grading checks remain on. Matches new defaults.",
             {"grade_log_score_threshold": 100, "audit_log_score_threshold": 100,
              "grader_cover_size_tolerance_px": 0, "grader_strict_square_threshold": 0.0,
              "cover_crop_threshold": 0.0, "images_jpeg_quality": 100, "cover_jpeg_quality": 100,
@@ -2299,7 +2333,7 @@ class SetupWizard(tk.Toplevel):
                               "jpeg": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
                               "png": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True},
                               "jxl": {"ENCODER_PROGRAM": True, "ENCODER_QUALITY": True, "ENCODER_VERSION": True}},
-             "run_all_order": [1, 2, 8, 3, 5, 6, 4, 7],
+             "run_all_order": [1, 2, 8, 3, 5, 9, 6, 4, 7, 10],
              "cover_enforce_size": True, "cover_enforce_square": True,
              "cover_resize_enabled": True, "cover_target_size": 1000, "cover_force_exact_size": True,
              "audit_thorough": True, "audit_verify_log_checksum": True, "audit_require_accuraterip": True,
@@ -2650,17 +2684,18 @@ class CustomRunDialog(tk.Toplevel):
         outer.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(outer, text="Run Order", style="H2.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="Script numbers, comma-separated — e.g.  3,1,2,5",
+        ttk.Label(outer, text="Script numbers 1-10, comma-separated — e.g.  1,2,8,3,5,9,6,4,7,10",
                   style="Muted.TLabel",
                   ).pack(anchor="w", pady=(0, 8))
 
         self.entry_var = tk.StringVar()
-        e = ttk.Entry(outer, textvariable=self.entry_var, width=24)
+        e = ttk.Entry(outer, textvariable=self.entry_var, width=32)
         e.pack(anchor="w",)
         e.focus_set()
 
-        ttk.Label(outer, text="1 Format Lyrics    2 Format CUEs    3 Optimize FLACs\n"
-                              "4 Grade Library    5 Process Images  6 Audit Library",
+        ttk.Label(outer, text="1 Format Lyrics    2 Format CUEs    3 Optimize FLACs    4 Grade Library\n"
+                              "5 Process Images   6 Audit Library  7 DR & ReplayGain   8 Auto Tagging\n"
+                              "9 Generate AccurateRip   10 Format All  (default: 1,2,8,3,5,9,6,4,7,10)",
                   style="Muted.TLabel", justify=tk.LEFT).pack(anchor="w", pady=(10, 0))
 
         btns = ttk.Frame(outer)
@@ -3053,17 +3088,15 @@ class App(tk.Tk):
         self.force_accurip_var = tk.BooleanVar(
             value=self.config.get("force_accurip_ui", False))
         self.force_var = tk.BooleanVar(
-            value=(self.force_flac_var.get() and self.force_images_var.get()
-                   and self.force_audit_var.get() and self.force_lyrics_var.get()
-                   and self.force_cue_var.get() and self.force_dr_var.get()
-                   and self.force_autotag_var.get() and self.force_accurip_var.get()))
+            value=self.config.get("force_ui", False))
         force_toggle = ToggleSwitch(
             force_box, self.force_var, bg=BG, command=self._on_force_master)
         force_toggle.pack(side=tk.LEFT)
-        force_hint = ("Force: re-process everything regardless of state.\n"
-                      "Use the ▾ menu to toggle each force option "
-                      "individually.\nApplies to Optimize Selected, Run All "
-                      "and Run Custom.")
+        force_hint = ("Force master: when OFF, no script is forced — selective execution checks grading.\n"
+                      "When ON, only the scripts ticked in the ▾ menu are forced to re-process everything.\n"
+                      "Covers 1 Lyrics, 2 CUE, 3 FLAC, 5 Images, 6 Audit, 7 DR, 8 Auto Tag, 9 AccurateRip.\n"
+                      "4 Grade and 10 Format All are excluded — Grade is read-only, Format All always runs when formatting is off.\n"
+                      "Applies to Optimize Selected, Run All and Run Custom.")
         ToolTip(force_toggle, force_hint)
         ttk.Label(force_box, text="Force", style="Muted.TLabel").pack(
             side=tk.LEFT, padx=(12, 6))
@@ -4167,29 +4200,13 @@ class App(tk.Tk):
         self._refresh_console_compact()
 
     def _on_force_master(self):
-        """Master Force pill: on = every force option on, off = all off."""
-        on = self.force_var.get()
-        self.force_flac_var.set(on)
-        self.force_images_var.set(on)
-        self.force_audit_var.set(on)
-        self.force_lyrics_var.set(on)
-        self.force_cue_var.set(on)
-        self.force_dr_var.set(on)
-        self.force_autotag_var.set(on)
-        self.force_accurip_var.set(on)
+        """Master Force pill: gates whether *anything* is forced."""
+        # Master is now a pure gate — it does NOT set all individual options.
+        # The dropdown configures *what* is forced when the gate is ON.
         self._save_force_config()
 
     def _on_force_option(self):
-        """An individual force option changed: the master pill reflects
-        whether all of them are on."""
-        self.force_var.set(self.force_flac_var.get()
-                           and self.force_images_var.get()
-                           and self.force_audit_var.get()
-                           and self.force_lyrics_var.get()
-                           and self.force_cue_var.get()
-                           and self.force_dr_var.get()
-                           and self.force_autotag_var.get()
-                           and self.force_accurip_var.get())
+        """An individual force option changed — independent of master."""
         self._save_force_config()
 
     def _save_force_config(self):
@@ -4207,30 +4224,32 @@ class App(tk.Tk):
     def _show_force_menu(self):
         menu = tk.Menu(self, tearoff=0, bg=PANEL, fg=TEXT,
                        activebackground=ACCENT_DARK, activeforeground="#ffffff")
-        menu.add_command(label="Force options", state=tk.DISABLED)
+        menu.add_command(label="Force options — Grade/Format All excluded", state=tk.DISABLED)
         menu.add_separator()
-        # Order matches RUN SCRIPTS (1,2,3,5,6,7,8,9) — Grade Library (4) has no Force
+        # Order matches RUN SCRIPTS (1,2,3,5,6,7,8,9) — Grade Library (4) & Format All (10) have no Force
+        # 4 is a read-only report; 10 is final canonical pass that always runs when any formatting is off.
         # Labels must exactly match RUN SCRIPTS names (per user request)
         for var, label in (
-            (self.force_lyrics_var, "Format Lyrics"),
-            (self.force_cue_var, "Format CUEs"),
-            (self.force_flac_var, "Optimize FLACs"),
-            (self.force_images_var, "Process Images"),
-            (self.force_audit_var, "Audit Library"),
-            (self.force_dr_var, "DR & ReplayGain"),
-            (self.force_autotag_var, "Auto Tagging"),
-            (self.force_accurip_var, "Generate AccurateRip"),
+            (self.force_lyrics_var, "1 — Format Lyrics"),
+            (self.force_cue_var, "2 — Format CUEs"),
+            (self.force_flac_var, "3 — Optimize FLACs"),
+            (self.force_images_var, "5 — Process Images"),
+            (self.force_audit_var, "6 — Audit Library"),
+            (self.force_dr_var, "7 — DR & ReplayGain"),
+            (self.force_autotag_var, "8 — Auto Tagging"),
+            (self.force_accurip_var, "9 — Generate AccurateRip"),
         ):
             menu.add_checkbutton(label=label, variable=var, onvalue=True,
                                  offvalue=False,
                                  command=self._on_force_option)
         menu.add_separator()
-        menu.add_command(label="All on",
-                         command=lambda: (self.force_var.set(True),
-                                          self._on_force_master()))
-        menu.add_command(label="All off",
-                         command=lambda: (self.force_var.set(False),
-                                          self._on_force_master()))
+        menu.add_command(label="4 Grade Library — no force (report only)", state=tk.DISABLED)
+        menu.add_command(label="10 Format All — no force (always runs when formatting is off)", state=tk.DISABLED)
+        menu.add_separator()
+        menu.add_command(label="All on (configure)",
+                         command=lambda: [v.set(True) for v in (self.force_lyrics_var, self.force_cue_var, self.force_flac_var, self.force_images_var, self.force_audit_var, self.force_dr_var, self.force_autotag_var, self.force_accurip_var)] or self._save_force_config())
+        menu.add_command(label="All off (configure)",
+                         command=lambda: [v.set(False) for v in (self.force_lyrics_var, self.force_cue_var, self.force_flac_var, self.force_images_var, self.force_audit_var, self.force_dr_var, self.force_autotag_var, self.force_accurip_var)] or self._save_force_config())
         menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
         try:
             menu.grab_release()
@@ -5447,6 +5466,7 @@ class App(tk.Tk):
         t = threading.Thread(
             target=self._worker,
             args=(list(script_ids), title, targets,
+                  self.force_var.get(),
                   self.force_flac_var.get(),
                   self.force_images_var.get(),
                   self.force_audit_var.get(),
@@ -5496,8 +5516,38 @@ class App(tk.Tk):
                 "missing source", "source present but", "source inconsistent",
                 "missing instrumental", "missing albumitunesadvisory"))
         if script_id == 9:  # Generate AccurateRip
+            # Missing .accurip file must trigger generation even when grade is PASS (grade is tagging-only, missing .accurip is audit-only)
+            # Check filesystem for expected CD-{n}.accurip when album is CD — Format All handles extra blank lines, not Generate
+            try:
+                if res and res.get("media") == "CD":
+                    from mlo.discs import album_discs as _ad_needed, _disc_pattern_for as _pat_needed, _disc_expected_name as _exp_needed
+                    discs_here = _ad_needed(album_dir)
+                    if not discs_here:
+                        try:
+                            import os as _os2
+                            if any(f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac")) for f in _os2.listdir(album_dir)):
+                                discs_here = {1: []}
+                        except Exception:
+                            discs_here = {}
+                    if discs_here:
+                        try:
+                            cfg_for_pat = getattr(self, 'config', {}) if hasattr(self, 'config') else {}
+                            pat = _pat_needed(cfg_for_pat)
+                        except Exception:
+                            pat = "CD-{n}"
+                        for disc_n in discs_here:
+                            exp = os.path.join(album_dir, _exp_needed(pat, disc_n, ".accurip"))
+                            if not os.path.isfile(exp):
+                                return True
+            except Exception:
+                pass
             return any(k in issues_blob for k in (
-                "accuraterip", "log checksum", "not accurately", "accurate rip", "mismatch", "track not present"))
+                "accuraterip", "accurip", ".accurip", "log checksum", "not accurately", "accurate rip", "mismatch", "track not present"))
+        if script_id == 10:  # Format All — final canonical trims for any file/tag
+            return any(k in issues_blob for k in (
+                "needs formatting", "not optimally formatted", "formatted",
+                "leading/trailing spaces", "blank lines", "needs formatting",
+                "accurip", "accuraterip", "cue", "lrc", "lyrics"))
         if script_id == 4:  # Grade Library — always needed if requested explicitly
             return True
         return True
@@ -5507,20 +5557,26 @@ class App(tk.Tk):
         # If no grading cache, can't filter — run on original targets
         if not getattr(self, "_grade_cache", None):
             return list(original_targets) if original_targets is not None else None
-        # Resolve force flag for this script
+        # Resolve force flag for this script — master gate + per-script config
+        master = self.force_var.get()
         force_map = {
-            1: self.force_lyrics_var.get(),
-            2: self.force_cue_var.get(),
-            3: self.force_flac_var.get(),
-            5: self.force_images_var.get(),
-            6: self.force_audit_var.get(),
-            7: self.force_dr_var.get(),
-            8: self.force_autotag_var.get(),
-            9: self.force_accurip_var.get() if hasattr(self, 'force_accurip_var') else False,
+            1: master and self.force_lyrics_var.get(),
+            2: master and self.force_cue_var.get(),
+            3: master and self.force_flac_var.get(),
+            5: master and self.force_images_var.get(),
+            6: master and self.force_audit_var.get(),
+            7: master and self.force_dr_var.get(),
+            8: master and self.force_autotag_var.get(),
+            9: master and (self.force_accurip_var.get() if hasattr(self, 'force_accurip_var') else False),
+            10: False,  # Format All is final pass, no force needed — runs when any formatting is off
             4: True,  # grade never forced-filtered
         }
         if force_map.get(script_id, False):
             return list(original_targets) if original_targets is not None else None
+
+        # Case-insensitive helper — Windows paths
+        def _norm(p):
+            return os.path.normcase(os.path.normpath(p)) if p else None
 
         # Build set of album dirs that actually need this script
         # original_targets can be None (entire library), or list of artist/album/track paths
@@ -5530,12 +5586,11 @@ class App(tk.Tk):
                 return None
             # If it's a file, album is its directory
             if os.path.isfile(p):
-                return os.path.normpath(os.path.dirname(p))
+                return _norm(os.path.dirname(p))
             # If it's a directory, check if it's an album (has audio files) or artist folder
             # Use grade cache key if present, else treat as album/artist as-is
-            norm = os.path.normpath(p)
-            # If this path is directly an album in cache, return it
-            if norm in self._grade_cache or os.path.normpath(norm) in [os.path.normpath(k) for k in self._grade_cache.keys()]:
+            norm = _norm(p)
+            if norm in self._grade_cache or _norm(norm) in [_norm(k) for k in self._grade_cache.keys()]:
                 return norm
             # If it's an artist folder, we need to include its albums later via expansion
             return norm
@@ -5549,19 +5604,25 @@ class App(tk.Tk):
                 folder = self.folder_var.get().strip() or self.config.get("music_folder", "")
                 if folder and os.path.isdir(folder):
                     for a in _find_albums(folder):
-                        candidate_albums.add(os.path.normpath(a))
+                        candidate_albums.add(_norm(a))
             except Exception:
                 pass
             for k in self._grade_cache.keys():
-                candidate_albums.add(os.path.normpath(k))
+                candidate_albums.add(_norm(k))
         else:
             for t in original_targets:
                 # Expand artist folders to their albums
-                norm_t = os.path.normpath(t)
-                # If t is an artist folder present in _artists, expand
+                norm_t = _norm(t)
                 if norm_t in getattr(self, "_artists", {}):
                     for alb in self._artists.get(norm_t, []):
-                        candidate_albums.add(os.path.normpath(alb))
+                        candidate_albums.add(_norm(alb))
+                # Also check artist folder via normcase-insensitive key
+                elif any(_norm(ak) == norm_t for ak in getattr(self, "_artists", {}).keys()):
+                    for ak, albs in getattr(self, "_artists", {}).items():
+                        if _norm(ak) == norm_t:
+                            for alb in albs:
+                                candidate_albums.add(_norm(alb))
+                            break
                 elif t and os.path.isdir(t):
                     # Check if this dir is an album or contains albums
                     # If it has audio files, it's an album
@@ -5574,7 +5635,7 @@ class App(tk.Tk):
                             # Might be artist — find albums under it
                             from mlo.stats import _find_albums
                             for a in _find_albums(t):
-                                candidate_albums.add(os.path.normpath(a))
+                                candidate_albums.add(_norm(a))
                     except Exception:
                         candidate_albums.add(norm_t)
                 else:
@@ -5586,11 +5647,12 @@ class App(tk.Tk):
         # Filter to only those that actually need this script
         needed_albums = set()
         for alb in candidate_albums:
-            res = self._grade_cache.get(alb) or self._grade_cache.get(os.path.normpath(alb))
-            # Also try normalized lookup
+            # _grade_cache keys are stored normcase (see _update_grade), so use _norm for lookup
+            res = self._grade_cache.get(alb)
             if res is None:
+                # Try case-insensitive / normcase lookup
                 for k, v in self._grade_cache.items():
-                    if os.path.normpath(k) == alb:
+                    if _norm(k) == alb:
                         res = v
                         break
             if self._script_needed_for_album(script_id, alb, res):
@@ -5606,14 +5668,24 @@ class App(tk.Tk):
         # Otherwise, filter original_targets to only those whose album is needed
         filtered = []
         for t in original_targets:
-            norm_t = os.path.normpath(t)
+            norm_t = _norm(t)
             # Direct album match
             if norm_t in needed_albums:
                 filtered.append(t)
                 continue
             # Artist folder — keep if any of its albums is needed
             if norm_t in getattr(self, "_artists", {}):
-                if any(os.path.normpath(a) in needed_albums for a in self._artists.get(norm_t, [])):
+                if any(_norm(a) in needed_albums for a in self._artists.get(norm_t, [])):
+                    filtered.append(t)
+                    continue
+            # Also handle artist folder case-insensitive
+            matched_artist = None
+            for ak in getattr(self, "_artists", {}).keys():
+                if _norm(ak) == norm_t:
+                    matched_artist = ak
+                    break
+            if matched_artist is not None:
+                if any(_norm(a) in needed_albums for a in self._artists.get(matched_artist, [])):
                     filtered.append(t)
                     continue
             # Track file — keep if its album is needed
@@ -5629,7 +5701,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Worker thread
     # ------------------------------------------------------------------
-    def _worker(self, script_ids, title, targets=None, force_flac=False,
+    def _worker(self, script_ids, title, targets=None, force_master=False, force_flac=False,
                 force_images=False, force_audit=False, force_lyrics=False,
                 force_cue=False, force_dr=False, force_autotag=False,
                 force_accurip=False):
@@ -5641,28 +5713,38 @@ class App(tk.Tk):
         )
         set_file_lines(True)
 
+        # Master gate: when OFF, nothing is forced regardless of per-script ticks.
+        # When ON, only the ticked scripts are forced.
+        eff_flac = force_master and force_flac
+        eff_images = force_master and force_images
+        eff_audit = force_master and force_audit
+        eff_lyrics = force_master and force_lyrics
+        eff_cue = force_master and force_cue
+        eff_dr = force_master and force_dr
+        eff_autotag = force_master and force_autotag
+        eff_accurip = force_master and force_accurip
         # Runners never mutate the config; a copy lets us scope a run to
         # user-selected directories/tracks without affecting the app.
         run_cfg = self.config
-        if targets or force_flac or force_images or force_audit or force_lyrics or force_cue or force_dr or force_autotag or force_accurip:
+        if targets or eff_flac or eff_images or eff_audit or eff_lyrics or eff_cue or eff_dr or eff_autotag or eff_accurip:
             run_cfg = self.config.copy()
             if targets:
                 run_cfg["targets"] = list(targets)
-            if force_flac:
+            if eff_flac:
                 run_cfg["force_reencode_flac"] = True
-            if force_images:
+            if eff_images:
                 run_cfg["force_reencode_images"] = True
-            if force_audit:
+            if eff_audit:
                 run_cfg["force_audit"] = True
-            if force_lyrics:
+            if eff_lyrics:
                 run_cfg["force_lyrics"] = True
-            if force_cue:
+            if eff_cue:
                 run_cfg["force_cue"] = True
-            if force_dr:
+            if eff_dr:
                 run_cfg["force_dr_replaygain"] = True
-            if force_accurip:
+            if eff_accurip:
                 run_cfg["force_accurip"] = True
-            if force_autotag:
+            if eff_autotag:
                 run_cfg["force_auto_tag"] = True
 
         per_script = []
@@ -5672,6 +5754,12 @@ class App(tk.Tk):
         try:
             for i, script_id in enumerate(script_ids):
                 name, runner = RUNNERS[script_id]
+                # Update progress/status text per step so bar actually shows current script (user request)
+                try:
+                    self.log_q.put(("status", f"Running: {name} ({i+1}/{len(script_ids)}) — {title}"))
+                    self.log_q.put(("prog", (0, 100, name)))
+                except Exception:
+                    pass
 
                 # Honor Auto-Advance: pause between scripts when disabled.
                 if i > 0 and not run_cfg.get("auto_advance", True):
@@ -5681,18 +5769,20 @@ class App(tk.Tk):
                              tag="yellow")
                     self._continue_event.wait()
 
-                # Selective execution: when Force is off for this script,
+                # Selective execution: when Force master is OFF or this script not ticked,
                 # only run it on tracks/albums that actually fail grading
                 # for its domain. This prevents re-running scripts that
                 # already pass (per user request).
                 force_for_this = {
-                    1: force_lyrics,
-                    2: force_cue,
-                    3: force_flac,
-                    5: force_images,
-                    6: force_audit,
-                    7: force_dr,
-                    8: force_autotag,
+                    1: eff_lyrics,
+                    2: eff_cue,
+                    3: eff_flac,
+                    5: eff_images,
+                    6: eff_audit,
+                    7: eff_dr,
+                    8: eff_autotag,
+                    9: eff_accurip,
+                    10: False,  # Format All is final pass — already False when no formatting needed
                     4: True,  # Grade Library is never skipped — it *is* the check
                 }.get(script_id, False)
 
@@ -5728,6 +5818,9 @@ class App(tk.Tk):
                     self.log("")
                     self.log(f"▶ Starting {name}", tag="blue")
 
+                if runner is None:
+                    self.log(f"Skipping {name} — module not available (missing dependency)", tag="yellow")
+                    continue
                 try:
                     s = runner(script_cfg)
                 except Exception as e:

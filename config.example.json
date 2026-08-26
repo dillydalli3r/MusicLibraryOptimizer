@@ -121,22 +121,22 @@
   "dr_replaygain_enabled": true,
   "encoder_tags": {
     "flac": {
-      "ENCODER_PROGRAM": true,
+      "ENCODER_PROGRAM": false,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "jpeg": {
-      "ENCODER_PROGRAM": true,
+      "ENCODER_PROGRAM": false,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "jxl": {
-      "ENCODER_PROGRAM": true,
+      "ENCODER_PROGRAM": false,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     },
     "png": {
-      "ENCODER_PROGRAM": true,
+      "ENCODER_PROGRAM": false,
       "ENCODER_QUALITY": true,
       "ENCODER_VERSION": true
     }
@@ -211,6 +211,7 @@
   "jpegxl_effort": 10,
   "keep_empty_cue_lines": false,
   "keep_other_cue_lines": false,
+  "keep_empty_accurip_lines": false,
   "last_update_check": 0,
   "library_columns": {},
   "library_show_all_files": false,
@@ -243,10 +244,11 @@
     8,
     3,
     5,
+    9,
     6,
     4,
     7,
-    9
+    10
   ],
   "show_sidecar_files": false,
   "sidebar_visible": true,

@@ -108,7 +108,23 @@ def _optimize_flac(args):
             return (filename, False, f"cannot stat file: {e}", 0, 0)
 
         if not add_seektables and metaflac_exe and not ours:
+            # Quick pre-check: avoid launching metaflac --remove when no SEEKTABLE exists.
+            # Use --list to inspect; if no SEEKTABLE block, skip entirely (no rewrite, no mtime touch).
             try:
+                has_seek = True  # default to attempting removal if check fails
+                try:
+                    lr = run_tool(
+                        [metaflac_exe, "--list", filepath],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    out = (lr.stdout or "") + (lr.stderr or "")
+                    has_seek = "SEEKTABLE" in out.upper()
+                except Exception:
+                    has_seek = True
+                if not has_seek:
+                    return (filename, False, f"skipped ({reason})", 0, 0)
                 result = run_tool(
                     [
                         metaflac_exe,

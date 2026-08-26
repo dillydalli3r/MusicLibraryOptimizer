@@ -21,6 +21,7 @@ Outputs written to tags:
 """
 import json
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
@@ -487,6 +488,77 @@ def run_audit_library(config):
         else:
             log("Integrity: all files passed verification")
 
+    # ------------------------------------------------------------------
+    # FLAC MD5 verification — ensure the file's actual MD5 matches
+    # what the tags claim and what the FLAC STREAMINFO says.
+    # Like foobar2000's "Verify Integrity", this catches files where the
+    # audio was replaced but the tag was not updated, or where the
+    # STREAMINFO MD5 is incorrect.
+    # Per-track: only the mismatched file fails, not the whole album.
+    # ------------------------------------------------------------------
+    flac_md5_failed = {}
+    if config.get("audit_integrity", True):
+        flac_exe = (tools.get("flac") or {}).get("flac_exe")
+        metaflac_exe = (tools.get("flac") or {}).get("metaflac_exe")
+        # Fallback scan for metaflac if not in tools
+        if not metaflac_exe and flac_exe:
+            try:
+                metaflac_exe = os.path.join(os.path.dirname(flac_exe), "metaflac.exe")
+                if not os.path.isfile(metaflac_exe):
+                    metaflac_exe = None
+            except Exception:
+                metaflac_exe = None
+        def _flac_actual_md5(path):
+            # Try metaflac --show-md5sum first (fast, reads STREAMINFO)
+            if metaflac_exe and os.path.isfile(metaflac_exe):
+                try:
+                    proc = run_tool([metaflac_exe, "--show-md5sum", path],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, encoding="utf-8", errors="replace", timeout=15)
+                    if proc.returncode == 0 and proc.stdout:
+                        md5 = proc.stdout.strip().split()[0].lower()
+                        if re.fullmatch(r"[0-9a-f]{32}", md5) and md5 != "0"*32:
+                            return md5
+                except Exception:
+                    pass
+            # Fallback: decode and compute MD5 via ffmpeg? For now, return None to skip
+            return None
+        for p in files:
+            if not p.lower().endswith(".flac"):
+                continue
+            if p in integrity_failed:
+                # Already failed integrity (flac -t), no need to double-check MD5
+                continue
+            try:
+                af = AudioFile(p)
+                if af.audio is None:
+                    continue
+                tag_md5 = str(af.get_tag("AUDIO_MD5") or "").strip().lower()
+                # Also check STREAMINFO MD5 via mutagen if available
+                actual_md5 = _flac_actual_md5(p)
+                if actual_md5 and tag_md5:
+                    # Both present: must match
+                    if tag_md5 != actual_md5:
+                        flac_md5_failed[p] = f"AUDIO_MD5 tag {tag_md5[:8]}… != file MD5 {actual_md5[:8]}…"
+                        continue
+                # If tag present but actual is all zeros (old FLAC), ignore
+                # If actual is None, skip
+                # Also verify STREAMINFO MD5 matches decoded audio via flac -t already did,
+                # but if actual is zeros, file is old and MD5 not computed — not a failure
+            except Exception as e:
+                flac_md5_failed[p] = str(e)[:120]
+                continue
+        if flac_md5_failed:
+            log(c(f"FLAC MD5: {len(flac_md5_failed)} file(s) have MD5 mismatch (tag vs file) — will be AUDIT=FAKE", Color.RED))
+            for p in sorted(flac_md5_failed)[:10]:
+                try:
+                    rel = os.path.relpath(p, folder)
+                except ValueError:
+                    rel = os.path.basename(p)
+                log(f"  {c('✕', Color.RED)} {rel} {c(flac_md5_failed[p][:80], Color.RED)}")
+            if len(flac_md5_failed) > 10:
+                log(f"  … and {len(flac_md5_failed) - 10} more")
+
     # When require_both is False, CD rips are excluded from AudioAuditor;
     # when True, they are included and the final verdict is the AND of both
     # sources (both must be REAL, otherwise FAKE). Checksum tags were already
@@ -551,6 +623,12 @@ def run_audit_library(config):
         for p, err in list(integrity_failed.items()):
             if p not in todo and p in files and should_write_audio_tag(config, "AUDIT", filepath=p):
                 todo.append(p)
+    # FLAC MD5 mismatches that were skipped due to already having an AUDIT tag
+    # still need to be handled — per-track, only the mismatched file fails.
+    if flac_md5_failed:
+        for p, err in list(flac_md5_failed.items()):
+            if p not in todo and p in files and should_write_audio_tag(config, "AUDIT", filepath=p):
+                todo.append(p)
 
     log(f"auditing {len(todo)} file(s) · fast scan "
         f"{'off (--thorough)' if thorough else 'on'}")
@@ -601,6 +679,7 @@ def run_audit_library(config):
 
         missing = {canon(p) for p in batch}
         canon_failed = {canon(k): v for k, v in integrity_failed.items()} if config.get("audit_integrity", True) else {}
+        canon_flac_md5 = {canon(k): v for k, v in flac_md5_failed.items()} if flac_md5_failed else {}
         for item in items:
             path = item.get("filePath") or ""
             missing.discard(canon(path))
@@ -666,6 +745,12 @@ def run_audit_library(config):
                 tag_value = "FAKE"
                 severity = "fail"
                 reason = f"integrity check failed: {canon_failed[canon(path)]}"
+
+            # FLAC MD5 tag vs file verification — per-track, only mismatched file fails
+            if canon(path) in canon_flac_md5 and should_write_audio_tag(config, "AUDIT", filepath=path):
+                tag_value = "FAKE"
+                severity = "fail"
+                reason = f"FLAC MD5 mismatch: {canon_flac_md5[canon(path)]}"
 
             # Persist the verdict into the file's AUDIT tag (respects per-filetype).
             if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=path):
@@ -798,17 +883,27 @@ def run_audit_library(config):
         except OSError:
             return os.path.normcase(p)
     if config.get("audit_fail_on_unscorable_log", True) and cd_candidate_dirs:
-        unscorable_albums = set()
+        # Per-disc: only discs whose log could not be scored fail, not the whole album.
+        unscorable_discs = {}  # album_dir -> list of disc numbers that are unscorable
         for d in cd_candidate_dirs:
+            try:
+                from .discs import album_discs as _ad2
+                discs_here = _ad2(d)
+            except Exception:
+                discs_here = {}
             if d not in log_scores:
-                unscorable_albums.add(d)
+                # No scores at all — every disc in this album is unscorable
+                if discs_here:
+                    unscorable_discs[d] = sorted(discs_here.keys())
+                else:
+                    unscorable_discs[d] = [1]
             else:
                 try:
-                    from .discs import album_discs as _ad2
-                    discs_here = _ad2(d)
-                    expected = len(discs_here) if discs_here else 1
-                    if len(log_scores[d]) < expected:
-                        unscorable_albums.add(d)
+                    expected_discs = set(discs_here.keys()) if discs_here else {1}
+                    scored_discs = set(log_scores[d].keys())
+                    missing = sorted(expected_discs - scored_discs)
+                    if missing:
+                        unscorable_discs[d] = missing
                 except Exception:
                     pass
         # Also parse orphan log notes that contain "could not score" but album not in cd_candidate (fallback)
@@ -817,71 +912,133 @@ def run_audit_library(config):
                 base = note.split(":", 1)[0].strip()
                 for d in cd_candidate_dirs:
                     if os.path.basename(d).lower() == base.lower():
-                        unscorable_albums.add(d)
+                        # base is album dir name — treat as disc-level if we can determine disc from note
+                        # Extract disc number from note like "disc 2: could not score"
+                        import re as _re_unsc
+                        m_disc = _re_unsc.search(r"disc\s+(\d+)", note.lower())
+                        if m_disc:
+                            try:
+                                dn = int(m_disc.group(1))
+                                if d not in unscorable_discs:
+                                    unscorable_discs[d] = []
+                                if dn not in unscorable_discs[d]:
+                                    unscorable_discs[d].append(dn)
+                            except Exception:
+                                if d not in unscorable_discs:
+                                    try:
+                                        from .discs import album_discs as _ad_f
+                                        _dh = _ad_f(d)
+                                        unscorable_discs[d] = sorted(_dh.keys()) if _dh else [1]
+                                    except Exception:
+                                        unscorable_discs[d] = [1]
+                        else:
+                            if d not in unscorable_discs:
+                                try:
+                                    from .discs import album_discs as _ad_f2
+                                    _dh = _ad_f2(d)
+                                    unscorable_discs[d] = sorted(_dh.keys()) if _dh else [1]
+                                except Exception:
+                                    unscorable_discs[d] = [1]
                         break
                 # orphan filename case: try to find album by file location
                 if base.lower().endswith(".log"):
                     for d in cd_candidate_dirs:
                         try:
                             if base.lower() in (f.lower() for f in os.listdir(d)):
-                                unscorable_albums.add(d)
+                                # Try to map orphan log to disc via explicit disc number in filename
+                                try:
+                                    from .discs import _log_name_disc as _lnd2, album_discs as _ad3
+                                    dn = _lnd2(base)
+                                    discs_here2 = _ad3(d)
+                                    if dn and discs_here2 and dn in discs_here2:
+                                        if d not in unscorable_discs:
+                                            unscorable_discs[d] = []
+                                        if dn not in unscorable_discs[d]:
+                                            unscorable_discs[d].append(dn)
+                                    else:
+                                        # Can't map — fall back to per-disc but only if single disc
+                                        if d not in unscorable_discs:
+                                            if discs_here2 and len(discs_here2) == 1:
+                                                unscorable_discs[d] = [next(iter(discs_here2.keys()))]
+                                            elif not discs_here2:
+                                                unscorable_discs[d] = [1]
+                                except Exception:
+                                    pass
                                 break
                         except OSError:
                             pass
-        if unscorable_albums:
-            log(c(f"Audit FAIL on unscorable logs: {len(unscorable_albums)} CD album(s) have .log that could not be graded — marking their tracks as failed (audit_fail_on_unscorable_log on)", Color.RED))
-            for d in unscorable_albums:
+        if unscorable_discs:
+            total_discs = sum(len(v) for v in unscorable_discs.values())
+            log(c(f"Audit FAIL on unscorable logs: {total_discs} disc(s) in {len(unscorable_discs)} CD album(s) have .log that could not be graded — marking only those disc(s) as failed (per-disc, audit_fail_on_unscorable_log on)", Color.RED))
+            for d, disc_list in unscorable_discs.items():
                 try:
-                    album_files = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
-                except OSError:
-                    continue
-                for fp in album_files:
-                    if fp not in files:
-                        continue
-                    canon_fp = _canon2(fp)
-                    prev_sev = file_severity_map.get(canon_fp)
-                    prev_status = file_status_map.get(canon_fp)
-                    try:
-                        rel = os.path.relpath(fp, folder)
-                    except ValueError:
-                        rel = os.path.basename(fp)
-                    # Adjust counts: move from previous status to Fake
-                    if canon_fp in file_status_map:
-                        if prev_status == "Real":
-                            status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
-                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
-                            if prev_sev == "warn":
-                                warned = max(0, warned - 1)
-                        elif prev_status == "Unknown":
-                            status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
-                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
-                        elif prev_status not in ("Fake", "Corrupt", "Optimized"):
-                            status_counts[prev_status] = max(0, status_counts.get(prev_status, 0) - 1)
-                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
-                        # total_scanned already counted
+                    from .discs import album_discs as _ad_affected
+                    discs_here = _ad_affected(d)
+                except Exception:
+                    discs_here = {}
+                for disc_n in disc_list:
+                    if discs_here and disc_n in discs_here:
+                        album_files = discs_here[disc_n]
                     else:
-                        # Was skipped (already had AUDIT tag) — move from skipped to failed
-                        if stats.get("skipped_count", 0) > 0:
-                            stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
-                        stats["total_scanned"] = stats.get("total_scanned", 0) + 1
-                        # If it was previously counted as Real in skipped, adjust Real/Fake
-                        # We don't have prior status, assume Real -> Fake
-                        if status_counts.get("Real", 0) > 0:
-                            # Only move if we have Real to move; otherwise just increment Fake
-                            # For skipped, status_counts not yet includes it, so just increment Fake
-                            pass
-                        status_counts["Fake"] = status_counts.get("Fake", 0) + 1
-                    flagged.append((rel, "unscorable .log (LOG_GRADE missing)"))
-                    issue_counts["unscorable .log"] = issue_counts.get("unscorable .log", 0) + 1
-                    stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
-                    file_status_map[canon_fp] = "Fake"
-                    file_severity_map[canon_fp] = "fail"
-                    # Write AUDIT=FAKE if allowed (makes next run stay failed until log fixed)
-                    if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
+                        # Fallback: all audio files if we cannot map disc, but only when single-disc album
                         try:
-                            _write_audit_tag(fp, "FAKE")
-                        except Exception:
-                            pass
+                            if discs_here and len(discs_here) > 1:
+                                # Multi-disc with unmappable disc number — skip to avoid marking whole album
+                                continue
+                            album_files = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                            # Filter to only those that claim this disc via filename if we have disc hint
+                            if discs_here and disc_n not in discs_here and len(album_files) > 5:
+                                # Avoid marking all on multi-disc ambiguous case
+                                continue
+                        except OSError:
+                            continue
+                    for fp in album_files:
+                        if fp not in files:
+                            continue
+                        canon_fp = _canon2(fp)
+                        prev_sev = file_severity_map.get(canon_fp)
+                        prev_status = file_status_map.get(canon_fp)
+                        try:
+                            rel = os.path.relpath(fp, folder)
+                        except ValueError:
+                            rel = os.path.basename(fp)
+                        # Adjust counts: move from previous status to Fake
+                        if canon_fp in file_status_map:
+                            if prev_status == "Real":
+                                status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                                if prev_sev == "warn":
+                                    warned = max(0, warned - 1)
+                            elif prev_status == "Unknown":
+                                status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                            elif prev_status not in ("Fake", "Corrupt", "Optimized"):
+                                status_counts[prev_status] = max(0, status_counts.get(prev_status, 0) - 1)
+                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                            # total_scanned already counted
+                        else:
+                            # Was skipped (already had AUDIT tag) — move from skipped to failed
+                            if stats.get("skipped_count", 0) > 0:
+                                stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
+                            stats["total_scanned"] = stats.get("total_scanned", 0) + 1
+                            # If it was previously counted as Real in skipped, adjust Real/Fake
+                            # We don't have prior status, assume Real -> Fake
+                            if status_counts.get("Real", 0) > 0:
+                                # Only move if we have Real to move; otherwise just increment Fake
+                                # For skipped, status_counts not yet includes it, so just increment Fake
+                                pass
+                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                        flagged.append((rel, "unscorable .log (LOG_GRADE missing)"))
+                        issue_counts["unscorable .log"] = issue_counts.get("unscorable .log", 0) + 1
+                        stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
+                        file_status_map[canon_fp] = "Fake"
+                        file_severity_map[canon_fp] = "fail"
+                        # Write AUDIT=FAKE if allowed (makes next run stay failed until log fixed)
+                        if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
+                            try:
+                                _write_audit_tag(fp, "FAKE")
+                            except Exception:
+                                pass
 
     # --------------------------------------------------------------
     # Audit FAIL on invalid .log SHA256 checksum (EAC 1.0b1+ logs)
@@ -905,14 +1062,42 @@ def run_audit_library(config):
                         # Fallback orphan present but not at expected name
                         pass
                 # Also include any extra .log not at expected pattern (orphan)
+                # Try to map orphan to a specific disc via explicit disc number in filename or TOC, otherwise only for single-disc albums
                 try:
                     for f in os.listdir(d):
                         if f.lower().endswith(".log"):
                             full = os.path.join(d, f)
                             if full not in [x[0] for x in logs_to_check]:
-                                # Orphan log -> applies to all tracks of album
-                                all_tr = [os.path.join(d, xf) for xf in os.listdir(d) if xf.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
-                                logs_to_check.append((full, all_tr))
+                                # Attempt disc-specific mapping for orphan
+                                from .discs import _log_name_disc as _lnd_orphan, parse_log_toc_seconds as _plts, read_log_text as _rlt
+                                orphan_disc = _lnd_orphan(f)
+                                if orphan_disc and orphan_disc in discs_here:
+                                    logs_to_check.append((full, discs_here[orphan_disc]))
+                                elif len(discs_here) == 1:
+                                    # Single-disc: orphan belongs to the sole disc
+                                    sole = next(iter(discs_here.values()))
+                                    logs_to_check.append((full, sole))
+                                else:
+                                    # Multi-disc orphan: try TOC duration matching to find unique disc (reuse discs.py logic)
+                                    try:
+                                        toc = _plts(_rlt(full))
+                                        if toc > 0:
+                                            from .discs import _audio_seconds as _asec2
+                                            candidates = []
+                                            toc_tol = float(config.get("discs_toc_tolerance_s", 4.0)) if config else 4.0
+                                            for dn2, tlist in discs_here.items():
+                                                if dn2 in [dn for dn, _ in logs_to_check]:
+                                                    continue
+                                                secs = _asec2(tlist)
+                                                if secs and abs(secs - toc) <= toc_tol:
+                                                    candidates.append((dn2, tlist))
+                                            if len(candidates) == 1:
+                                                logs_to_check.append((full, candidates[0][1]))
+                                                continue
+                                    except Exception:
+                                        pass
+                                    # If still ambiguous on multi-disc, skip orphan to avoid marking whole album — will be handled as unscorable disc instead
+                                    continue
                 except OSError:
                     pass
             else:
@@ -926,31 +1111,47 @@ def run_audit_library(config):
                     continue
             for lp, trs in logs_to_check:
                 state, detail = check_log_checksum(lp)
-                # Only 'invalid' (FAKE) fails auditing; 'missing' (NONE) / 'unsupported' / 'ok' are passes per user request
-                # Missing checksum doesn't mean fake, just less verifiable
+                # When audit_verify_log_checksum is required (True by default), both
+                # 'invalid' and 'missing' EAC checksums must fail auditing – a CD rip
+                # without a verifiable SHA256 cannot be considered accurately ripped.
+                # 'unsupported' (XLD/non-EAC) has no checksum concept and stays PASS.
+                # 'ok' (valid) stays PASS.
                 if state == "invalid":
-                    checksum_failed.setdefault(d, []).append((lp, detail))
-                # 'ok', 'missing', 'unsupported', None are passes (NONE)
+                    checksum_failed.setdefault(d, []).append((lp, detail or "invalid SHA256"))
+                elif state == "missing":
+                    # EAC log claims no checksum line but should have one (required)
+                    checksum_failed.setdefault(d, []).append((lp, detail or "missing Log checksum"))
+                # 'ok', 'unsupported', None are passes
         if checksum_failed:
-            log(c(f"Audit FAIL on log checksum: {sum(len(v) for v in checksum_failed.values())} log(s) in {len(checksum_failed)} CD album(s) have invalid SHA256 checksum — marking their disc(s) as failed (audit_verify_log_checksum on)", Color.RED))
+            log(c(f"Audit FAIL on log checksum: {sum(len(v) for v in checksum_failed.values())} log(s) in {len(checksum_failed)} CD album(s) have invalid/missing SHA256 checksum — marking their disc(s) as failed (audit_verify_log_checksum on, required)", Color.RED))
             for d, lst in checksum_failed.items():
-                for lp, detail in lst:
-                    # Determine affected tracks for this log
-                    try:
-                        discs_here = _ad_chk(d)
-                        affected = None
-                        if discs_here:
-                            pat = _pat_chk(config)
-                            for dn, trs in discs_here.items():
-                                exp = os.path.join(d, _exp_chk(pat, dn, ".log"))
-                                if os.path.normcase(exp) == os.path.normcase(lp):
-                                    affected = trs
-                                    break
-                        if affected is None:
-                            # Orphan or single-disc: all album files
-                            affected = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
-                    except OSError:
-                        continue
+                    for lp, detail in lst:
+                     # Determine affected tracks for this log — per-disc, not whole album
+                     try:
+                         discs_here = _ad_chk(d)
+                         affected = None
+                         if discs_here:
+                             pat = _pat_chk(config)
+                             for dn, trs in discs_here.items():
+                                 exp = os.path.join(d, _exp_chk(pat, dn, ".log"))
+                                 if os.path.normcase(exp) == os.path.normcase(lp):
+                                     affected = trs
+                                     break
+                         if affected is None:
+                             # Orphan: try explicit disc number in filename, else only for single-disc
+                             from .discs import _log_name_disc as _lnd2b
+                             dn_orph = _lnd2b(os.path.basename(lp))
+                             if discs_here and dn_orph and dn_orph in discs_here:
+                                 affected = discs_here[dn_orph]
+                             elif discs_here and len(discs_here) == 1:
+                                 affected = next(iter(discs_here.values()))
+                             elif not discs_here:
+                                 affected = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                             else:
+                                 # Multi-disc orphan with no explicit mapping — skip to avoid whole-album false fail
+                                 continue
+                     except OSError:
+                         continue
                     for fp in affected:
                         if fp not in files:
                             continue
@@ -1002,136 +1203,186 @@ def run_audit_library(config):
 
     # --------------------------------------------------------------
     # Audit FAIL on AccurateRip mismatch (any track not accurately ripped)
+    # ONLY via .accurip files (CUETools) — log data is never consulted for
+    # AccurateRip per user: "The CUETOOLS cli tool should be the only tool
+    # used to generate accurip files, data from log files isn't related to it
+    # whatsoever."  Missing .accurip or any 'No match' => audit FAIL.
+    # Per user 2026-08-25: this must affect AUDIT only (grading is tagging-only)
+    # and must run for ALL CD albums, not just those with a .log.
     # --------------------------------------------------------------
-    if config.get("audit_require_accuraterip", True) and cd_candidate_dirs:
-        from .discs import check_accuraterip as _chk_ar, album_discs as _ad_ar, _disc_pattern_for as _pat_ar, _disc_expected_name as _exp_ar
-        ar_failed = {}  # album_dir -> list of (log_path, reason)
-        for d in cd_candidate_dirs:
+    # Build candidate list for AccurateRip: ALL CD albums (MEDIA==CD), regardless of .log presence
+    cd_accurip_candidate_dirs = []
+    try:
+        # album_dirs is already defined above (from files)
+        for d in album_dirs:
+            try:
+                if not os.path.isdir(d):
+                    continue
+                found_cd = False
+                for f in os.listdir(d):
+                    if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac")):
+                        try:
+                            af_tmp = AudioFile(os.path.join(d, f))
+                            if str(af_tmp.get_tag("MEDIA") or "").strip() == "CD":
+                                found_cd = True
+                                break
+                        except Exception:
+                            continue
+                if found_cd:
+                    cd_accurip_candidate_dirs.append(d)
+            except OSError:
+                continue
+    except Exception:
+        cd_accurip_candidate_dirs = list(cd_candidate_dirs)
+    if config.get("audit_require_accuraterip", True) and cd_accurip_candidate_dirs:
+        from .discs import album_discs as _ad_ar, _disc_pattern_for as _pat_ar, _disc_expected_name as _exp_ar
+        try:
+            from .accurip import parse_accurip_status as _parse_ar_audit
+        except Exception:
+            _parse_ar_audit = None
+        # Per-track AccurateRip: only the tracks that actually mismatch fail, not the whole album
+        ar_failed_per_file = {}  # file path -> reason
+        for d in cd_accurip_candidate_dirs:
             try:
                 discs_here = _ad_ar(d)
             except Exception:
                 discs_here = {}
             pat = _pat_ar(config)
-            logs_to_check_ar = []
-            if discs_here:
-                for disc_n in discs_here:
-                    lp = os.path.join(d, _exp_ar(pat, disc_n, ".log"))
-                    if os.path.isfile(lp):
-                        logs_to_check_ar.append((lp, discs_here[disc_n]))
+            if not discs_here:
                 try:
-                    for f in os.listdir(d):
-                        if f.lower().endswith(".log"):
-                            full = os.path.join(d, f)
-                            if full not in [x[0] for x in logs_to_check_ar]:
-                                all_tr = [os.path.join(d, xf) for xf in os.listdir(d) if xf.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
-                                logs_to_check_ar.append((full, all_tr))
+                    aud = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
+                    if aud:
+                        discs_here = {1: aud}
                 except OSError:
-                    pass
-            else:
-                try:
-                    for f in os.listdir(d):
-                        if f.lower().endswith(".log"):
-                            full = os.path.join(d, f)
-                            all_tr = [os.path.join(d, xf) for xf in os.listdir(d) if xf.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
-                            logs_to_check_ar.append((full, all_tr))
-                except OSError:
-                    continue
-            # Check for .accurip file for this album first (per user request: use .accurip values instead of log when present)
-            has_accurip = False
-            is_accurip_mismatch = False
-            for f in os.listdir(d):
-                if f.lower().endswith(".accurip"):
-                    ap = os.path.join(d, f)
-                    try:
-                        txt_ar = open(ap, "r", encoding="utf-8", errors="replace").read()
-                        low_ar = txt_ar.lower()
-                        has_accurip = True
-                        if "mismatch" in low_ar or "cannot be verified" in low_ar or "not accurately" in low_ar:
-                            is_accurip_mismatch = True
-                            break
-                        # If .accurip exists and is not empty, consider it as source of truth (even if just Verified)
-                    except OSError:
-                        continue
-            if has_accurip:
-                if is_accurip_mismatch:
-                    ar_failed.setdefault(d, []).append((ap, "AccurateRip mismatch in .accurip"))
-                # Use .accurip as source of truth, skip log's AR check for this album
+                    discs_here = {}
+            if not discs_here:
                 continue
-            for lp, trs in logs_to_check_ar:
-                ok, reason, per = _chk_ar(lp)
-                if ok is False:
-                    # Only FAKE (mismatch) fails auditing; NONE (missing) is OK per user request
-                    low_r = (reason or "").lower()
-                    if "track not present" in low_r or "missing accuraterip" in low_r or "no track sections" in low_r:
+            all_accurips = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".accurip")]
+            for disc_n, trs in sorted(discs_here.items()):
+                expected = os.path.join(d, _exp_ar(pat, disc_n, ".accurip"))
+                ap = expected if os.path.isfile(expected) else None
+                if ap is None and len(discs_here) == 1 and all_accurips:
+                    ap = sorted(all_accurips)[0]
+                if ap is None or not os.path.isfile(ap):
+                    # Missing file → every track on this disc fails (per-track, but all)
+                    for fp in trs:
+                        if fp in files:
+                            ar_failed_per_file[fp] = "Missing .accurip file (CUETools)"
+                    continue
+                try:
+                    txt_ar = open(ap, "r", encoding="utf-8", errors="replace").read()
+                except OSError as e:
+                    for fp in trs:
+                        if fp in files:
+                            ar_failed_per_file[fp] = f"cannot read .accurip: {e}"
+                    continue
+                # Use per-track parser for accurate per-track verdicts
+                try:
+                    from .accurip import parse_accurip_per_track as _parse_per
+                    per_track = _parse_per(txt_ar)
+                except Exception:
+                    per_track = {}
+                if _parse_ar_audit is not None:
+                    overall_st, overall_detail = _parse_ar_audit(txt_ar)
+                else:
+                    low = txt_ar.lower()
+                    if "no match" in low:
+                        overall_st = "FAKE"
+                    elif "accurately ripped" in low:
+                        overall_st = "REAL"
+                    elif txt_ar.strip():
+                        overall_st = "REAL"
+                    else:
+                        overall_st = "NONE"
+                    overall_detail = None
+                # If overall is NONE/FAKE but per_track empty, fall back to overall
+                if not per_track:
+                    if overall_st == "FAKE":
+                        for fp in trs:
+                            if fp in files:
+                                ar_failed_per_file[fp] = overall_detail or "AccurateRip mismatch in .accurip (No match)"
+                    elif overall_st == "NONE":
+                        for fp in trs:
+                            if fp in files:
+                                ar_failed_per_file[fp] = overall_detail or "Missing/unscorable AccurateRip in .accurip"
+                    continue
+                # Per-track: map each file's track number to its status
+                for fp in trs:
+                    if fp not in files:
                         continue
-                    ar_failed.setdefault(d, []).append((lp, reason))
-                # ok True / None is pass
-        if ar_failed:
-            log(c(f"Audit FAIL on AccurateRip: {sum(len(v) for v in ar_failed.values())} log(s) in {len(ar_failed)} CD album(s) not accurately ripped — marking their disc(s) as failed (audit_require_accuraterip on)", Color.RED))
-            for d, lst in ar_failed.items():
-                for lp, reason in lst:
+                    # Determine track number for this file
                     try:
-                        discs_here = _ad_ar(d)
-                        affected = None
-                        if discs_here:
-                            pat = _pat_ar(config)
-                            for dn, trs in discs_here.items():
-                                exp = os.path.join(d, _exp_ar(pat, dn, ".log"))
-                                if os.path.normcase(exp) == os.path.normcase(lp):
-                                    affected = trs
-                                    break
-                        if affected is None:
-                            affected = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith((".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".aac"))]
-                    except OSError:
+                        from .discs import _track_num_of as _tn2, _file_track_number as _ftn2
+                        tn = _tn2(fp)
+                        if tn is None:
+                            tn = _ftn2(os.path.basename(fp))
+                        if tn is None:
+                            continue
+                        st = per_track.get(int(tn))
+                        if st is None:
+                            # Track not in .accurip table → treat as not present → fail if required
+                            st = "NONE"
+                        if st == "FAKE":
+                            ar_failed_per_file[fp] = "AccurateRip No match in .accurip"
+                        elif st == "NONE":
+                            ar_failed_per_file[fp] = "Track not present in AccurateRip database"
+                        # REAL → pass, do not add
+                    except Exception:
                         continue
-                    for fp in affected:
-                        if fp not in files:
-                            continue
-                        canon_fp = _canon2(fp)
-                        # If already Fake from earlier gates, add reason without double-moving counts
-                        already_fake = file_status_map.get(canon_fp) == "Fake" and file_severity_map.get(canon_fp) == "fail"
-                        prev_status = file_status_map.get(canon_fp)
-                        prev_sev = file_severity_map.get(canon_fp)
-                        try:
-                            rel = os.path.relpath(fp, folder)
-                        except ValueError:
-                            rel = os.path.basename(fp)
-                        if already_fake:
-                            issue_counts["not accurately ripped"] = issue_counts.get("not accurately ripped", 0) + 1
-                            continue
-                        if canon_fp in file_status_map:
-                            if prev_status == "Real":
-                                status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
-                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
-                                if prev_sev == "warn":
-                                    warned = max(0, warned - 1)
-                            elif prev_status == "Unknown":
-                                status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
-                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
-                            elif prev_status not in ("Fake", "Corrupt", "Optimized"):
-                                status_counts[prev_status] = max(0, status_counts.get(prev_status, 0) - 1)
-                                status_counts["Fake"] = status_counts.get("Fake", 0) + 1
-                            else:
-                                flagged.append((rel, f"not accurately ripped ({os.path.basename(lp)})"))
-                                issue_counts["not accurately ripped"] = issue_counts.get("not accurately ripped", 0) + 1
-                                file_status_map[canon_fp] = "Fake"
-                                file_severity_map[canon_fp] = "fail"
-                                continue
-                        else:
-                            if stats.get("skipped_count", 0) > 0:
-                                stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
-                            stats["total_scanned"] = stats.get("total_scanned", 0) + 1
-                            status_counts["Fake"] = status_counts.get("Fake", 0) + 1
-                        flagged.append((rel, f"not accurately ripped ({os.path.basename(lp)}: {reason or 'AR mismatch'})"))
+        if ar_failed_per_file:
+            # Group by album for log header
+            by_album = {}
+            for fp, reason in ar_failed_per_file.items():
+                d = os.path.dirname(fp)
+                by_album.setdefault(d, []).append((fp, reason))
+            log(c(f"Audit FAIL on AccurateRip: {len(ar_failed_per_file)} track(s) in {len(by_album)} CD album(s) not accurately ripped — marking only those tracks as failed (per-track, audit_require_accuraterip on, .accurip only via CUETools)", Color.RED))
+            for fp, reason in ar_failed_per_file.items():
+                if fp not in files:
+                    continue
+                canon_fp = _canon2(fp)
+                already_fake = file_status_map.get(canon_fp) == "Fake" and file_severity_map.get(canon_fp) == "fail"
+                prev_status = file_status_map.get(canon_fp)
+                prev_sev = file_severity_map.get(canon_fp)
+                try:
+                    rel = os.path.relpath(fp, folder)
+                except ValueError:
+                    rel = os.path.basename(fp)
+                if already_fake:
+                    issue_counts["not accurately ripped"] = issue_counts.get("not accurately ripped", 0) + 1
+                    continue
+                if canon_fp in file_status_map:
+                    if prev_status == "Real":
+                        status_counts["Real"] = max(0, status_counts.get("Real", 0) - 1)
+                        status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                        if prev_sev == "warn":
+                            warned = max(0, warned - 1)
+                    elif prev_status == "Unknown":
+                        status_counts["Unknown"] = max(0, status_counts.get("Unknown", 0) - 1)
+                        status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                    elif prev_status not in ("Fake", "Corrupt", "Optimized"):
+                        status_counts[prev_status] = max(0, status_counts.get(prev_status, 0) - 1)
+                        status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                    else:
+                        flagged.append((rel, f"not accurately ripped ({os.path.basename(fp)}: {reason})"))
                         issue_counts["not accurately ripped"] = issue_counts.get("not accurately ripped", 0) + 1
-                        stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
                         file_status_map[canon_fp] = "Fake"
                         file_severity_map[canon_fp] = "fail"
-                        if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
-                            try:
-                                _write_audit_tag(fp, "FAKE")
-                            except Exception:
-                                pass
+                        continue
+                else:
+                    if stats.get("skipped_count", 0) > 0:
+                        stats["skipped_count"] = max(0, stats["skipped_count"] - 1)
+                    stats["total_scanned"] = stats.get("total_scanned", 0) + 1
+                    status_counts["Fake"] = status_counts.get("Fake", 0) + 1
+                flagged.append((rel, f"not accurately ripped ({os.path.basename(fp)}: {reason})"))
+                issue_counts["not accurately ripped"] = issue_counts.get("not accurately ripped", 0) + 1
+                stats["grade_dist"]["FAIL"] = stats["grade_dist"].get("FAIL", 0) + 1
+                file_status_map[canon_fp] = "Fake"
+                file_severity_map[canon_fp] = "fail"
+                if config.get("write_audit_tag", True) and should_write_audio_tag(config, "AUDIT", filepath=fp):
+                    try:
+                        _write_audit_tag(fp, "FAKE")
+                    except Exception:
+                        pass
 
     # --------------------------------------------------------------
     # Audit FAIL on Logchecker score below threshold

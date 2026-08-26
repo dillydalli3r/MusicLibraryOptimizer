@@ -32,20 +32,29 @@ def _get_cover_dimensions(cover_path):
         try:
             from .tools import detect_all_tools
             tools = detect_all_tools()
-            jxl_info = tools.get("libjxl")
-            if jxl_info and jxl_info.get("cjxl_exe"):
-                jxl_dir = os.path.dirname(jxl_info["cjxl_exe"])
-                jxlinfo = os.path.join(jxl_dir, "jxlinfo.exe")
-                if not os.path.isfile(jxlinfo):
-                    # Try alternative location
-                    jxlinfo = os.path.join(os.path.dirname(jxl_dir), "jxlinfo.exe")
-                if os.path.isfile(jxlinfo):
+            jxl_info = tools.get("libjxl") or {}
+            # Prefer explicit dir, fallback to cjxl_exe dirname
+            jxl_dir = jxl_info.get("dir") or (os.path.dirname(jxl_info["cjxl_exe"]) if jxl_info.get("cjxl_exe") else None)
+            candidates = []
+            if jxl_dir:
+                candidates.append(os.path.join(jxl_dir, "jxlinfo.exe"))
+                # Some installs place it one level up or in bin subdir
+                candidates.append(os.path.join(os.path.dirname(jxl_dir), "jxlinfo.exe"))
+                candidates.append(os.path.join(jxl_dir, "bin", "jxlinfo.exe"))
+            # Also try PATH
+            import shutil
+            which = shutil.which("jxlinfo") or shutil.which("jxlinfo.exe")
+            if which:
+                candidates.append(which)
+            for jxlinfo in candidates:
+                if jxlinfo and os.path.isfile(jxlinfo):
                     from .subproc import run_tool
                     proc = run_tool([jxlinfo, cover_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=5)
                     if proc.stdout:
                         m = re.search(r"(\d+)x(\d+)", proc.stdout)
                         if m:
                             return (int(m.group(1)), int(m.group(2)))
+                    break
         except Exception:
             pass
         return (None, None)
@@ -534,8 +543,17 @@ def _cover_image_ok(path, config):
         enforce_square = True
     if not enforce_size and not enforce_square:
         return True
-    # Need Pillow to inspect dimensions
+    # Need Pillow to inspect dimensions; without it we cannot verify but should not silently pass stringent checks.
+    # Emit a warning and treat as passed to avoid false failures, but log once per run.
     if not HAS_PIL:
+        try:
+            # Log only once per process to avoid spam
+            if not hasattr(_cover_image_ok, "_warned_no_pil"):
+                from .ui import log, c, Color
+                log(c("WARNING: Pillow not installed — cover size/square checks skipped (install Pillow for strict grading).", Color.YELLOW))
+                _cover_image_ok._warned_no_pil = True
+        except Exception:
+            pass
         return True
     try:
         with Image.open(path) as img:
@@ -546,20 +564,28 @@ def _cover_image_ok(path, config):
             w, h = img.size
             if w <= 0 or h <= 0:
                 return False
-            # Size enforcement
+            # Size enforcement (configurable tolerance)
             if enforce_size and resize_enabled and target > 0:
-                # Allow 1px tolerance as spec mentions
-                if abs(w - target) > 1 or abs(h - target) > 1:
+                try:
+                    tol = int(config.get("grader_cover_size_tolerance_px", 0) or 0)
+                    tol = max(0, min(5, tol))
+                except Exception:
+                    tol = 0
+                if abs(w - target) > tol or abs(h - target) > tol:
                     return False
             # Square enforcement (force_exact => strict)
             if enforce_square:
                 if force_exact:
-                    thr = 0.005
+                    try:
+                        thr = float(config.get("grader_strict_square_threshold", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        thr = 0.0
+                    thr = max(0.0, min(0.05, thr))
                 else:
                     try:
-                        thr = float(config.get("cover_crop_threshold", 0.05) or 0.05)
+                        thr = float(config.get("cover_crop_threshold", 0.0) or 0.0)
                     except (TypeError, ValueError):
-                        thr = 0.05
+                        thr = 0.0
                     thr = max(0.0, min(0.5, thr))
                 # When square enforcement is on, aspect must be within threshold
                 # The spec mentions cover_enforce_square and (cover_crop_enabled or cover_enforce_square)
@@ -610,16 +636,31 @@ def _grade_sidecars(album_dir, all_files, cfg):
             ok = _log_file_ok(full)
             detail = "present" if ok else "empty"
         elif category == "accurip":
-            # Check .accurip is canonical (no leading/trailing spaces, no extra blanks)
+            # .accurip must be a valid CUETools log *and* correctly trimmed per user spec:
+            # each line stripped of leading/trailing spaces/tabs, only outer blank lines removed.
             try:
                 with open(full, "r", encoding="utf-8", errors="replace") as fh:
                     acc_text = fh.read()
-                from mlo.accurip import _canonical_accurip_text
-                keep_empty = bool(cfg.get("keep_empty_cue_lines", False))
-                ok = acc_text == _canonical_accurip_text(acc_text, keep_empty_lines=keep_empty)
-                # Also check not empty
-                if ok:
-                    ok = bool(acc_text and acc_text.strip())
+                if not acc_text or not acc_text.strip():
+                    ok = False
+                elif "[CUETools log;" not in acc_text:
+                    ok = False
+                else:
+                    try:
+                        from mlo.accurip import _canonical_accurip_text, parse_accurip_status as _parse_ar_side
+                        # Check canonical formatting (trim each line, trim outer blanks only)
+                        # No extra blank line at bottom — like .cue's rstrip(), final LF only if append_final_newline
+                        # Respects keep_empty_accurip_lines (like keep_empty_cue_lines)
+                        append = bool(cfg.get("append_final_newline", False))
+                        keep_empty = bool(cfg.get("keep_empty_accurip_lines", False))
+                        canonical = _canonical_accurip_text(acc_text, keep_empty_lines=keep_empty, append_final_newline=append)
+                        if acc_text != canonical:
+                            ok = False
+                        else:
+                            st, _ = _parse_ar_side(acc_text)
+                            ok = st in ("REAL", "FAKE")
+                    except Exception:
+                        ok = "[CUETools log;" in acc_text
             except OSError:
                 ok = False
             detail = "formatted" if ok else "needs formatting"
@@ -790,8 +831,9 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     track["issues"].append(t)
             if cfg.get("grade_check_tag_blank_lines", True):
                 raw_blank = str(val) if val is not None else ""
-                if "\n" in raw_blank and any(not line.strip() for line in raw_blank.splitlines()[1:-1]):
-                    # Blank line in the middle of a tag value
+                # Any blank/whitespace-only line anywhere (including leading/trailing outer blanks)
+                # mirrors Format All's removal of ALL blank lines, not just middle
+                if "\n" in raw_blank and any(not line.strip() for line in raw_blank.splitlines()):
                     failed_checks += 1
                     add_issue(f"{t} has blank lines", basename)
                     track["issues"].append(t)
@@ -817,7 +859,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                             track["issues"].append(tag_key)
                     if cfg.get("grade_check_tag_blank_lines", True):
                         total_checks += 1
-                        if "\n" in raw and any(not line.strip() for line in raw.splitlines()[1:-1]):
+                        if "\n" in raw and any(not line.strip() for line in raw.splitlines()):
                             failed_checks += 1
                             add_issue(f"{tag_key} has blank lines", basename)
                             track["issues"].append(tag_key)
@@ -1346,68 +1388,160 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             except Exception:
                 pass
 
-        # Viewer columns for CD log checksum / AccurateRip — REAL/NONE/FAKE (not grading, just display)
-        # These are NOT grading checks per user request; missing (NONE) is fine, only wrong (FAKE) fails auditing
+        # Viewer columns for CD log checksum / AccurateRip — REAL/NONE/FAKE
+        # CHECKSUM: derived from rip .log's SHA256 (EAC), AccurateRip is ONLY via .accurip (CUETools)
+        # Per user: "ACCURATERIP values in the column for it and for all auditing / grading
+        # purposes should ONLY be pulled from .accurip files."  No log fallback.
         checksum_status = "NONE"
         accuraterip_status = "NONE"
+        # Per-disc checksum map for correct per-track column (fixes multi-disc bug where one bad log marked whole album FAKE)
+        per_disc_checksum_map = {}
         try:
-            from .discs import check_log_checksum as _check_csum_v, check_accuraterip as _check_ar_v
+            from .discs import check_log_checksum as _check_csum_v
             csum_logs_v = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".log")]
-            # Checksum viewer: REAL if all ok, FAKE if any invalid, else NONE
+            # Build per-disc checksum status
+            from .discs import _disc_pattern_for as _pat_csum, _disc_expected_name as _exp_csum, _log_name_disc as _lnd_csum, album_discs as _ad_csum
+            try:
+                _pat_c = _pat_csum(cfg)
+            except Exception:
+                _pat_c = "CD-{n}"
+            try:
+                _discs_for_csum = _ad_csum(album_dir)
+            except Exception:
+                _discs_for_csum = {}
             has_csum = False
             has_invalid = False
             for lp in sorted(csum_logs_v):
                 state, _det = _check_csum_v(lp)
+                # Determine disc for this log file
+                disc_for_log = None
+                base_log = os.path.basename(lp)
+                # Try pattern expected name match
+                for cand_n in range(1, 20):
+                    try:
+                        if os.path.normcase(base_log) == os.path.normcase(_exp_csum(_pat_c, cand_n, ".log")):
+                            disc_for_log = cand_n
+                            break
+                    except Exception:
+                        continue
+                if disc_for_log is None:
+                    # Fallback to explicit disc number in filename
+                    try:
+                        dn = _lnd_csum(base_log)
+                        if dn and dn in (_discs_for_csum or {}):
+                            disc_for_log = dn
+                    except Exception:
+                        pass
+                if disc_for_log is None:
+                    # Single-disc case: treat as disc 1
+                    if _discs_for_csum and len(_discs_for_csum) == 1:
+                        disc_for_log = next(iter(_discs_for_csum.keys()))
+                    elif not _discs_for_csum:
+                        disc_for_log = 1
+                    else:
+                        # Multi-disc orphan with no mapping — conservatively mark as not mapped (skip per-disc, but still affect album aggregate)
+                        disc_for_log = None
+                # Map state to per-disc
+                if disc_for_log is not None:
+                    if state == "ok":
+                        per_disc_checksum_map[disc_for_log] = "REAL"
+                    elif state == "invalid":
+                        per_disc_checksum_map[disc_for_log] = "FAKE"
+                    elif state == "missing":
+                        # Missing checksum is FAKE when verify required, else NONE for viewer — respect config
+                        if cfg.get("audit_verify_log_checksum", True):
+                            per_disc_checksum_map[disc_for_log] = "FAKE"
+                        else:
+                            per_disc_checksum_map[disc_for_log] = "NONE"
+                    elif state == "unsupported":
+                        per_disc_checksum_map[disc_for_log] = "NONE"
+                    elif state is None:
+                        # Error / not found — leave as NONE
+                        pass
+                # Album aggregate still needed for _realtime fallback — missing counts as invalid when required
                 if state == "ok":
                     has_csum = True
                 elif state == "invalid":
                     has_invalid = True
                     has_csum = True
-                    break
-                # missing/unsupported/None -> NONE, ignore
+                elif state == "missing" and cfg.get("audit_verify_log_checksum", True):
+                    has_invalid = True
+                    has_csum = True
             if has_invalid:
                 checksum_status = "FAKE"
             elif has_csum:
                 checksum_status = "REAL"
             else:
                 checksum_status = "NONE"
-            # AccurateRip viewer: REAL if all ok, FAKE if any mismatch, else NONE
+            # If multi-disc and per-disc map shows only one disc FAKE, album stays FAKE (conservative) but per-track will be per-disc below
+            # For accurate per-disc, keep map as is
+            # AccurateRip viewer: ONLY via .accurip files (CUETools), per user request
+            # CD-{n}.accurip scheme participates in disc rename; each disc's file is CD-N.accurip
+            accurip_files = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".accurip")]
             has_ar = False
             has_mismatch = False
-            # Prefer .accurip file if present for this disc (more reliable than log, per user request)
-            accurip_files = [os.path.join(album_dir, f) for f in all_files if f.lower().endswith(".accurip")]
+            # Per-track map disc_n -> {track_num: status}
+            per_disc_ar_map = {}
             if accurip_files:
+                try:
+                    from .accurip import parse_accurip_status as _parse_ar, parse_accurip_per_track as _parse_ar_per
+                except Exception:
+                    _parse_ar = None
+                    _parse_ar_per = None
                 for ap in sorted(accurip_files):
                     try:
                         txt_ar = open(ap, "r", encoding="utf-8", errors="replace").read()
-                        low_ar = txt_ar.lower()
-                        if "verified" in low_ar:
-                            has_ar = True
-                        elif "mismatch" in low_ar or "cannot be verified" in low_ar or "not accurately" in low_ar:
-                            has_mismatch = True
-                            has_ar = True
-                            break
-                        elif "not present" in low_ar:
-                            # NONE, not FAKE
-                            continue
-                        elif txt_ar.strip():
-                            has_ar = True
                     except OSError:
                         continue
-            if not has_ar and not has_mismatch:
-                for lp in sorted(csum_logs_v):
-                    ok, reason, _per = _check_ar_v(lp)
-                    if ok is True:
-                        has_ar = True
-                    elif ok is False:
-                        low = (reason or "").lower()
-                        if "track not present" in low or "missing accuraterip" in low or "no track sections" in low:
-                            has_ar = False
-                            continue
-                        else:
+                    if _parse_ar is not None:
+                        st, _detail = _parse_ar(txt_ar)
+                        if st == "REAL":
+                            has_ar = True
+                        elif st == "FAKE":
                             has_mismatch = True
                             has_ar = True
-                            break
+                        else:  # NONE
+                            # Do not set has_ar for NONE – keeps album NONE if no REAL/FAKE
+                            pass
+                        # Build per-disc per-track map for per-track column
+                        if _parse_ar_per is not None:
+                            try:
+                                # Determine disc number from filename CD-{n}.accurip
+                                base = os.path.basename(ap)
+                                disc_n = 1
+                                try:
+                                    from .discs import _disc_pattern_for as _pat_tmp, _disc_expected_name as _exp_tmp
+                                    # Try to parse disc number from filename
+                                    import re as _re2
+                                    m_disc = _re2.search(r"(\d+)", base)
+                                    if m_disc:
+                                        # Prefer pattern-based expected names
+                                        for cand_n in range(1, 20):
+                                            if os.path.normcase(base) == os.path.normcase(_exp_tmp(_pat_tmp(cfg), cand_n, ".accurip")):
+                                                disc_n = cand_n
+                                                break
+                                        else:
+                                            # Fallback to first integer found
+                                            disc_n = int(m_disc.group(1))
+                                except Exception:
+                                    pass
+                                per = _parse_ar_per(txt_ar)
+                                if per:
+                                    per_disc_ar_map[disc_n] = per
+                            except Exception:
+                                pass
+                        if has_mismatch:
+                            # Continue to build per_disc maps even if overall FAKE – need all discs for per-track
+                            pass
+                    else:
+                        low_ar = txt_ar.lower()
+                        if "accurately ripped" in low_ar and "no match" not in low_ar:
+                            has_ar = True
+                        elif "no match" in low_ar:
+                            has_mismatch = True
+                            has_ar = True
+                # No fallback to .log – strictly .accurip
+            # if no .accurip files, stays NONE
             if has_mismatch:
                 accuraterip_status = "FAKE"
             elif has_ar:
@@ -1415,11 +1549,113 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             else:
                 accuraterip_status = "NONE"
             # Store for viewer columns (album-level and per-track)
+            # Per-disc checksum (fixes whole-album FAKE when only one disc's log is bad) and per-track accuraterip
             for tr in tracks:
-                tr["checksum_status"] = checksum_status
-                tr["accuraterip_status"] = accuraterip_status
+                # Per-disc checksum lookup — only that disc's tracks show FAKE
+                try:
+                    from .discs import disc_of_filename as _dof_c, _track_num_of as _tnof_c, album_discs as _ad_c2
+                    base_c = tr["file"]
+                    disc_n_c = _dof_c(base_c)
+                    if disc_n_c is None:
+                        try:
+                            discs_all_c = _ad_c2(album_dir)
+                            if discs_all_c:
+                                full_c = os.path.join(album_dir, base_c)
+                                for dn_c, tlist_c in discs_all_c.items():
+                                    if any(os.path.normcase(os.path.join(album_dir, os.path.basename(p))) == os.path.normcase(full_c) or os.path.basename(p).lower() == base_c.lower() for p in tlist_c):
+                                        disc_n_c = dn_c
+                                        break
+                        except Exception:
+                            pass
+                        if disc_n_c is None:
+                            disc_n_c = 1
+                    if disc_n_c in per_disc_checksum_map:
+                        tr["checksum_status"] = per_disc_checksum_map[disc_n_c]
+                    else:
+                        tr["checksum_status"] = checksum_status
+                except Exception:
+                    tr["checksum_status"] = checksum_status
+                # Resolve per-track AccurateRip: disc + track number lookup
+                try:
+                    from .discs import disc_of_filename as _dof, _track_num_of as _tnof, _file_track_number as _ftn, album_discs as _ad2
+                    # Determine disc for this track file
+                    base = tr["file"]
+                    disc_n = _dof(base)
+                    if disc_n is None:
+                        # Fallback: infer from album discs mapping
+                        try:
+                            discs_all = _ad2(album_dir)
+                            if discs_all:
+                                # Find which disc contains this file path
+                                full = os.path.join(album_dir, base)
+                                for dn, tlist in discs_all.items():
+                                    if any(os.path.normcase(os.path.join(album_dir, os.path.basename(p))) == os.path.normcase(full) or os.path.basename(p).lower() == base.lower() for p in tlist):
+                                        disc_n = dn
+                                        break
+                        except Exception:
+                            pass
+                        if disc_n is None:
+                            disc_n = 1
+                    # Determine track number
+                    full_path = os.path.join(album_dir, base)
+                    tn = _tnof(full_path)
+                    if tn is None:
+                        tn = _ftn(base)
+                    if tn is not None and disc_n in per_disc_ar_map:
+                        per_map = per_disc_ar_map[disc_n]
+                        # Track numbers in .accurip are 1-based without disc prefix (01..N per disc)
+                        # For disc N, track 1 corresponds to per_map[1]
+                        st = per_map.get(int(tn))
+                        if st:
+                            tr["accuraterip_status"] = st
+                        else:
+                            # Track not in map (e.g., not present in DB) → NONE
+                            tr["accuraterip_status"] = "NONE"
+                            # Keep has_* for album already computed
+                            continue
+                    else:
+                        # Fallback: if per-track map not available or track not found, use album status
+                        # (e.g., missing .accurip → NONE, album FAKE/REAL otherwise)
+                        # For missing disc file, per_disc_ar_map won't have entry → falls through to album
+                        if has_mismatch:
+                            tr["accuraterip_status"] = "FAKE" if accuraterip_status == "FAKE" else accuraterip_status
+                        elif has_ar:
+                            tr["accuraterip_status"] = "REAL" if accuraterip_status == "REAL" else accuraterip_status
+                        else:
+                            tr["accuraterip_status"] = "NONE"
+                        continue
+                except Exception:
+                    tr["accuraterip_status"] = accuraterip_status
+                # Per-track realtime audit for viewer highlighting: missing/FAKE accurip makes track AUDIT FAKE
+                # when audit_require_accuraterip is required (True by default, per user request).
+                # This ensures library viewer highlights tracks red like their album when .accurip is missing,
+                # even though the stored AUDIT tag may still be REAL until the next Audit Library run.
+                try:
+                    if media_summary == "CD" and cfg.get("audit_require_accuraterip", True):
+                        if tr.get("accuraterip_status") in ("NONE", "FAKE"):
+                            tr["audit"] = "FAKE"
+                    if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True):
+                        if tr.get("checksum_status") == "FAKE":
+                            tr["audit"] = "FAKE"
+                except Exception:
+                    pass
+            # Second pass for tracks where accurip_status was set via per_map continue path: ensure audit override there too
+            for tr in tracks:
+                try:
+                    if media_summary == "CD" and cfg.get("audit_require_accuraterip", True):
+                        if tr.get("accuraterip_status") in ("NONE", "FAKE"):
+                            if tr.get("audit") != "FAKE":
+                                tr["audit"] = "FAKE"
+                    if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True):
+                        if tr.get("checksum_status") == "FAKE" and tr.get("audit") != "FAKE":
+                            tr["audit"] = "FAKE"
+                except Exception:
+                    pass
         except Exception:
             pass
+
+        # Grading: AccurateRip is AUDIT-only per user request — grading is reserved to tagging.
+        # Do NOT fail grading on missing/FAKE accurip; only auditing fails. Viewer column still shows REAL/NONE/FAKE.
 
     elif media_summary == "Digital Media":
         # SOURCE requirements already checked per-track.
@@ -1478,10 +1714,10 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         if enforce_size and cfg.get("cover_resize_enabled", False) and target_cov > 0 and cfg.get("grade_check_cover", True):
             total_checks += 1
             try:
-                tol = int(cfg.get("grader_cover_size_tolerance_px", 1) or 1)
+                tol = int(cfg.get("grader_cover_size_tolerance_px", 0) or 0)
                 tol = max(0, min(5, tol))
             except Exception:
-                tol = 1
+                tol = 0
             if w is not None and h is not None:
                 if abs(w - target_cov) > tol or abs(h - target_cov) > tol:
                     failed_checks += 1
@@ -1499,15 +1735,15 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             total_checks += 1
             if force_exact:
                 try:
-                    thr_cov = float(cfg.get("grader_strict_square_threshold", 0.005) or 0.005)
+                    thr_cov = float(cfg.get("grader_strict_square_threshold", 0.0) or 0.0)
                     thr_cov = max(0.0, min(0.05, thr_cov))
                 except (TypeError, ValueError):
-                    thr_cov = 0.005
+                    thr_cov = 0.0
             else:
                 try:
-                    thr_cov = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)
+                    thr_cov = float(cfg.get("cover_crop_threshold", 0.0) or 0.0)
                 except (TypeError, ValueError):
-                    thr_cov = 0.05
+                    thr_cov = 0.0
                 thr_cov = max(0.0, min(0.5, thr_cov))
             try:
                 if w is not None and h is not None:
@@ -1620,6 +1856,33 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             add_issue("CUE sheet not optimally formatted "
                       "(run CUE Sheets script)", "album")
 
+    # .accurip FORMATTING compliance (when .accurip exists): trim each line, outer blanks only
+    # Per user: delete leading/trailing spaces per line, only outer blanks. Counts towards grading.
+    if any(f.lower().endswith(".accurip") for f in all_files):
+        # Only check formatting if the file is a valid CUETools log; synthetic files already fail via sidecar check
+        total_checks += 1
+        accum_ok = True
+        for f in all_files:
+            if not f.lower().endswith(".accurip"):
+                continue
+            full = os.path.join(album_dir, f)
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                    txt = fh.read()
+                from mlo.accurip import _canonical_accurip_text
+                append = bool(cfg.get("append_final_newline", False))
+                keep_empty = bool(cfg.get("keep_empty_accurip_lines", False))
+                canonical = _canonical_accurip_text(txt, keep_empty_lines=keep_empty, append_final_newline=append)
+                if txt != canonical:
+                    accum_ok = False
+                    break
+            except OSError:
+                accum_ok = False
+                break
+        if not accum_ok:
+            failed_checks += 1
+            add_issue(".accurip not optimally formatted (run Format All or Generate AccurateRip)", "album")
+
     # Strict file-type check: any file whose category is not allowed
     # (e.g. an unclassified .txt/.pdf/.m3u when 'other' is off) fails the
     # album. Categories are toggled in Settings -> Grading.
@@ -1658,8 +1921,72 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
     if cfg.get("show_sidecar_files", False):
         sidecars = _grade_sidecars(album_dir, all_files, cfg)
 
-    # Album-level audit summary from the per-track AUDIT tags.
-    audit_summary = summarize_audits(tr["audit"] for tr in tracks)
+    # Album-level audit summary — REAL-TIME (not just stored tags).
+    # Per user: app must calculate AUDIT from current factors, not just read AUDIT tag.
+    # If .accurip is missing or FAKE, AUDIT is FAKE immediately, even if tag still says REAL.
+    # This covers the "removed .accurip file still says REAL" bug.
+    def _realtime_audit_for_album():
+        # Per-track lightweight checks — only that track's AUDIT becomes FAKE, but for album summary we still return FAKE if any track fails
+        # This fixes the bug where one bad track's checksum/accurip made whole album's tracks show FAKE via uniform status; now per-track is accurate,
+        # but album summary remains FAKE if any track is FAKE (so folder still indicates issue, but per-track column shows which track)
+        try:
+            if media_summary == "CD" and cfg.get("audit_require_accuraterip", True):
+                # Check per-track accuraterip: if any track is NONE/FAKE, album audit is FAKE, but per-track already set correctly above
+                for tr in tracks:
+                    if tr.get("accuraterip_status") in ("NONE", "FAKE"):
+                        return "FAKE"
+        except Exception:
+            pass
+        # Check log checksum per-track (per-disc)
+        try:
+            if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True):
+                for tr in tracks:
+                    if tr.get("checksum_status") == "FAKE":
+                        return "FAKE"
+        except Exception:
+            pass
+        # Check CD format (lightweight) — per-track already
+        try:
+            if media_summary == "CD" and cfg.get("audit_check_cd_format", True):
+                # CD must be 16/44.1 — if any track failed CD_FORMAT grading, audit is FAKE
+                for tr in tracks:
+                    if "CD_FORMAT" in tr.get("issues", []):
+                        return "FAKE"
+        except Exception:
+            pass
+        # Fall back to stored AUDIT tags (covers AudioAuditor, integrity, etc.) — per-track
+        # If any track's stored AUDIT is FAKE, album is FAKE
+        tag_summary = summarize_audits(tr["audit"] for tr in tracks)
+        if tag_summary == "FAKE":
+            return "FAKE"
+        # For REAL, require all per-track checks to be REAL as well (not just album aggregate)
+        try:
+            all_ar_real = all(tr.get("accuraterip_status") == "REAL" for tr in tracks) if media_summary == "CD" and cfg.get("audit_require_accuraterip", True) else True
+            all_csum_ok = all(tr.get("checksum_status") != "FAKE" for tr in tracks) if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True) else True
+        except Exception:
+            all_ar_real = accuraterip_status == "REAL"
+            all_csum_ok = checksum_status != "FAKE"
+        if tag_summary == "REAL" and all_ar_real and all_csum_ok:
+            return "REAL"
+        # If no AUDIT tag yet, but lightweight checks passed, consider REAL for display
+        # (audit hasn't been run, but files would pass)
+        if tag_summary is None and all_ar_real and all_csum_ok:
+            # Need to ensure accuraterip is REAL when required
+            if media_summary == "CD" and cfg.get("audit_require_accuraterip", True):
+                if all_ar_real:
+                    return "REAL"
+            else:
+                return "REAL"
+        if tag_summary is None and media_summary == "CD":
+            # No accurip and no tag → treat as not yet audited, but per user should be FAKE
+            # Only when audit_require_accuraterip is on and any track is NONE
+            if cfg.get("audit_require_accuraterip", True):
+                for tr in tracks:
+                    if tr.get("accuraterip_status") == "NONE":
+                        return "FAKE"
+        return tag_summary
+
+    audit_summary = _realtime_audit_for_album()
 
     return {
         "path": album_dir,

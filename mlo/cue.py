@@ -158,8 +158,21 @@ def _process_cue_file(args):
 
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(new_content)
+            try:
+                f.flush()
+                os.fsync(f.fileno())
+            except Exception:
+                pass
 
         os.replace(tmp_path, filename)
+        try:
+            d_fd2 = os.open(os.path.dirname(filename) or ".", os.O_DIRECTORY)
+            try:
+                os.fsync(d_fd2)
+            finally:
+                os.close(d_fd2)
+        except Exception:
+            pass
         tmp_path = None
 
         final_size = os.path.getsize(filename)

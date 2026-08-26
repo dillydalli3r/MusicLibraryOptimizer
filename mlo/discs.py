@@ -556,8 +556,33 @@ def rename_accurip_for_discs(album_dir, discs=None, log_fn=None, config=None):
             claimed[d] = f
         else:
             remaining.append(f)
-    if len(discs) == 1 and len(remaining) == 1 and 1 not in claimed:
-        claimed[1] = remaining.pop(0)
+    if len(discs) == 1 and 1 not in claimed and remaining:
+        # Single-disc with orphan .accurip files: pick the best candidate (prefer valid CUETools log)
+        # This fixes automatic rename for .accurip per user request; previous logic required exactly 1 remaining.
+        best = None
+        best_score = -1
+        for f in remaining:
+            pth = os.path.join(album_dir, f)
+            try:
+                head = open(pth, "r", encoding="utf-8", errors="replace").read(4096)
+                has_header = "[CUETools log;" in head
+                try:
+                    sz = os.path.getsize(pth)
+                except OSError:
+                    sz = 0
+                score = (1000000 if has_header else 0) + sz
+                # Prefer larger/valid
+            except Exception:
+                score = 0
+            if score > best_score:
+                best_score = score
+                best = f
+        if best is not None:
+            claimed[1] = best
+            try:
+                remaining.remove(best)
+            except ValueError:
+                pass
     if remaining and len(claimed) < len(discs):
         toc_tol = float(config.get("discs_toc_tolerance_s", TOC_TOLERANCE_S)) if config else TOC_TOLERANCE_S
         toc_margin = float(config.get("discs_toc_unique_margin_s", TOC_UNIQUE_MARGIN_S)) if config else TOC_UNIQUE_MARGIN_S
@@ -727,8 +752,24 @@ def fix_cue_filenames(album_dir, log_fn=None, config=None):
 
         if changed:
             try:
-                with open(path, "w", encoding="utf-8", newline="") as fh:
+                import tempfile
+                fd, tmp = tempfile.mkstemp(prefix=".cue_fix_", suffix=".cue", dir=os.path.dirname(path) or ".")
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
                     fh.writelines(out_lines)
+                    try:
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    except Exception:
+                        pass
+                os.replace(tmp, path)
+                try:
+                    d_fd = os.open(os.path.dirname(path) or ".", os.O_DIRECTORY)
+                    try:
+                        os.fsync(d_fd)
+                    finally:
+                        os.close(d_fd)
+                except Exception:
+                    pass
             except OSError as e:
                 notes.append(f"{cue}: write failed ({e})")
     if log_fn and notes:

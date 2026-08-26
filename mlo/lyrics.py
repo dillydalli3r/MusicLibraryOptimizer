@@ -12,6 +12,7 @@ from .stats import (
     _collect_targets, worker_count,
 )
 from .ui import print_header, log, c, Color, log_file_result
+import tempfile
 
 TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]")
 WORD_TS_RE = re.compile(r"<(\d{1,2}):(\d{1,2})(?:\.(\d+))?>")
@@ -379,6 +380,38 @@ def _zero_target_allows(cfg, is_for_lrc: bool) -> bool:
     return True  # BOTH or unknown
 
 
+def _atomic_write_text(path, text):
+    """Atomic write with fsync to avoid corruption on crash/power loss."""
+    import os as _os, tempfile as _tf
+    tmp = None
+    try:
+        fd, tmp = _tf.mkstemp(prefix=".lrc_tmp_", suffix=".lrc", dir=_os.path.dirname(path) or ".")
+        with _os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            try:
+                f.flush()
+                _os.fsync(f.fileno())
+            except Exception:
+                pass
+        _os.replace(tmp, path)
+        try:
+            d_fd = _os.open(_os.path.dirname(path) or ".", _os.O_DIRECTORY)
+            try:
+                _os.fsync(d_fd)
+            finally:
+                _os.close(d_fd)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        try:
+            if tmp and _os.path.exists(tmp):
+                _os.remove(tmp)
+        except Exception:
+            pass
+        raise
+
+
 def _format_for_storage(text, cfg, optimize=True, is_for_lrc=False):
     """Format lyrics using the persisted exact-output choices.
 
@@ -452,8 +485,7 @@ def _process_lyrics_for_audio(audio_path, cfg):
             )
 
             if final != lrc_content:
-                with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(final)
+                _atomic_write_text(lrc_path, final)
                 modified = True
 
         except Exception as e:
@@ -521,8 +553,7 @@ def _process_lyrics_for_audio(audio_path, cfg):
         dest_for_lrc = _format_for_storage(embedded_raw, cfg, optimize=True, is_for_lrc=True)
         # .lrc file write is always allowed (sidecar), but embedded delete is gated
         try:
-            with open(lrc_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write(dest_for_lrc)
+            _atomic_write_text(lrc_path, dest_for_lrc)
         except Exception as e:
             return ("fail", 0, 0, f"lrc write: {e}")
         if can_write_lyrics:
@@ -548,17 +579,13 @@ def _process_lyrics_for_audio(audio_path, cfg):
             elif embedded_canonical and lrc_canonical != embedded_canonical:
                 # Write embedded's text formatted for LRC target
                 dest_for_lrc = _format_for_storage(embedded_raw, cfg, optimize=True, is_for_lrc=True)
-                with open(lrc_path, "w", encoding="utf-8",
-                          newline="\n") as f:
-                    f.write(dest_for_lrc)
+                _atomic_write_text(lrc_path, dest_for_lrc)
                 lrc_exists = True
                 modified = True
 
             elif embedded_canonical and not lrc_canonical:
                 dest_for_lrc = _format_for_storage(embedded_raw, cfg, optimize=True, is_for_lrc=True)
-                with open(lrc_path, "w", encoding="utf-8",
-                          newline="\n") as f:
-                    f.write(dest_for_lrc)
+                _atomic_write_text(lrc_path, dest_for_lrc)
                 lrc_exists = True
                 modified = True
 
