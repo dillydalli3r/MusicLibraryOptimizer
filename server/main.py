@@ -187,26 +187,31 @@ def album_mbdetect(path: str = Query(...)):
     if not os.path.isdir(p):
         raise HTTPException(404, "album not found")
     uuid_re = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
-    for f in sorted(os.listdir(p)):
-        if not is_audio_file(f):
-            continue
-        af = AudioFile(os.path.join(p, f))
-        if af.audio is None:
-            continue
-        for key in ("MUSICBRAINZ_ALBUMID", "MUSICBRAINZ_RELEASEGROUPID"):
-            v = af.get_tag(key)
-            m = uuid_re.search(str(v)) if v else None
-            if m:
-                return {"mbid": m.group(0).lower(), "key": key, "track": f}
-        try:
-            for k, v in (af.all_tags() or {}).items():
-                kl = str(k).lower()
-                if "musicbrainz" in kl and "album" in kl and "artist" not in kl:
-                    m = uuid_re.search(str(v)) if v else None
-                    if m:
-                        return {"mbid": m.group(0).lower(), "key": k, "track": f}
-        except Exception:
-            continue
+    # Recursive: some libraries nest the album folder inside a folder of the
+    # same name, so scan subdirectories too.
+    for root, dirs, files in os.walk(p):
+        for f in sorted(files):
+            if not is_audio_file(f):
+                continue
+            af = AudioFile(os.path.join(root, f))
+            if af.audio is None:
+                continue
+            for key in ("MUSICBRAINZ_ALBUMID", "MUSICBRAINZ_RELEASEGROUPID"):
+                v = af.get_tag(key)
+                m = uuid_re.search(str(v)) if v else None
+                if m:
+                    rel = os.path.relpath(os.path.join(root, f), p)
+                    return {"mbid": m.group(0).lower(), "key": key, "track": rel}
+            try:
+                for k, v in (af.all_tags() or {}).items():
+                    kl = str(k).lower()
+                    if "musicbrainz" in kl and "album" in kl and "artist" not in kl:
+                        m = uuid_re.search(str(v)) if v else None
+                        if m:
+                            rel = os.path.relpath(os.path.join(root, f), p)
+                            return {"mbid": m.group(0).lower(), "key": k, "track": rel}
+            except Exception:
+                continue
     return {"mbid": None}
 
 

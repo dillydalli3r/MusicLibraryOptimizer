@@ -200,13 +200,22 @@ export default function ImportWizard() {
   // Auto-detect a Picard-tagged MusicBrainz release and fetch it
   // automatically when the Links step opens.
   const autoDetected = useRef(false);
+  const [detectStatus, setDetectStatus] = useState<"idle" | "scanning" | "found" | "none">("idle");
   useEffect(() => {
     if (step !== 1 || !albumPath || releaseId || autoDetected.current) return;
     let cancelled = false;
+    autoDetected.current = true;
+    setDetectStatus("scanning");
     (async () => {
       const id = await detectReleaseId();
-      if (!id || cancelled) return;
-      autoDetected.current = true;
+      if (cancelled) return;
+      if (!id) {
+        // not found now — allow retry when the library refreshes
+        autoDetected.current = false;
+        setDetectStatus("none");
+        return;
+      }
+      setDetectStatus("found");
       setDetectedFromTags(true);
       setMbLink(`https://musicbrainz.org/release/${id}`);
       setReleaseId(id);
@@ -217,6 +226,31 @@ export default function ImportWizard() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, albumPath, trackList, releaseId]);
+
+  // Manual "Detect from tags" — always available, one click.
+  const detectFromTags = async () => {
+    if (!albumPath) {
+      toast("No album selected");
+      return;
+    }
+    setDetectStatus("scanning");
+    try {
+      const id = await detectReleaseId();
+      if (!id) {
+        setDetectStatus("none");
+        toast("No MusicBrainz release ID found in the track tags");
+        return;
+      }
+      setDetectStatus("found");
+      setDetectedFromTags(true);
+      setMbLink(`https://musicbrainz.org/release/${id}`);
+      setReleaseId(id);
+      pickRelease(id);
+    } catch (e) {
+      setDetectStatus("none");
+      toast(String(e));
+    }
+  };
 
   // Fetch button: falls back to tag detection when the field is empty.
   const handleFetch = async () => {
@@ -836,6 +870,24 @@ export default function ImportWizard() {
                 <span className="chip bg-amber-900/50 text-amber-300 border border-amber-900 shrink-0">no MBID found</span>
               ) : null}
             </div>
+            {detectStatus !== "idle" && !releaseId && (
+              <div className="text-xs text-zinc-500 flex items-center gap-1.5">
+                {detectStatus === "scanning" && (
+                  <span className="animate-pulse">Scanning track tags for a MusicBrainz release ID…</span>
+                )}
+                {detectStatus === "none" && (
+                  <span>
+                    No MusicBrainz release ID found in the track tags — paste a link, search, or{" "}
+                    <button className="text-accent-soft underline underline-offset-2" onClick={detectFromTags}>rescan</button>
+                  </span>
+                )}
+              </div>
+            )}
+            {detectStatus === "found" && releaseId && (
+              <div className="text-xs text-emerald-400 flex items-center gap-1.5">
+                <Check className="h-3 w-3" /> Release detected in track tags — fetched automatically
+              </div>
+            )}
             <div className="text-xs text-zinc-600">or search:</div>
             <div className="flex gap-2">
               <input className="input" placeholder="Search release (title + artist)…" value={mbSearch} onChange={(e) => setMbSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
@@ -878,9 +930,14 @@ export default function ImportWizard() {
               )}
             </div>
           </div>
-          <button className="btn-primary" onClick={handleFetch} disabled={busy}>
-            <Wand2 className="h-4 w-4" /> Fetch release & auto-match
-          </button>
+          <div className="flex items-center gap-2">
+            <button className="btn-primary" onClick={handleFetch} disabled={busy}>
+              <Wand2 className="h-4 w-4" /> Fetch release & auto-match
+            </button>
+            <button className="btn-ghost" onClick={detectFromTags} disabled={busy || !albumPath}>
+              Detect from tags
+            </button>
+          </div>
         </div>
       )}
 
