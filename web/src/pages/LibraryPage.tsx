@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Search, FolderOpen, ListPlus, Play, Disc3, Trash2, ChevronRight, ChevronDown, Columns3,
+  Search, FolderOpen, ListPlus, Play, Disc3, Trash2, ChevronRight, ChevronDown, Columns3, Wand2,
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
@@ -44,6 +44,18 @@ const ALBUM_SORTS = [
   { key: "track_count", label: "Tracks" },
   { key: "grade_pct", label: "Grade" },
   { key: "audit_summary", label: "Audit" },
+];
+
+const SCRIPTS: { ids: number[]; label: string }[] = [
+  { ids: [1, 2, 8, 3, 5, 9, 6, 4, 7, 10], label: "Run all" },
+  { ids: [1], label: "Format lyrics" },
+  { ids: [2], label: "Format CUEs" },
+  { ids: [3], label: "Optimize FLACs" },
+  { ids: [5], label: "Process images" },
+  { ids: [6], label: "Audit library" },
+  { ids: [7], label: "DR & ReplayGain" },
+  { ids: [8], label: "Auto tagging" },
+  { ids: [4], label: "Grade" },
 ];
 
 interface Col {
@@ -100,6 +112,9 @@ export default function LibraryPage() {
   const { data: lib, isLoading, error } = useQuery({ queryKey: ["library"], queryFn: api.library });
   const qc = useQueryClient();
   const { query, setQuery, setToast, folder } = useStore();
+  const {
+    selection, setSelection, toggleTrack, toggleAlbum, toggleArtist, clearSelection, playNow,
+  } = useStore();
   const [view, setView] = useState<View>("albums");
   const [preset, setPreset] = useState<Preset>("all");
   const [albumSort, setAlbumSort] = useLocalSort("album");
@@ -163,7 +178,35 @@ export default function LibraryPage() {
     return { artists, albums, tracks };
   }, [lib, query, preset, flat]);
 
+  // ---- selection helpers ----
+  const selTracks = useMemo(() => {
+    const s = new Set(selection.tracks);
+    for (const p of selection.albums) {
+      const al = flat.albums.find((a) => a.path === p);
+      for (const t of al?.tracks ?? []) s.add(t.path);
+    }
+    for (const p of selection.artists) {
+      const a = lib?.artists.find((x) => x.path === p);
+      for (const al of a?.albums ?? []) for (const t of al.tracks) s.add(t.path);
+    }
+    return s;
+  }, [selection, flat, lib]);
+
+  const selectionAlbumDirs = useMemo(() => {
+    const dirs = new Set<string>();
+    for (const p of selection.albums) dirs.add(p);
+    for (const p of selection.artists) {
+      const a = lib?.artists.find((x) => x.path === p);
+      for (const al of a?.albums ?? []) dirs.add(al.path);
+    }
+    for (const p of selection.tracks) dirs.add(p.split("/").slice(0, -1).join("/"));
+    return [...dirs];
+  }, [selection, lib]);
+
+  const selectionCount = selection.tracks.length + selection.albums.length + selection.artists.length;
+
   const addToPlaylist = async (paths: string[]) => {
+    if (!paths.length) return;
     const pls = await api.playlists();
     const manual = pls.find((p) => p.kind === "manual");
     if (!manual) {
@@ -173,6 +216,23 @@ export default function LibraryPage() {
       await api.playlistAdd(manual.id, paths);
     }
     setToast(`Added ${paths.length} track(s) to playlist`);
+  };
+
+  const removeAlbums = async (paths: string[]) => {
+    if (!paths.length) return;
+    const names = paths.map((d) => d.split("/").pop()).join(", ");
+    if (!window.confirm(`Remove ${paths.length} album(s) from the library?\n${names}\n\nThey move to .mlo_trash in your music folder (recoverable).`)) return;
+    setRemoving("batch");
+    try {
+      for (const d of paths) await api.removeAlbum(d);
+      setToast(`Moved ${paths.length} album(s) to trash`);
+      clearSelection();
+      qc.invalidateQueries({ queryKey: ["library"] });
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setRemoving(null);
+    }
   };
 
   const removeAlbum = async (al: FlatAlbum) => {
@@ -186,6 +246,35 @@ export default function LibraryPage() {
       toast(String(e));
     } finally {
       setRemoving(null);
+    }
+  };
+
+  const playSelection = () => {
+    const out: { path: string; file: string; albumPath: string; artist?: string }[] = [];
+    for (const al of sortedAlbums)
+      if (selection.albums.includes(al.path))
+        for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.artist });
+    for (const a of sortedArtists)
+      if (selection.artists.includes(a.path))
+        for (const al of a.albums)
+          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: a.name });
+    for (const tr of sortedTracks)
+      if (selection.tracks.includes(tr.path))
+        out.push({ path: tr.path, file: tr.file, albumPath: tr.path.split("/").slice(0, -1).join("/"), artist: tr.artist });
+    if (out.length) playNow(out);
+  };
+
+  const runScriptsOnSelection = async (ids: number[]) => {
+    if (!selectionAlbumDirs.length) {
+      toast("Select albums or artists to run scripts on");
+      return;
+    }
+    try {
+      await api.run(ids, selectionAlbumDirs);
+      setToast(`Scripts run on ${selectionAlbumDirs.length} album(s)`);
+      qc.invalidateQueries({ queryKey: ["library"] });
+    } catch (e) {
+      toast(String(e));
     }
   };
 
@@ -204,7 +293,6 @@ export default function LibraryPage() {
   const sortedArtists = sortRows(filtered.artists, artistSort);
   const sortedTracks = sortRows(filtered.tracks, trackSort);
 
-  // grouped rows for the albums view (artist section headers + albums)
   const albumRows: ({ kind: "header"; artist: string } | { kind: "album"; album: FlatAlbum })[] = [];
   if (groupByArtist) {
     let current = "";
@@ -217,7 +305,11 @@ export default function LibraryPage() {
     }
   }
 
-  const albumColSpan = 2 + albumCols.length + 1; // chevron+cover, cols, actions
+  const albumColSpan = 3 + albumCols.length + 1; // checkbox, chevron+cover, cols, actions
+
+  const allAlbumsSelected = sortedAlbums.length > 0 && sortedAlbums.every((a) => selection.albums.includes(a.path));
+  const allArtistsSelected = sortedArtists.length > 0 && sortedArtists.every((a) => selection.artists.includes(a.path));
+  const allTracksSelected = sortedTracks.length > 0 && sortedTracks.every((t) => selection.tracks.includes(t.path));
 
   return (
     <div className="p-4 space-y-3">
@@ -322,6 +414,35 @@ export default function LibraryPage() {
         ))}
       </div>
 
+      {/* selection toolbar */}
+      {selectionCount > 0 && (
+        <div className="flex items-center gap-2 bg-violet-950/30 border border-accent/40 rounded-lg px-3 py-2 flex-wrap">
+          <span className="text-xs font-medium text-violet-200">
+            {selection.albums.length} album{selection.albums.length === 1 ? "" : "s"} · {selection.artists.length} artist{selection.artists.length === 1 ? "" : "s"} · {selection.tracks.length} track{selection.tracks.length === 1 ? "" : "s"} · {selTracks.size} total tracks
+          </span>
+          <div className="ml-auto flex gap-1.5 flex-wrap">
+            <button className="btn-primary !py-1 text-xs" onClick={playSelection}>
+              <Play className="h-3.5 w-3.5" /> Play
+            </button>
+            <button className="btn-ghost !py-1 text-xs" onClick={() => addToPlaylist([...selTracks])}>
+              <ListPlus className="h-3.5 w-3.5" /> Playlist
+            </button>
+            <button
+              className="btn-danger !py-1 text-xs"
+              onClick={() => removeAlbums(selectionAlbumDirs)}
+              disabled={removing === "batch" || !selectionAlbumDirs.length}
+              title={selectionAlbumDirs.length ? "Move selected albums to trash" : "Select albums or artists to remove"}
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Remove
+            </button>
+            <ScriptsDropdown onRun={runScriptsOnSelection} />
+            <button className="btn-ghost !py-1 text-xs" onClick={clearSelection}>
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {sortedAlbums.length === 0 && (
         <EmptyState title="Nothing matches" hint="Set the music folder in Settings, import an album, or clear the search/filters." />
       )}
@@ -333,6 +454,10 @@ export default function LibraryPage() {
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
+                  <th className="th w-8">
+                    <input type="checkbox" className="accent-violet-500" checked={allAlbumsSelected}
+                      onChange={() => setSelection({ albums: allAlbumsSelected ? [] : sortedAlbums.map((a) => a.path) })} />
+                  </th>
                   <th className="th w-8"></th>
                   <th className="th w-12"></th>
                   {ALBUM_COLS.filter((c) => albumCols.includes(c.id)).map((c) => (
@@ -356,6 +481,10 @@ export default function LibraryPage() {
                       expanded={expanded.has(row.album.path)}
                       onToggle={() => toggleExpand(row.album.path)}
                       visibleCols={albumCols}
+                      selected={selection.albums.includes(row.album.path)}
+                      onToggleSel={() => toggleAlbum(row.album.path)}
+                      selTracks={selTracks}
+                      onToggleTrack={toggleTrack}
                       removing={removing === row.album.path}
                       onRemove={() => removeAlbum(row.album)}
                       onPlaylist={() => addToPlaylist(row.album.tracks.map((t) => t.path))}
@@ -376,6 +505,10 @@ export default function LibraryPage() {
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
+                  <th className="th w-8">
+                    <input type="checkbox" className="accent-violet-500" checked={allArtistsSelected}
+                      onChange={() => setSelection({ artists: allArtistsSelected ? [] : sortedArtists.map((a) => a.path) })} />
+                  </th>
                   <SortHeader label="Artist" sort={artistSort} sortKey="name" onSort={setArtistSort} />
                   {ARTIST_COLS.filter((c) => artistCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort} />
@@ -388,8 +521,12 @@ export default function LibraryPage() {
                   const all = a.albums.flatMap((al) =>
                     al.tracks.map((t) => ({ path: t.path, file: t.file, albumPath: al.path, artist: a.name }))
                   );
+                  const sel = selection.artists.includes(a.path);
                   return (
-                    <tr key={a.path} className="table-row group">
+                    <tr key={a.path} className={`table-row group ${sel ? "bg-violet-950/30" : ""}`}>
+                      <td className="td pr-0">
+                        <input type="checkbox" className="accent-violet-500" checked={sel} onChange={() => toggleArtist(a.path)} />
+                      </td>
                       <td className="td">
                         <Link to={`/artist/${encodeURIComponent(a.path)}`} className="font-medium hover:text-accent-soft">
                           {a.name}
@@ -406,7 +543,7 @@ export default function LibraryPage() {
                       {artistCols.includes("audit") && <td className="td"><AuditBadge audit={a.aggregate.audit_summary} /></td>}
                       <td className="td text-right">
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button className="btn-ghost !px-1.5 !py-1" title="Play all" onClick={() => useStore.getState().playNow(all)}>
+                          <button className="btn-ghost !px-1.5 !py-1" title="Play all" onClick={() => playNow(all)}>
                             <Play className="h-3.5 w-3.5" />
                           </button>
                         </div>
@@ -427,6 +564,10 @@ export default function LibraryPage() {
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
+                  <th className="th w-8">
+                    <input type="checkbox" className="accent-violet-500" checked={allTracksSelected}
+                      onChange={() => setSelection({ tracks: allTracksSelected ? [] : sortedTracks.map((t) => t.path) })} />
+                  </th>
                   {TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort} />
                   ))}
@@ -434,51 +575,57 @@ export default function LibraryPage() {
                 </tr>
               </thead>
               <tbody>
-                {sortedTracks.map((tr) => (
-                  <tr key={tr.path} className="table-row group">
-                    {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tags.TRACKNUMBER ?? "—"}</td>}
-                    {trackCols.includes("title") && (
-                      <td className="td max-w-[260px]">
-                        <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
-                          {tr.tags.TITLE ?? tr.file}
-                        </Link>
-                        {tr.tags.INSTRUMENTAL === "1" && (
-                          <span className="ml-2 chip bg-zinc-800 text-zinc-400 border border-border text-[10px]">INST</span>
-                        )}
+                {sortedTracks.map((tr) => {
+                  const sel = selection.tracks.includes(tr.path);
+                  return (
+                    <tr key={tr.path} className={`table-row group ${sel ? "bg-violet-950/30" : ""}`}>
+                      <td className="td pr-0">
+                        <input type="checkbox" className="accent-violet-500" checked={sel} onChange={() => toggleTrack(tr.path)} />
                       </td>
-                    )}
-                    {trackCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[160px]">{tr.artist}</td>}
-                    {trackCols.includes("album") && <td className="td text-zinc-500 truncate max-w-[160px]">{tr.album}</td>}
-                    {trackCols.includes("year") && <td className="td text-zinc-500">{tr.tags.DATE ?? "—"}</td>}
-                    {trackCols.includes("genre") && <td className="td text-zinc-500 truncate max-w-[130px]">{tr.tags.GENRE ?? "—"}</td>}
-                    {trackCols.includes("media") && <td className="td"><MediaChip media={tr.tags.MEDIA} /></td>}
-                    {trackCols.includes("grade") && <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : null} size="sm" /></td>}
-                    {trackCols.includes("audit") && <td className="td"><AuditBadge audit={tr.audit} size="sm" /></td>}
-                    {trackCols.includes("advisory") && <td className="td"><AdvisoryBadge value={tr.tags.ITUNESADVISORY} /></td>}
-                    {trackCols.includes("duration") && <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>}
-                    {trackCols.includes("bitrate") && <td className="td text-zinc-500">{tr.tech.bitrate ? `${Math.round(tr.tech.bitrate / 1000)}k` : "—"}</td>}
-                    {trackCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{tr.tags.SOURCE ?? "—"}</td>}
-                    <td className="td text-right">
-                      <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          className="btn-ghost !px-1.5 !py-1"
-                          title="Play"
-                          onClick={() =>
-                            useStore.getState().playNow(
-                              sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist })),
-                              sortedTracks.findIndex((t) => t.path === tr.path)
-                            )
-                          }
-                        >
-                          <Play className="h-3.5 w-3.5" />
-                        </button>
-                        <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={() => addToPlaylist([tr.path])}>
-                          <ListPlus className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tags.TRACKNUMBER ?? "—"}</td>}
+                      {trackCols.includes("title") && (
+                        <td className="td max-w-[260px]">
+                          <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
+                            {tr.tags.TITLE ?? tr.file}
+                          </Link>
+                          {tr.tags.INSTRUMENTAL === "1" && (
+                            <span className="ml-2 chip bg-zinc-800 text-zinc-400 border border-border text-[10px]">INST</span>
+                          )}
+                        </td>
+                      )}
+                      {trackCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[160px]">{tr.artist}</td>}
+                      {trackCols.includes("album") && <td className="td text-zinc-500 truncate max-w-[160px]">{tr.album}</td>}
+                      {trackCols.includes("year") && <td className="td text-zinc-500">{tr.tags.DATE ?? "—"}</td>}
+                      {trackCols.includes("genre") && <td className="td text-zinc-500 truncate max-w-[130px]">{tr.tags.GENRE ?? "—"}</td>}
+                      {trackCols.includes("media") && <td className="td"><MediaChip media={tr.tags.MEDIA} /></td>}
+                      {trackCols.includes("grade") && <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : null} size="sm" /></td>}
+                      {trackCols.includes("audit") && <td className="td"><AuditBadge audit={tr.audit} size="sm" /></td>}
+                      {trackCols.includes("advisory") && <td className="td"><AdvisoryBadge value={tr.tags.ITUNESADVISORY} /></td>}
+                      {trackCols.includes("duration") && <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>}
+                      {trackCols.includes("bitrate") && <td className="td text-zinc-500">{tr.tech.bitrate ? `${Math.round(tr.tech.bitrate / 1000)}k` : "—"}</td>}
+                      {trackCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{tr.tags.SOURCE ?? "—"}</td>}
+                      <td className="td text-right">
+                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            className="btn-ghost !px-1.5 !py-1"
+                            title="Play"
+                            onClick={() =>
+                              playNow(
+                                sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist })),
+                                sortedTracks.findIndex((t) => t.path === tr.path)
+                              )
+                            }
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                          </button>
+                          <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={() => addToPlaylist([tr.path])}>
+                            <ListPlus className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -493,6 +640,10 @@ function AlbumRowGroup({
   expanded,
   onToggle,
   visibleCols,
+  selected,
+  onToggleSel,
+  selTracks,
+  onToggleTrack,
   removing,
   onRemove,
   onPlaylist,
@@ -502,6 +653,10 @@ function AlbumRowGroup({
   expanded: boolean;
   onToggle: () => void;
   visibleCols: string[];
+  selected: boolean;
+  onToggleSel: () => void;
+  selTracks: Set<string>;
+  onToggleTrack: (p: string) => void;
   removing: boolean;
   onRemove: () => void;
   onPlaylist: () => void;
@@ -515,7 +670,10 @@ function AlbumRowGroup({
 
   return (
     <>
-      <tr className="table-row group" onClick={onToggle}>
+      <tr className={`table-row group ${selected ? "bg-violet-950/30" : ""}`} onClick={onToggle}>
+        <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
+          <input type="checkbox" className="accent-violet-500" checked={selected} onChange={onToggleSel} />
+        </td>
         <td className="td pr-0">
           <button className="p-1 text-zinc-500 hover:text-white" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
             {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -578,6 +736,7 @@ function AlbumRowGroup({
             <table className="w-full">
               <thead className="bg-panel/40">
                 <tr>
+                  <th className="th w-8"></th>
                   <th className="th w-10">#</th>
                   <th className="th">Title</th>
                   <th className="th">Genre</th>
@@ -590,7 +749,10 @@ function AlbumRowGroup({
               </thead>
               <tbody>
                 {tracks.map((t) => (
-                  <tr key={t.path} className="table-row">
+                  <tr key={t.path} className={`table-row ${selTracks.has(t.path) ? "bg-violet-950/30" : ""}`}>
+                    <td className="td pr-0">
+                      <input type="checkbox" className="accent-violet-500" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
+                    </td>
                     <td className="td text-zinc-600">{t.tags.TRACKNUMBER ?? "—"}</td>
                     <td className="td max-w-[300px]">
                       <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
@@ -626,6 +788,36 @@ function AlbumRowGroup({
         </tr>
       )}
     </>
+  );
+}
+
+function ScriptsDropdown({ onRun }: { onRun: (ids: number[]) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button className="btn-ghost !py-1 text-xs" onClick={() => setOpen(!open)}>
+        <Wand2 className="h-3.5 w-3.5" /> Scripts
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg p-1.5 w-44 shadow-2xl">
+            {SCRIPTS.map((s) => (
+              <button
+                key={s.label}
+                className="w-full text-left px-2.5 py-1.5 text-xs rounded hover:bg-panel text-zinc-300 hover:text-white"
+                onClick={() => {
+                  setOpen(false);
+                  onRun(s.ids);
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
