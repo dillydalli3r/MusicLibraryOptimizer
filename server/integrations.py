@@ -19,20 +19,44 @@ _last_request = 0.0
 _mb_lock = threading.Lock()
 
 
-def mb_get(endpoint, params=None, timeout=30.0):
-    """Rate-limited MusicBrainz WS/2 GET returning parsed JSON."""
+def mb_get(endpoint, params=None, timeout=30.0, retries=3):
+    """Rate-limited MusicBrainz WS/2 GET returning parsed JSON.
+
+    Retries 429/5xx (MusicBrainz rate-limits and has occasional 503s) with
+    Retry-After-aware backoff, while keeping the 1 request/second etiquette.
+    """
     global _last_request
-    with _mb_lock:
-        elapsed = time.time() - _last_request
-        if elapsed < 1.0:
-            time.sleep(1.0 - elapsed)
-        r = httpx.get(
-            f"{MB_BASE}/{endpoint}",
-            params=params or {},
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-            timeout=timeout,
-        )
-        _last_request = time.time()
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    for attempt in range(retries):
+        with _mb_lock:
+            elapsed = time.time() - _last_request
+            if elapsed < 1.0:
+                time.sleep(1.0 - elapsed)
+            try:
+                r = httpx.get(
+                    f"{MB_BASE}/{endpoint}",
+                    params=params or {},
+                    headers=headers,
+                    timeout=timeout,
+                )
+            except httpx.HTTPError:
+                _last_request = time.time()
+                if attempt < retries - 1:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise
+            _last_request = time.time()
+        if r.status_code in (429, 500, 502, 503, 504):
+            wait = 1.5 * (attempt + 1)
+            retry_after = r.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    wait = max(wait, float(retry_after))
+                except ValueError:
+                    pass
+            if attempt < retries - 1:
+                time.sleep(wait)
+                continue
         r.raise_for_status()
         return r.json()
 

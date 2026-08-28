@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -8,7 +8,7 @@ import {
 import { api } from "../api";
 import { toast } from "../store";
 import LyricsViewer, { parseLrc } from "../components/LyricsViewer";
-import type { MBRelease, MatchSuggestion } from "../types";
+import type { GenreCascade, MBRelease, MatchSuggestion } from "../types";
 
 const STEPS = ["Select & separate", "Links", "Match", "Genres", "Lyrics", "Advisory", "Finish"];
 
@@ -43,6 +43,20 @@ function baseName(p: string): string {
 function extractMbid(value: string): string | null {
   const m = value.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
   return m ? m[0].toLowerCase() : null;
+}
+
+/** Retry a transient network failure (MusicBrainz rate limits / blips). */
+async function withRetry<T>(fn: () => Promise<T>, tries = 3, baseDelay = 1200): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, baseDelay * (i + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 /** Detect album boundaries inside an import set.
@@ -131,6 +145,7 @@ export default function ImportWizard() {
   const [mbLink, setMbLink] = useState("");
   const [rymLink, setRymLink] = useState("");
   const [rymValid, setRymValid] = useState<boolean | null>(null);
+  const [detectedFromTags, setDetectedFromTags] = useState(false);
   const [mbSearch, setMbSearch] = useState("");
   const [searchHits, setSearchHits] = useState<any[]>([]);
   const [release, setRelease] = useState<MBRelease | null>(null);
@@ -159,6 +174,21 @@ export default function ImportWizard() {
     const id = extractMbid(mbLink);
     if (id && id !== releaseId) setReleaseId(id);
   }, [mbLink, releaseId]);
+
+  // Auto-detect a Picard-tagged MusicBrainz release (MUSICBRAINZ_ALBUMID on
+  // any track) and fetch it automatically when the Links step opens.
+  const autoDetected = useRef(false);
+  useEffect(() => {
+    if (step !== 1 || !albumPath || releaseId || autoDetected.current) return;
+    const tagged = trackList.find((t) => t.tags?.MUSICBRAINZ_ALBUMID);
+    const id = tagged ? extractMbid(tagged.tags.MUSICBRAINZ_ALBUMID ?? "") : null;
+    if (!id) return;
+    autoDetected.current = true;
+    setDetectedFromTags(true);
+    setMbLink(`https://musicbrainz.org/release/${id}`);
+    setReleaseId(id);
+    pickRelease(id);
+  }, [step, albumPath, trackList, releaseId]);
 
   // Debounced RYM link validation.
   useEffect(() => {
@@ -373,14 +403,21 @@ export default function ImportWizard() {
   };
 
   const pickRelease = async (id: string) => {
+    if (!id) return;
     setBusy(true);
     try {
-      const rel = await api.mbRelease(id);
+      // MusicBrainz rate-limits and blips — retry the remote calls.
+      const rel = await withRetry(() => api.mbRelease(id));
       setRelease(rel);
       setReleaseId(id);
       const matched = await api.mbMatch(albumPath!, id);
       setSuggestions(matched.suggestions);
-      const cascade = await api.mbGenres(id);
+      let cascade: GenreCascade;
+      try {
+        cascade = await withRetry(() => api.mbGenres(id));
+      } catch {
+        cascade = { per_track: [], levels: { track: false, release: false, release_group: false, artist: false } };
+      }
       const g: Record<string, string> = {};
       const byPos = new Map(cascade.per_track.map((t) => [`${t.disc}-${t.position}`, t.genres.join("; ")]));
       for (const s of matched.suggestions) {
@@ -547,6 +584,8 @@ export default function ImportWizard() {
   const switchAlbum = (i: number) => {
     setAlbumIndex(i);
     setAlbumPath(uploaded[i].path);
+    autoDetected.current = false;
+    setDetectedFromTags(false);
     setRelease(null);
     setReleaseId("");
     setSuggestions([]);
@@ -749,7 +788,7 @@ export default function ImportWizard() {
               />
               {releaseId ? (
                 <span className="chip bg-emerald-900/60 text-emerald-300 border border-emerald-800 shrink-0">
-                  <Check className="h-3 w-3" /> recognized
+                  <Check className="h-3 w-3" /> {detectedFromTags ? "detected from track tags" : "recognized"}
                 </span>
               ) : mbLink.trim() ? (
                 <span className="chip bg-amber-900/50 text-amber-300 border border-amber-900 shrink-0">no MBID found</span>
