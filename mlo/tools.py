@@ -53,6 +53,41 @@ _TOOLS_CACHE = None
 _CACHE_LOCK = __import__("threading").Lock()
 
 
+def _detect_system_tools():
+    """Non-Windows fallback: detect distro tools on PATH (Docker/Linux/macOS)."""
+    import shutil
+
+    tools = {}
+
+    flac = shutil.which("flac")
+    if flac:
+        tools["flac"] = {
+            "version": None,
+            "flac_exe": flac,
+            "metaflac_exe": shutil.which("metaflac"),
+        }
+
+    cjxl = shutil.which("cjxl")
+    djxl = shutil.which("djxl")
+    if cjxl and djxl:
+        tools["libjxl"] = {"version": None, "cjxl_exe": cjxl, "djxl_exe": djxl}
+
+    jpegtran = shutil.which("jpegtran")
+    if jpegtran:
+        tools["libjpeg_turbo"] = {"version": None, "jpegtran_exe": jpegtran}
+
+    oxipng = shutil.which("oxipng")
+    if oxipng:
+        tools["oxipng"] = {"version": None, "oxipng_exe": oxipng}
+
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if ffmpeg and ffprobe:
+        tools["ffmpeg"] = {"version": None, "ffmpeg_exe": ffmpeg, "ffprobe_exe": ffprobe}
+
+    return tools
+
+
 def detect_all_tools():
     global _TOOLS_CACHE
     with _CACHE_LOCK:
@@ -62,6 +97,7 @@ def detect_all_tools():
     tools = {}
 
     if not os.path.isdir(DEPS_DIR):
+        tools = _detect_system_tools()
         with _CACHE_LOCK:
             _TOOLS_CACHE = tools
         return tools
@@ -200,6 +236,13 @@ def detect_all_tools():
                 "arcue_exe": arcue,
                 "dir": d,
             }
+
+    # Fill gaps from system packages (Linux/macOS/Docker) so each tool
+    # category resolves even without the .dependencies downloader.
+    system = _detect_system_tools()
+    for key in ("flac", "libjxl", "libjpeg_turbo", "oxipng", "ffmpeg"):
+        if key not in tools and key in system:
+            tools[key] = system[key]
 
     with _CACHE_LOCK:
         _TOOLS_CACHE = tools

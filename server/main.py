@@ -34,6 +34,14 @@ from server import integrations as intg
 
 app = FastAPI(title="MusicLibraryOptimizer API", version="2.0.0")
 
+# Docker/bootstrap: MLO_MUSIC_FOLDER env seeds music_folder when unset.
+_MLO_ENV_FOLDER = os.environ.get("MLO_MUSIC_FOLDER")
+if _MLO_ENV_FOLDER:
+    _cfg = load_config()
+    if not _cfg.get("music_folder"):
+        _cfg["music_folder"] = os.path.normpath(_MLO_ENV_FOLDER)
+        save_config(_cfg)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

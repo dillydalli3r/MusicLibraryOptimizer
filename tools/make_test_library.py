@@ -24,12 +24,15 @@ try:
                 break
 except FileNotFoundError:
     pass
+if FLAC_EXE is None:
+    import shutil
+    FLAC_EXE = shutil.which("flac") or None
 
 # Pure-Python fallback: when no flac.exe toolchain is present, encode
 # minimal valid MP3 frames instead so the API/UI can be smoke-tested.
 PURE_PYTHON = FLAC_EXE is None
 if PURE_PYTHON:
-    print("[make_test_library] flac.exe not found in .dependencies — "
+    print("[make_test_library] flac not found — "
           "using pure-Python MP3 fallback (no real FLACs)")
 
 BAD_LYRICS = (

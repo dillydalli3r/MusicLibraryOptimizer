@@ -1,0 +1,17 @@
+services:
+  musiclibraryoptimizer:
+    build: .
+    container_name: mlo
+    ports:
+      - "8000:8000"
+    environment:
+      - MLO_MUSIC_FOLDER=/music
+    volumes:
+      # Point this at your music library (artist/album folders).
+      - ./music:/music
+      # App state (playlists.db, config.json lives in /app).
+      - mlo-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  mlo-data:
