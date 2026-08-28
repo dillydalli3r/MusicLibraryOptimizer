@@ -15,12 +15,22 @@ import math
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FLAC_EXE = None
-for entry in os.listdir(os.path.join(ROOT, ".dependencies")):
-    if entry.lower().startswith("flac"):
-        cand = os.path.join(ROOT, ".dependencies", entry, "flac.exe")
-        if os.path.isfile(cand):
-            FLAC_EXE = cand
-            break
+try:
+    for entry in os.listdir(os.path.join(ROOT, ".dependencies")):
+        if entry.lower().startswith("flac"):
+            cand = os.path.join(ROOT, ".dependencies", entry, "flac.exe")
+            if os.path.isfile(cand):
+                FLAC_EXE = cand
+                break
+except FileNotFoundError:
+    pass
+
+# Pure-Python fallback: when no flac.exe toolchain is present, encode
+# minimal valid MP3 frames instead so the API/UI can be smoke-tested.
+PURE_PYTHON = FLAC_EXE is None
+if PURE_PYTHON:
+    print("[make_test_library] flac.exe not found in .dependencies — "
+          "using pure-Python MP3 fallback (no real FLACs)")
 
 BAD_LYRICS = (
     "[00:00.00][00:45.53]Stretching, filing[00:46.86]Against her skin\n"
@@ -54,8 +64,40 @@ def make_wav(path, seconds=2, freq=440):
 
 
 def flac_encode(wav, out):
+    if PURE_PYTHON:
+        write_mp3(out, seconds=2)
+        return
     subprocess.run([FLAC_EXE, "-s", "-f", "-8", "-o", out, wav],
                    check=True, capture_output=True)
+
+
+def write_mp3(path, seconds=2):
+    """Craft a valid MPEG-1 Layer III silence stream (32kbps mono)."""
+    frame = bytes.fromhex("ff fb 10 00") + b"\x00" * 100
+    n = int(seconds * 38.28) + 1
+    with open(path, "wb") as f:
+        for _ in range(n):
+            f.write(frame)
+
+
+def tag_mp3(path, tags):
+    from mutagen.mp3 import MP3
+    from mutagen.id3 import TIT2, TPE1, TALB, TPE2, TDRC, TRCK, TXXX, USLT, TCON
+    a = MP3(path)
+    if a.tags is None:
+        a.add_tags()
+    frame_map = {
+        "TITLE": TIT2, "ARTIST": TPE1, "ALBUM": TALB, "ALBUMARTIST": TPE2,
+        "DATE": TDRC, "TRACKNUMBER": TRCK, "GENRE": TCON,
+    }
+    for k, v in tags.items():
+        if k in frame_map:
+            a.tags.add(frame_map[k](encoding=3, text=str(v)))
+        elif k == "LYRICS":
+            a.tags.add(USLT(encoding=3, lang="eng", desc="", text=str(v)))
+        else:
+            a.tags.add(TXXX(encoding=3, desc=k, text=str(v)))
+    a.save()
 
 
 def tag(path, tags):
@@ -128,8 +170,11 @@ def build(base):
         os.makedirs(adir)
         make_wav(wav)
         for i, (fname, tags, _x) in enumerate(tracks):
+            was_flac = fname.endswith(".flac")
+            if PURE_PYTHON and was_flac:
+                fname = fname[:-5] + ".mp3"
             fpath = os.path.join(adir, fname)
-            if fname.endswith(".flac"):
+            if was_flac:
                 flac_encode(wav, fpath)
                 if i == 0:
                     # vary frequency a little per track
@@ -141,9 +186,14 @@ def build(base):
                     "TRACKNUMBER": f"{i+1:02d}",
                     "DATE": album.split(" - ")[0],
                 }
-                tag(fpath, base_tags)
-                if tags:
-                    tag(fpath, tags)
+                if PURE_PYTHON:
+                    tag_mp3(fpath, base_tags)
+                    if tags:
+                        tag_mp3(fpath, tags)
+                else:
+                    tag(fpath, base_tags)
+                    if tags:
+                        tag(fpath, tags)
             else:
                 # a small mp3 (silence, 32kbps) via mutagen-friendly path
                 from mutagen.mp3 import MP3
@@ -177,14 +227,11 @@ def make_mp3(path, artist, album, fname):
     """Encode a tiny mp3 via lame if present, else write a valid
     MPEG-1 Layer III silence frame stream."""
     import shutil
-    if FLAC_EXE is None:
+    if FLAC_EXE is None and not PURE_PYTHON:
         raise SystemExit("flac.exe not found in .dependencies")
     # No bundled mp3 encoder: craft minimal valid MP3 (MPEG1 Layer3
     # 32kbps mono silence frames).
-    frame = bytes.fromhex("ff fb 10 00") + b"\x00" * 100
-    with open(path, "wb") as f:
-        for _ in range(100):   # ~0.26s per frame at 44.1kHz/32kbps
-            f.write(frame)
+    write_mp3(path, seconds=1)
     try:
         from mutagen.mp3 import MP3
         from mutagen.id3 import TIT2, TPE1, TALB, TPE2, TDRC, TRCK

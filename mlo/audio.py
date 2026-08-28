@@ -140,6 +140,48 @@ TAG_MAP = {
         "mp3": ("TXXX", "LOG_CRC"),
         "mp4": ("freeform", "com.apple.iTunes", "LOG_CRC"),
     },
+    # MusicBrainz identifiers (Picard-compatible names).
+    "MUSICBRAINZ_ALBUMID": {
+        "flac": "MUSICBRAINZ_ALBUMID",
+        "mp3": ("TXXX", "MusicBrainz Album Id"),
+        "mp4": ("freeform", "com.apple.iTunes", "MusicBrainz Album Id"),
+    },
+    "MUSICBRAINZ_ALBUMARTISTID": {
+        "flac": "MUSICBRAINZ_ALBUMARTISTID",
+        "mp3": ("TXXX", "MusicBrainz Album Artist Id"),
+        "mp4": ("freeform", "com.apple.iTunes", "MusicBrainz Album Artist Id"),
+    },
+    "MUSICBRAINZ_ARTISTID": {
+        "flac": "MUSICBRAINZ_ARTISTID",
+        "mp3": ("TXXX", "MusicBrainz Artist Id"),
+        "mp4": ("freeform", "com.apple.iTunes", "MusicBrainz Artist Id"),
+    },
+    "MUSICBRAINZ_TRACKID": {
+        "flac": "MUSICBRAINZ_TRACKID",
+        "mp3": ("TXXX", "MusicBrainz Track Id"),
+        "mp4": ("freeform", "com.apple.iTunes", "MusicBrainz Track Id"),
+    },
+    "MUSICBRAINZ_RELEASEGROUPID": {
+        "flac": "MUSICBRAINZ_RELEASEGROUPID",
+        "mp3": ("TXXX", "MusicBrainz Release Group Id"),
+        "mp4": ("freeform", "com.apple.iTunes", "MusicBrainz Release Group Id"),
+    },
+    # RateYourMusic links (URLs).
+    "RATEYOURMUSIC_ALBUM": {
+        "flac": "RATEYOURMUSIC_ALBUM",
+        "mp3": ("TXXX", "RATEYOURMUSIC_ALBUM"),
+        "mp4": ("freeform", "com.apple.iTunes", "RATEYOURMUSIC_ALBUM"),
+    },
+    "RATEYOURMUSIC_TRACK": {
+        "flac": "RATEYOURMUSIC_TRACK",
+        "mp3": ("TXXX", "RATEYOURMUSIC_TRACK"),
+        "mp4": ("freeform", "com.apple.iTunes", "RATEYOURMUSIC_TRACK"),
+    },
+    "RATEYOURMUSIC_ARTIST": {
+        "flac": "RATEYOURMUSIC_ARTIST",
+        "mp3": ("TXXX", "RATEYOURMUSIC_ARTIST"),
+        "mp4": ("freeform", "com.apple.iTunes", "RATEYOURMUSIC_ARTIST"),
+    },
 }
 
 

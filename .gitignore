@@ -1,0 +1,63 @@
+# Runtime state (machine-specific)
+config.json
+config.local.json
+server/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# Downloaded toolchain (flac, libjxl, libjpeg-turbo, oxipng, AudioAuditor, rsgain, ffmpeg)
+.dependencies/
+
+# PyInstaller / build output
+build/
+dist/
+*.manifest
+*.spec.bak
+
+# Node
+node_modules/
+web/dist/
+*.tsbuildinfo
+
+# Rust / Tauri
+desktop/target/
+desktop/src-tauri/target/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# OS / editor / temp
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

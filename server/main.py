@@ -1,157 +1,218 @@
 """
-FastAPI backend for MusicLibraryOptimizer — localhost:8000
+FastAPI backend for MusicLibraryOptimizer v2 — localhost:8000.
 
-Wraps mlo/* as REST + WebSocket for the React frontend.
-Serves Tracks/Albums/Artists/All grading/auditing/tagging via the same
-mlo logic the Tkinter app used, so GRADE/AUDIT columns stay 100% parity.
+Wraps the mlo/* engine as REST + WebSocket for the React frontend:
+library (tag-rich, sortable), grading/auditing, tag editing, playback
+streaming, playlists (manual + smart, .m3u8), MusicBrainz/LRCLIB/RYM
+integrations, and album import.
 """
 import os
 import sys
 import json
 import asyncio
 import pathlib
+import tempfile
 from typing import List, Optional
 
-# Ensure project root on path so `import mlo` works when running from server/
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mlo import load_config, save_config
-from mlo.config import DEFAULT_CONFIG, DEFAULT_RUN_ALL_ORDER
-from mlo.stats import _find_albums
+from mlo.config import DEFAULT_CONFIG
 from mlo import stats as stats_mod
 
-app = FastAPI(title="MusicLibraryOptimizer API", version="1.7.1")
+from server import library as lib_mod
+from server import playlists as pl_mod
+from server import integrations as intg
+
+app = FastAPI(title="MusicLibraryOptimizer API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:3000", "http://localhost:1420",
+        "tauri://localhost",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- progress relay ---
+# --------------------------------------------------------------------------- #
+# Progress relay (WebSocket + original hook)
+# --------------------------------------------------------------------------- #
 progress_clients: set[WebSocket] = set()
 
 orig_hook = stats_mod.progress_hook
 
+
 def _relay(done, total, desc):
-    # forward to all WS clients + keep original hook
     try:
         if orig_hook:
             orig_hook(done, total, desc)
     except Exception:
         pass
+    loop = None
+    try:
+        loop = asyncio.get_event_loop()
+    except Exception:
+        pass
     for ws in list(progress_clients):
         try:
-            asyncio.run_coroutine_threadsafe(ws.send_json({"done": done, "total": total, "desc": desc}), asyncio.get_event_loop())
+            asyncio.run_coroutine_threadsafe(
+                ws.send_json({"done": done, "total": total, "desc": desc}), loop
+            )
         except Exception:
             pass
 
-# Use hook relay for all mlo progress
+
 stats_mod.progress_hook = _relay
-# Also disable tqdm so _HookPbar always fires
 stats_mod.tqdm = None
 
+
+# --------------------------------------------------------------------------- #
+# Models
+# --------------------------------------------------------------------------- #
 class RunRequest(BaseModel):
     ids: List[int]
     targets: Optional[List[str]] = None
-    force: Optional[dict] = None  # {flac, images, audit, lyrics, cue, dr, autotag, accurip}
+    force: Optional[dict] = None
+
 
 class TagsRequest(BaseModel):
     path: str
     tags: dict
 
+
+class PlaylistCreate(BaseModel):
+    name: str
+    kind: str = "manual"
+    filter: Optional[dict] = None
+
+
+class PlaylistRename(BaseModel):
+    name: str
+
+
+class PlaylistTracks(BaseModel):
+    paths: List[str]
+    position: Optional[int] = None
+
+
+class SmartFilter(BaseModel):
+    filter: dict
+
+
+class MatchRequest(BaseModel):
+    album_path: str
+    release_id: str
+
+
+class AssignTagsRequest(BaseModel):
+    """Write MB/RYM links to tags. `tracks` maps track path -> {tag: value}."""
+    tracks: dict
+
+
+class ImportCommit(BaseModel):
+    """Move staged files into the library. target_dir = album folder name."""
+    target_dir: str
+    mb_link: Optional[str] = None
+    rym_link: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Health / config
+# --------------------------------------------------------------------------- #
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "1.7.1"}
+    return {"status": "ok", "version": "2.0.0"}
+
 
 @app.get("/api/config")
 def get_config():
-    cfg = load_config()
-    return cfg
+    return load_config()
+
 
 @app.post("/api/config")
 def set_config(cfg: dict):
-    # save_config validates + atomic replaces config.json
     ok = save_config(cfg)
     if not ok:
         raise HTTPException(500, "Failed to save config")
     return load_config()
 
+
+# --------------------------------------------------------------------------- #
+# Library
+# --------------------------------------------------------------------------- #
 @app.get("/api/library")
 def library():
-    """Full library tree for React: artists -> albums -> tracks with grade/audit per mlo/grader."""
-    from mlo.grader import _grade_album
-    from mlo.config import DEFAULT_CONFIG as DC
+    """Tag-rich library tree: artists -> albums -> tracks (grade/audit + tags)."""
     cfg = load_config()
-    folder = cfg.get("music_folder", "")
-    if not folder or not os.path.isdir(folder):
-        return {"artists": [], "folder": folder, "error": "music_folder not set or not found"}
-    # Find albums and grade each
-    albums = _find_albums(folder)
-    # Group by artist parent dir
-    artists = {}
-    for alb in albums:
-        artist_dir = os.path.dirname(alb)
-        artists.setdefault(artist_dir, []).append(alb)
-    result_artists = []
-    for artist_dir, alb_list in sorted(artists.items()):
-        artist_name = os.path.basename(artist_dir)
-        albums_data = []
-        for alb in sorted(alb_list):
-            try:
-                res = _grade_album(alb, cfg.get("lyrics_format", "EMBEDDED").upper(), cfg)
-                if res is None or "error" in res:
-                    continue
-                # Normalize paths to forward slashes for frontend
-                res["path"] = res["path"].replace("\\", "/")
-                for tr in res.get("tracks", []):
-                    tr["_full"] = os.path.join(alb, tr["file"]).replace("\\", "/")
-                albums_data.append(res)
-            except Exception as e:
-                albums_data.append({"path": alb.replace("\\","/"), "error": str(e), "tracks": []})
-        result_artists.append({
-            "path": artist_dir.replace("\\", "/"),
-            "name": artist_name,
-            "albums": albums_data,
-        })
-    return {"folder": folder.replace("\\","/"), "artists": result_artists}
+    return lib_mod.build_library(cfg)
+
 
 @app.get("/api/album")
 def get_album(path: str = Query(...)):
-    from mlo.grader import _grade_album
-    cfg = load_config()
     p = os.path.normpath(path)
     if not os.path.isdir(p):
         raise HTTPException(404, "album not found")
-    res = _grade_album(p, cfg.get("lyrics_format","EMBEDDED").upper(), cfg)
+    res = lib_mod.build_album(p, load_config())
     if res is None:
         raise HTTPException(404, "no audio files")
-    if "error" in res:
-        raise HTTPException(500, res.get("error_detail","error"))
-    res["path"] = res["path"].replace("\\","/")
-    for tr in res.get("tracks",[]):
-        tr["_full"] = os.path.join(p, tr["file"]).replace("\\","/")
     return res
+
+
+@app.get("/api/artist")
+def get_artist(path: str = Query(...)):
+    p = os.path.normpath(path)
+    if not os.path.isdir(p):
+        raise HTTPException(404, "artist not found")
+    cfg = load_config()
+    albums = lib_mod._find_albums(p)
+    albums_data = []
+    for alb in sorted(albums):
+        if os.path.dirname(alb).lower() != p.lower():
+            continue
+        try:
+            a = lib_mod.build_album(alb, cfg)
+            if a is not None:
+                albums_data.append(a)
+        except Exception as e:
+            albums_data.append({"path": alb.replace("\\", "/"), "error": str(e), "tracks": []})
+    return {
+        "path": p.replace("\\", "/"),
+        "name": os.path.basename(p),
+        "albums": albums_data,
+        "aggregate": lib_mod._aggregate_albums(albums_data),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Streaming / tags
+# --------------------------------------------------------------------------- #
+_CTYPES = {
+    ".flac": "audio/flac", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+    ".mp4": "audio/mp4", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+    ".wav": "audio/wav", ".aac": "audio/aac",
+}
+
 
 @app.get("/api/stream")
 def stream(path: str = Query(...)):
     p = os.path.normpath(path)
     if not os.path.isfile(p):
         raise HTTPException(404, "file not found")
-    # Basic content-type sniff
-    ext = os.path.splitext(p)[1].lower()
-    ctype = "audio/flac" if ext==".flac" else "audio/mpeg" if ext==".mp3" else "audio/mp4" if ext in (".m4a",".mp4") else "audio/ogg" if ext==".ogg" else "application/octet-stream"
+    ctype = _CTYPES.get(os.path.splitext(p)[1].lower(), "application/octet-stream")
     return FileResponse(p, media_type=ctype, headers={"Accept-Ranges": "bytes"})
+
 
 @app.get("/api/tags")
 def get_tags(path: str = Query(...)):
@@ -163,24 +224,21 @@ def get_tags(path: str = Query(...)):
     if af.audio is None:
         raise HTTPException(500, af.error or "unreadable")
     tags = af.all_tags()
-    # include lyrics separate
     try:
         lyr = af.get_lyrics()
     except Exception:
         lyr = None
-    # cover preview
     cover = None
     try:
-        from mlo.paths import get_sidecar_cover_path
-        # check album cover
         alb = os.path.dirname(p)
-        for cand in ["cover.jpg","cover.jpeg","cover.png","cover.jxl"]:
+        for cand in ("cover.jpg", "cover.jpeg", "cover.png", "cover.jxl"):
             if os.path.isfile(os.path.join(alb, cand)):
-                cover = os.path.join(alb, cand).replace("\\","/")
+                cover = os.path.join(alb, cand).replace("\\", "/")
                 break
     except Exception:
         pass
-    return {"path": p.replace("\\","/"), "tags": tags, "lyrics": lyr, "cover": cover}
+    return {"path": p.replace("\\", "/"), "tags": tags, "lyrics": lyr, "cover": cover}
+
 
 @app.post("/api/tags")
 def set_tags(req: TagsRequest):
@@ -192,15 +250,13 @@ def set_tags(req: TagsRequest):
     if af.audio is None:
         raise HTTPException(500, af.error or "unreadable")
     errors = []
-    for k,v in req.tags.items():
-        if k.upper() in ("LYRICS","UNSYNCEDLYRICS"):
+    for k, v in req.tags.items():
+        if k.upper() in ("LYRICS", "UNSYNCEDLYRICS"):
             if not af.set_lyrics(str(v)):
                 errors.append(f"{k}: {af.error}")
         else:
-            if v is None or str(v)=="":
-                if not af.delete_tag(k):
-                    # ignore if tag didn't exist
-                    pass
+            if v is None or str(v) == "":
+                af.delete_tag(k)
             else:
                 if not af.set_tag(k, str(v)):
                     errors.append(f"{k}: {af.error}")
@@ -208,46 +264,76 @@ def set_tags(req: TagsRequest):
         raise HTTPException(500, "; ".join(errors))
     return {"ok": True}
 
+
+@app.post("/api/tags/batch")
+def set_tags_batch(req: TagsRequest):
+    """Apply a tag map to multiple files: {path: {tag: value}}."""
+    from mlo.audio import AudioFile
+    errors = []
+    changed = 0
+    for p, tag_map in req.tags.items():
+        fp = os.path.normpath(p)
+        if not os.path.isfile(fp):
+            errors.append(f"{p}: not found")
+            continue
+        af = AudioFile(fp)
+        if af.audio is None:
+            errors.append(f"{p}: {af.error or 'unreadable'}")
+            continue
+        for k, v in tag_map.items():
+            try:
+                if v is None or str(v) == "":
+                    af.delete_tag(k)
+                elif not af.set_tag(k, str(v)):
+                    errors.append(f"{p} {k}: {af.error}")
+            except Exception as e:
+                errors.append(f"{p} {k}: {e}")
+        changed += 1
+    if errors:
+        raise HTTPException(500, "; ".join(errors))
+    return {"ok": True, "changed": changed}
+
+
 @app.post("/api/cover")
 async def upload_cover(album: str = Query(...), file: UploadFile = File(...)):
     alb = os.path.normpath(album)
     if not os.path.isdir(alb):
         raise HTTPException(404, "album not found")
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".jpg",".jpeg",".png",".jxl",".webp",".bmp"):
+    if ext not in (".jpg", ".jpeg", ".png", ".jxl", ".webp", ".bmp"):
         ext = ".jpg"
     dest = os.path.join(alb, f"cover{ext}")
     data = await file.read()
-    # atomic with fsync
-    import tempfile
     fd, tmp = tempfile.mkstemp(prefix=".cover_tmp_", suffix=ext, dir=alb)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
             try:
-                f.flush(); os.fsync(f.fileno())
+                f.flush()
+                os.fsync(f.fileno())
             except Exception:
                 pass
         os.replace(tmp, dest)
-        try:
-            d = os.open(alb, os.O_DIRECTORY)
-            try: os.fsync(d)
-            finally: os.close(d)
-        except Exception:
-            pass
     except Exception as e:
         try:
-            if os.path.exists(tmp): os.remove(tmp)
+            if os.path.exists(tmp):
+                os.remove(tmp)
         except Exception:
             pass
         raise HTTPException(500, str(e))
-    return {"ok": True, "path": dest.replace("\\","/")}
+    return {"ok": True, "path": dest.replace("\\", "/")}
 
+
+# --------------------------------------------------------------------------- #
+# Run scripts
+# --------------------------------------------------------------------------- #
 @app.post("/api/run")
 def run_scripts(req: RunRequest):
-    from mlo import run_format_lyrics, run_format_cues, run_optimize_flacs, run_grade_library, run_process_images, run_audit_library
+    from mlo import (
+        run_format_lyrics, run_format_cues, run_optimize_flacs, run_grade_library,
+        run_process_images, run_audit_library, run_auto_tagging,
+    )
     from mlo.loudness import run_calc_dr_replaygain
-    from mlo.autotag import run_auto_tagging
     try:
         from mlo.accurip import run_generate_accurip
     except ImportError:
@@ -260,24 +346,30 @@ def run_scripts(req: RunRequest):
     RUNNERS = {
         1: run_format_lyrics, 2: run_format_cues, 3: run_optimize_flacs,
         4: run_grade_library, 5: run_process_images, 6: run_audit_library,
-        7: run_calc_dr_replaygain, 8: run_auto_tagging, 9: run_generate_accurip, 10: run_format_all,
+        7: run_calc_dr_replaygain, 8: run_auto_tagging, 9: run_generate_accurip,
+        10: run_format_all,
     }
     cfg = load_config()
     if req.targets:
         cfg["targets"] = [os.path.normpath(t) for t in req.targets]
-    # force mapping
     f = req.force or {}
-    # master force is implicit if any force key set; mimic app.py force_master gate
-    if f.get("flac"): cfg["force_reencode_flac"] = True
-    if f.get("images"): cfg["force_reencode_images"] = True
-    if f.get("audit"): cfg["force_audit"] = True
-    if f.get("lyrics"): cfg["force_lyrics"] = True
-    if f.get("cue"): cfg["force_cue"] = True
-    if f.get("dr"): cfg["force_dr_replaygain"] = True
-    if f.get("autotag"): cfg["force_auto_tag"] = True
-    if f.get("accurip"): cfg["force_accurip"] = True
+    if f.get("flac"):
+        cfg["force_reencode_flac"] = True
+    if f.get("images"):
+        cfg["force_reencode_images"] = True
+    if f.get("audit"):
+        cfg["force_audit"] = True
+    if f.get("lyrics"):
+        cfg["force_lyrics"] = True
+    if f.get("cue"):
+        cfg["force_cue"] = True
+    if f.get("dr"):
+        cfg["force_dr_replaygain"] = True
+    if f.get("autotag"):
+        cfg["force_auto_tag"] = True
+    if f.get("accurip"):
+        cfg["force_accurip"] = True
 
-    # Validate ids
     for i in req.ids:
         if i not in RUNNERS or RUNNERS[i] is None:
             raise HTTPException(400, f"runner {i} not available")
@@ -294,58 +386,276 @@ def run_scripts(req: RunRequest):
             results.append({"id": i, "error": str(e)})
     return {"results": results}
 
-# --- LRClib lyrics: uses lrclib.net per user ---
-import httpx as _httpx
+
+# --------------------------------------------------------------------------- #
+# Playlists
+# --------------------------------------------------------------------------- #
+@app.get("/api/playlists")
+def playlists_list():
+    return pl_mod.list_playlists()
+
+
+@app.post("/api/playlists")
+def playlists_create(req: PlaylistCreate):
+    if not req.name.strip():
+        raise HTTPException(400, "name required")
+    pid = pl_mod.create_playlist(req.name.strip(), req.kind, req.filter)
+    return pl_mod.get_playlist(pid)
+
+
+@app.get("/api/playlists/{pid}")
+def playlists_get(pid: int):
+    pl = pl_mod.get_playlist(pid)
+    if pl is None:
+        raise HTTPException(404, "playlist not found")
+    return pl
+
+
+@app.patch("/api/playlists/{pid}")
+def playlists_rename(pid: int, req: PlaylistRename):
+    if not pl_mod.rename_playlist(pid, req.name.strip()):
+        raise HTTPException(404, "playlist not found")
+    return pl_mod.get_playlist(pid)
+
+
+@app.delete("/api/playlists/{pid}")
+def playlists_delete(pid: int):
+    if not pl_mod.delete_playlist(pid):
+        raise HTTPException(404, "playlist not found")
+    return {"ok": True}
+
+
+@app.post("/api/playlists/{pid}/tracks")
+def playlists_add(pid: int, req: PlaylistTracks):
+    if pl_mod.get_playlist(pid) is None:
+        raise HTTPException(404, "playlist not found")
+    n = pl_mod.add_tracks(pid, [os.path.normpath(p) for p in req.paths], req.position)
+    return {"added": n}
+
+
+@app.put("/api/playlists/{pid}/tracks")
+def playlists_order(pid: int, req: PlaylistTracks):
+    """Full reorder: body paths replace the playlist order entirely."""
+    if pl_mod.get_playlist(pid) is None:
+        raise HTTPException(404, "playlist not found")
+    pl_mod.set_order(pid, [os.path.normpath(p) for p in req.paths])
+    return {"ok": True}
+
+
+@app.delete("/api/playlists/{pid}/tracks")
+def playlists_remove(pid: int, req: PlaylistTracks):
+    if pl_mod.get_playlist(pid) is None:
+        raise HTTPException(404, "playlist not found")
+    pl_mod.remove_tracks(pid, [os.path.normpath(p) for p in req.paths])
+    return {"ok": True}
+
+
+@app.post("/api/playlists/{pid}/filter")
+def playlists_filter(pid: int, req: SmartFilter):
+    pl = pl_mod.get_playlist(pid)
+    if pl is None:
+        raise HTTPException(404, "playlist not found")
+    if pl["kind"] != "smart":
+        raise HTTPException(400, "not a smart playlist")
+    pl_mod.set_smart_filter(pid, req.filter)
+    return pl_mod.get_playlist(pid)
+
+
+@app.post("/api/playlists/{pid}/evaluate")
+def playlists_evaluate(pid: int):
+    pl = pl_mod.get_playlist(pid)
+    if pl is None:
+        raise HTTPException(404, "playlist not found")
+    if pl["kind"] != "smart":
+        raise HTTPException(400, "not a smart playlist")
+    library = lib_mod.build_library(load_config())
+    hits = pl_mod.evaluate_smart(pid, library)
+    return {"paths": hits or []}
+
+
+@app.get("/api/playlists/{pid}/export")
+def playlists_export(pid: int):
+    content = pl_mod.export_m3u8(pid)
+    if content is None:
+        raise HTTPException(404, "playlist not found")
+    pl = pl_mod.get_playlist(pid)
+    name = re_safe_filename(pl["name"]) or "playlist"
+    return PlainTextResponse(
+        content,
+        media_type="audio/x-mpegurl",
+        headers={"Content-Disposition": f'attachment; filename="{name}.m3u8"'},
+    )
+
+
+@app.post("/api/playlists/import")
+async def playlists_import(name: str = Query(...), file: UploadFile = File(...)):
+    content = (await file.read()).decode("utf-8", errors="replace")
+    base = os.path.dirname(load_config().get("music_folder", "") or ".")
+    pid = pl_mod.import_m3u8(name.strip() or file.filename or "imported", content, base)
+    return pl_mod.get_playlist(pid)
+
+
+def re_safe_filename(name):
+    import re
+    return re.sub(r'[\\/*?:"<>|]', "_", name)
+
+
+# --------------------------------------------------------------------------- #
+# MusicBrainz / LRCLIB / RYM
+# --------------------------------------------------------------------------- #
+@app.get("/api/mb/release/{mbid}")
+def mb_release(mbid: str):
+    rid = intg._mbid(mbid)
+    if not rid:
+        raise HTTPException(400, "invalid MusicBrainz ID or URL")
+    try:
+        return intg.release_lookup(rid)
+    except Exception as e:
+        raise HTTPException(502, f"MusicBrainz lookup failed: {e}")
+
+
+@app.get("/api/mb/release/{mbid}/genres")
+def mb_release_genres(mbid: str):
+    rid = intg._mbid(mbid)
+    if not rid:
+        raise HTTPException(400, "invalid MusicBrainz ID or URL")
+    try:
+        release = intg.release_lookup(rid)
+        return intg.genre_cascade(release)
+    except Exception as e:
+        raise HTTPException(502, f"MusicBrainz genre lookup failed: {e}")
+
+
+@app.get("/api/mb/search/releases")
+def mb_search_releases(q: str = Query(..., min_length=1), limit: int = 10):
+    try:
+        return intg.search_releases(q, limit)
+    except Exception as e:
+        raise HTTPException(502, f"MusicBrainz search failed: {e}")
+
+
+@app.get("/api/mb/search/artists")
+def mb_search_artists(q: str = Query(..., min_length=1), limit: int = 5):
+    try:
+        return intg.search_artists(q, limit)
+    except Exception as e:
+        raise HTTPException(502, f"MusicBrainz search failed: {e}")
+
+
+@app.post("/api/mb/match")
+def mb_match(req: MatchRequest):
+    """Suggest release track/disc matches for local files in an album."""
+    album_dir = os.path.normpath(req.album_path)
+    if not os.path.isdir(album_dir):
+        raise HTTPException(404, "album not found")
+    rid = intg._mbid(req.release_id)
+    if not rid:
+        raise HTTPException(400, "invalid release ID")
+    try:
+        release = intg.release_lookup(rid)
+    except Exception as e:
+        raise HTTPException(502, f"MusicBrainz lookup failed: {e}")
+
+    from mlo.audio import AudioFile
+    local_tracks = []
+    for f in sorted(os.listdir(album_dir)):
+        if not is_audio_file(f):
+            continue
+        path = os.path.join(album_dir, f)
+        af = AudioFile(path)
+        tags = {}
+        if af.audio is not None:
+            for t in ("TRACKNUMBER", "DISCNUMBER", "TITLE"):
+                tags[t] = af.get_tag(t)
+        tn = tags.get("TRACKNUMBER")
+        dn = tags.get("DISCNUMBER")
+        try:
+            tn = int(str(tn).split("/")[0])
+        except (TypeError, ValueError):
+            tn = None
+        try:
+            dn = int(str(dn).split("/")[0])
+        except (TypeError, ValueError):
+            dn = None
+        info = af.audio.info if af.audio is not None else None
+        duration = float(info.length) if info is not None and hasattr(info, "length") else None
+        local_tracks.append({
+            "path": path.replace("\\", "/"),
+            "file": f,
+            "tracknumber": tn,
+            "discnumber": dn,
+            "title": tags.get("TITLE"),
+            "duration": duration,
+        })
+    return {"release": release, "suggestions": intg.match_tracks(local_tracks, release)}
+
+
+@app.post("/api/mb/assign")
+def mb_assign(req: AssignTagsRequest):
+    """Write per-track MB/RYM link tags. tracks: {path: {TAG: value}}."""
+    from mlo.audio import AudioFile
+    errors = []
+    changed = 0
+    for p, tag_map in req.tracks.items():
+        fp = os.path.normpath(p)
+        if not os.path.isfile(fp):
+            errors.append(f"{p}: not found")
+            continue
+        af = AudioFile(fp)
+        if af.audio is None:
+            errors.append(f"{p}: {af.error or 'unreadable'}")
+            continue
+        for k, v in tag_map.items():
+            try:
+                if v is None or str(v) == "":
+                    af.delete_tag(k)
+                elif not af.set_tag(k, str(v)):
+                    errors.append(f"{p} {k}: {af.error}")
+            except Exception as e:
+                errors.append(f"{p} {k}: {e}")
+        changed += 1
+    if errors:
+        raise HTTPException(500, "; ".join(errors))
+    return {"ok": True, "changed": changed}
+
 
 @app.get("/api/lyrics/search")
-async def lyrics_search(artist: str = Query(...), track: str = Query(...), album: str = Query(None), duration: int = Query(None)):
-    """Proxy to lrclib.net /api/search"""
-    params = {"track_name": track, "artist_name": artist}
-    if album: params["album_name"] = album
-    # lrclib primary search
+async def lyrics_search(
+    artist: str = Query(...), track: str = Query(...),
+    album: str = Query(None), duration: int = Query(None),
+):
     try:
-        async with _httpx.AsyncClient(timeout=10) as c:
-            r = await c.get("https://lrclib.net/api/search", params=params)
-            if r.status_code == 200:
-                return r.json()
+        return await asyncio.to_thread(
+            intg.lrclib_search, artist, track, album, duration
+        )
     except Exception as e:
         raise HTTPException(502, f"lrclib search failed: {e}")
-    return []
+
 
 @app.get("/api/lyrics/get")
-async def lyrics_get(artist: str = Query(...), track: str = Query(...), album: str = Query(None), duration: int = Query(None)):
-    """Proxy to lrclib.net /api/get - exact match, returns synced lyrics"""
-    params = {"artist_name": artist, "track_name": track}
-    if album: params["album_name"] = album
-    if duration: params["duration"] = duration
+async def lyrics_get(
+    artist: str = Query(...), track: str = Query(...),
+    album: str = Query(None), duration: int = Query(None),
+):
     try:
-        async with _httpx.AsyncClient(timeout=10) as c:
-            r = await c.get("https://lrclib.net/api/get", params=params)
-            if r.status_code == 200:
-                return r.json()
-            elif r.status_code == 404:
-                return JSONResponse({"found": False}, status_code=404)
-            else:
-                raise HTTPException(r.status_code, r.text)
-    except HTTPException:
-        raise
+        res = await asyncio.to_thread(intg.lrclib_get, artist, track, album, duration)
+        if res is None:
+            return JSONResponse({"found": False}, status_code=404)
+        return res
     except Exception as e:
         raise HTTPException(502, str(e))
 
+
 @app.post("/api/lyrics/write")
 def lyrics_write(path: str = Query(...), lrc: str = "", source: str = "lrclib"):
-    """Write .lrc sidecar atomically; never writes to tag per ask (translation sidecar only for helper)."""
-    import tempfile
-    from mlo.lyrics import _canonical_lyrics, format_lyrics_text
+    """Write .lrc sidecar atomically, canonicalized via mlo.lyrics."""
+    from mlo.lyrics import _format_for_storage
     p = os.path.normpath(path)
     if not os.path.isfile(p):
         raise HTTPException(404, "audio file not found")
     lrc_path = os.path.splitext(p)[0] + ".lrc"
     cfg = load_config()
-    # canonicalize via mlo.lyrics
     try:
-        # reuse format for storage
-        from mlo.lyrics import _format_for_storage
         final = _format_for_storage(lrc, cfg, optimize=True, is_for_lrc=True)
     except Exception:
         final = lrc
@@ -353,20 +663,108 @@ def lyrics_write(path: str = Query(...), lrc: str = "", source: str = "lrclib"):
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(final)
-            try: f.flush(); os.fsync(f.fileno())
-            except Exception: pass
+            try:
+                f.flush()
+                os.fsync(f.fileno())
+            except Exception:
+                pass
         os.replace(tmp, lrc_path)
-        try:
-            d = os.open(os.path.dirname(p) or ".", os.O_DIRECTORY)
-            try: os.fsync(d)
-            finally: os.close(d)
-        except Exception: pass
     except Exception as e:
-        try: os.remove(tmp)
-        except Exception: pass
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
         raise HTTPException(500, str(e))
-    return {"ok": True, "lrc": lrc_path.replace("\\","/")}
+    return {"ok": True, "lrc": lrc_path.replace("\\", "/")}
 
+
+@app.get("/api/rym/validate")
+def rym_validate(url: str = Query(...)):
+    return {"valid": intg.parse_rym_album_url(url) is not None}
+
+
+# --------------------------------------------------------------------------- #
+# Import
+# --------------------------------------------------------------------------- #
+def is_audio_file(name):
+    return os.path.splitext(name)[1].lower() in {
+        ".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".wav", ".aac",
+    }
+
+
+@app.post("/api/import/upload")
+async def import_upload(
+    target_dir: str = Query(...),
+    files: List[UploadFile] = File(...),
+):
+    """Upload files into a new album directory under the music folder."""
+    cfg = load_config()
+    folder = cfg.get("music_folder") or ""
+    if not folder or not os.path.isdir(folder):
+        raise HTTPException(400, "music_folder not set or not found")
+    target = os.path.normpath(os.path.join(folder, target_dir))
+    if not os.path.abspath(target).lower().startswith(os.path.abspath(folder).lower()):
+        raise HTTPException(400, "target outside music folder")
+    os.makedirs(target, exist_ok=True)
+    saved = []
+    for f in files:
+        safe = os.path.basename(f.filename or "file")
+        if not safe:
+            continue
+        dest = os.path.join(target, safe)
+        data = await f.read()
+        with open(dest, "wb") as out:
+            out.write(data)
+        saved.append(dest.replace("\\", "/"))
+    return {"ok": True, "saved": saved, "album_path": target.replace("\\", "/")}
+
+
+@app.post("/api/import/commit")
+def import_commit(req: ImportCommit):
+    """Store MB/RYM links on every track of a freshly imported album.
+
+    target_dir: album folder name under music_folder.
+    """
+    cfg = load_config()
+    folder = cfg.get("music_folder") or ""
+    if not folder or not os.path.isdir(folder):
+        raise HTTPException(400, "music_folder not set or not found")
+    target = os.path.normpath(os.path.join(folder, req.target_dir))
+    if not os.path.isdir(target):
+        raise HTTPException(404, "album not found")
+    from mlo.audio import AudioFile
+    changes = {}
+    for f in os.listdir(target):
+        if not is_audio_file(f):
+            continue
+        changes[os.path.join(target, f).replace("\\", "/")] = {}
+    mb = intg._mbid(req.mb_link)
+    if mb:
+        for p in changes:
+            changes[p]["MUSICBRAINZ_ALBUMID"] = mb
+    rym = intg.parse_rym_album_url(req.rym_link)
+    if rym:
+        for p in changes:
+            changes[p]["RATEYOURMUSIC_ALBUM"] = rym
+    errors = []
+    for p, tag_map in changes.items():
+        if not tag_map:
+            continue
+        af = AudioFile(os.path.normpath(p))
+        if af.audio is None:
+            errors.append(f"{p}: {af.error or 'unreadable'}")
+            continue
+        for k, v in tag_map.items():
+            if not af.set_tag(k, v):
+                errors.append(f"{p} {k}: {af.error}")
+    if errors:
+        raise HTTPException(500, "; ".join(errors))
+    return {"ok": True, "changed": len(changes)}
+
+
+# --------------------------------------------------------------------------- #
+# WebSocket + static
+# --------------------------------------------------------------------------- #
 @app.websocket("/ws/progress")
 async def ws_progress(ws: WebSocket):
     await ws.accept()
@@ -380,7 +778,7 @@ async def ws_progress(ws: WebSocket):
     finally:
         progress_clients.discard(ws)
 
-# Serve React build if present (after `npm run build` in web/)
+
 WEB_DIST = ROOT / "web" / "dist"
 if WEB_DIST.is_dir():
     app.mount("/", StaticFiles(directory=str(WEB_DIST), html=True), name="web")
