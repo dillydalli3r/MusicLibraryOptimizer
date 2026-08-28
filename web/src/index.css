@@ -5,59 +5,50 @@
 :root {
   color-scheme: dark;
 }
-* { scrollbar-width: thin; scrollbar-color: #333 #0d0d0d; }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #333 #0a0a0c;
+}
+
 body {
   margin: 0;
-  background: #0d0d0d;
+  background: #0a0a0c;
   color: #e8e8e8;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
 }
+
 #root {
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-soft;
+  }
+  .btn-ghost {
+    @apply btn bg-raise border border-border text-zinc-300 hover:bg-panel hover:text-white;
+  }
+  .btn-danger {
+    @apply btn bg-red-900/60 text-red-200 hover:bg-red-800/60 border border-red-900;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium;
+  }
+  .input {
+    @apply w-full rounded-md border border-border bg-panel px-3 py-1.5 text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent;
+  }
+  .th {
+    @apply px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-zinc-500 select-none;
+  }
+  .td {
+    @apply px-3 py-1.5 text-sm text-zinc-300;
   }
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+.table-row {
+  @apply border-t border-border/60 hover:bg-panel transition-colors cursor-pointer;
 }

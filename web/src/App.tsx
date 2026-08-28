@@ -1,63 +1,123 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { NavLink, Route, Routes } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Library, ListMusic, Import, Settings as SettingsIcon, RefreshCw, Play } from "lucide-react";
+import { api } from "./api";
 import { useStore } from "./store";
-import Library from "./components/Library";
-import TagEditor from "./components/TagEditor";
-import Player from "./components/Player";
-import LyricsEditor from "./components/LyricsEditor";
+import LibraryPage from "./pages/LibraryPage";
+import ArtistPage from "./pages/ArtistPage";
+import AlbumPage from "./pages/AlbumPage";
+import TrackPage from "./pages/TrackPage";
+import PlaylistsPage from "./pages/PlaylistsPage";
+import SettingsPage from "./pages/SettingsPage";
+import PlayerBar from "./components/PlayerBar";
+import ImportWizard from "./pages/ImportWizard";
+import { ProgressBar } from "./components/ProgressBar";
 
-const API = "http://127.0.0.1:8000";
+const NAV = [
+  { to: "/", label: "Library", icon: Library, end: true },
+  { to: "/playlists", label: "Playlists", icon: ListMusic, end: false },
+  { to: "/import", label: "Import", icon: Import, end: false },
+  { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
+];
 
 export default function App() {
-  const { library, setLibrary, progress, setProgress, selected } = useStore();
-  const [tab, setTab] = useState<"library" | "lyrics">("library");
-  const [config, setConfig] = useState<any>(null);
+  const { progress, setProgress, toast: toastMsg } = useStore();
+  const qc = useQueryClient();
+
+  const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
 
   useEffect(() => {
-    fetch(`${API}/api/library`).then(r=>r.json()).then(setLibrary).catch(()=>{});
-    fetch(`${API}/api/config`).then(r=>r.json()).then(setConfig).catch(()=>{});
-    const ws = new WebSocket("ws://127.0.0.1:8000/ws/progress");
-    ws.onmessage = e => { try{ setProgress(JSON.parse(e.data)); }catch{} };
+    const ws = new WebSocket(
+      `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/progress`
+    );
+    ws.onmessage = (e) => {
+      try {
+        setProgress(JSON.parse(e.data));
+      } catch {
+        /* ignore */
+      }
+    };
     return () => ws.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const run = async (ids: number[], title: string) => {
-    const targets = selected.length ? selected : undefined;
-    await fetch(`${API}/api/run`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ids, targets})});
-    // refresh
-    const lib = await fetch(`${API}/api/library`).then(r=>r.json());
-    setLibrary(lib);
-    alert(`${title} done`);
+  const runAll = async () => {
+    await api.run([1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
+    qc.invalidateQueries({ queryKey: ["library"] });
   };
 
   return (
-    <div className="min-h-screen bg-bg text-white flex flex-col">
-      <header className="h-14 bg-panel border-b border-border flex items-center px-4 gap-3 sticky top-0 z-20">
-        <span className="font-bold tracking-wide">MusicLibraryOptimizer</span>
-        <span className="text-xs text-gray-400">{config?.music_folder || library?.folder}</span>
-        <div className="ml-auto flex gap-2">
-          <button onClick={()=>run([1,2,8,3,5,9,6,4,7,10],"RUN ALL")} className="px-3 py-1.5 bg-white text-black rounded text-sm font-semibold">Run All</button>
-          <button onClick={()=>run([4],"Grade")} className="px-3 py-1.5 bg-zinc-800 rounded text-sm">Grade</button>
-          <button onClick={()=>run([6],"Audit")} className="px-3 py-1.5 bg-zinc-800 rounded text-sm">Audit</button>
+    <div className="min-h-screen bg-bg text-zinc-100 flex flex-col">
+      <header className="h-14 shrink-0 border-b border-border bg-panel flex items-center gap-3 px-4 sticky top-0 z-30">
+        <div className="flex items-center gap-2">
+          <span className="h-7 w-7 rounded-md bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
+            <Play className="h-3.5 w-3.5 text-white fill-white" />
+          </span>
+          <span className="font-bold tracking-wide">MusicLibraryOptimizer</span>
+          <span className="chip bg-raise border border-border text-zinc-400">v2</span>
+        </div>
+        <span className="hidden md:block text-xs text-zinc-500 truncate">
+          {config?.music_folder ? String(config.music_folder) : "music folder not set"}
+        </span>
+        <div className="ml-auto flex items-center gap-2">
+          <button className="btn-ghost text-xs" onClick={() => qc.invalidateQueries({ queryKey: ["library"] })}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+          <button className="btn-primary text-xs" onClick={runAll}>
+            <Play className="h-3.5 w-3.5" /> Run All
+          </button>
         </div>
       </header>
 
-      {progress && <div className="h-1 bg-zinc-900"><div className="h-1 bg-white transition-all" style={{width: `${progress.total? Math.min(100, progress.done/progress.total*100):0}%`}} /><div className="text-[10px] text-gray-400 px-4 py-0.5">{progress.desc} {progress.done}/{progress.total}</div></div>}
-
-      <div className="flex gap-2 px-4 py-2 bg-panel border-b border-border">
-        <button onClick={()=>setTab("library")} className={`px-3 py-1 rounded text-sm ${tab==="library"?"bg-white text-black":"bg-zinc-800"}`}>Library</button>
-        <button onClick={()=>setTab("lyrics")} className={`px-3 py-1 rounded text-sm ${tab==="lyrics"?"bg-white text-black":"bg-zinc-800"}`}>Lyrics editor</button>
-      </div>
+      <ProgressBar progress={progress} />
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 overflow-auto">
-          {tab==="library" ? <Library /> : <LyricsEditor />}
-        </div>
-        <div className="w-[380px] border-l border-border bg-card overflow-auto">
-          <TagEditor />
-        </div>
+        <aside className="w-48 shrink-0 border-r border-border bg-panel p-3 flex flex-col gap-1">
+          {NAV.map(({ to, label, icon: Icon, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              className={({ isActive }) =>
+                `flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
+                  isActive
+                    ? "bg-raise text-white border border-border"
+                    : "text-zinc-400 hover:text-white hover:bg-panel"
+                }`
+              }
+            >
+              <Icon className="h-4 w-4" />
+              {label}
+            </NavLink>
+          ))}
+          <div className="mt-auto text-[10px] text-zinc-600 px-3 py-2">
+            Grading · Auditing · Tagging
+            <br />
+            MusicBrainz · LRCLIB · RYM
+          </div>
+        </aside>
+
+        <main className="flex-1 overflow-auto">
+          <Routes>
+            <Route path="/" element={<LibraryPage />} />
+            <Route path="/artist/:path" element={<ArtistPage />} />
+            <Route path="/album/:path" element={<AlbumPage />} />
+            <Route path="/track/:path" element={<TrackPage />} />
+            <Route path="/playlists" element={<PlaylistsPage />} />
+            <Route path="/import" element={<ImportWizard />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </main>
       </div>
 
-      <Player />
+      <PlayerBar />
+
+      {toastMsg && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-accent/40 bg-panel px-4 py-2 text-sm shadow-xl">
+          {toastMsg}
+        </div>
+      )}
     </div>
   );
 }

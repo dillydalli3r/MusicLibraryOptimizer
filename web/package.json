@@ -1,7 +1,7 @@
 {
-  "name": "web",
+  "name": "music-library-optimizer-web",
   "private": true,
-  "version": "0.0.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,14 +11,13 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.102.4",
-    "howler": "^2.2.4",
+    "lucide-react": "^0.468.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@types/howler": "^2.2.13",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",

@@ -294,6 +294,30 @@ def set_tags_batch(req: TagsRequest):
     return {"ok": True, "changed": changed}
 
 
+@app.get("/api/cover")
+def get_cover(album: str = Query(...), file: Optional[str] = Query(None)):
+    """Serve an album's cover art (cover.jpg/jpeg/png/jxl or named file)."""
+    alb = os.path.normpath(album)
+    if not os.path.isdir(alb):
+        raise HTTPException(404, "album not found")
+    if file:
+        p = os.path.normpath(os.path.join(alb, os.path.basename(file)))
+        if not os.path.isfile(p):
+            raise HTTPException(404, "cover not found")
+    else:
+        p = None
+        for cand in ("cover.jpg", "cover.jpeg", "cover.png", "cover.jxl"):
+            if os.path.isfile(os.path.join(alb, cand)):
+                p = os.path.join(alb, cand)
+                break
+        if p is None:
+            raise HTTPException(404, "no cover")
+    ctype = _CTYPES.get(os.path.splitext(p)[1].lower(), "image/jpeg")
+    if ctype.startswith("audio"):
+        ctype = "image/jpeg"
+    return FileResponse(p, media_type=ctype, headers={"Cache-Control": "public, max-age=3600"})
+
+
 @app.post("/api/cover")
 async def upload_cover(album: str = Query(...), file: UploadFile = File(...)):
     alb = os.path.normpath(album)
