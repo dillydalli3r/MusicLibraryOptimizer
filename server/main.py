@@ -171,6 +171,45 @@ def library():
     return lib_mod.build_library(cfg)
 
 
+@app.get("/api/album/mbdetect")
+def album_mbdetect(path: str = Query(...)):
+    """Live scan: find a MusicBrainz release ID in ANY track tag.
+
+    Scans every audio file's raw tags case-insensitively for a key
+    containing 'musicbrainz' + 'album' (catches MUSICBRAINZ_ALBUMID and
+    variants written by other taggers), and also checks the mapped
+    MUSICBRAINZ_ALBUMID / MUSICBRAINZ_RELEASEGROUPID tags directly.
+    """
+    import re
+    from mlo.audio import AudioFile
+
+    p = os.path.normpath(path)
+    if not os.path.isdir(p):
+        raise HTTPException(404, "album not found")
+    uuid_re = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+    for f in sorted(os.listdir(p)):
+        if not is_audio_file(f):
+            continue
+        af = AudioFile(os.path.join(p, f))
+        if af.audio is None:
+            continue
+        for key in ("MUSICBRAINZ_ALBUMID", "MUSICBRAINZ_RELEASEGROUPID"):
+            v = af.get_tag(key)
+            m = uuid_re.search(str(v)) if v else None
+            if m:
+                return {"mbid": m.group(0).lower(), "key": key, "track": f}
+        try:
+            for k, v in (af.all_tags() or {}).items():
+                kl = str(k).lower()
+                if "musicbrainz" in kl and "album" in kl and "artist" not in kl:
+                    m = uuid_re.search(str(v)) if v else None
+                    if m:
+                        return {"mbid": m.group(0).lower(), "key": k, "track": f}
+        except Exception:
+            continue
+    return {"mbid": None}
+
+
 @app.get("/api/album")
 def get_album(path: str = Query(...)):
     p = os.path.normpath(path)

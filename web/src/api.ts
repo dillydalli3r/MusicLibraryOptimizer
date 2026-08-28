@@ -38,6 +38,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
     }),
+  mbDetect: (path: string) =>
+    json<{ mbid: string | null; key?: string; track?: string }>(
+      `${API}/album/mbdetect?path=${encodeURIComponent(path)}`
+    ),
 
   streamUrl: (path: string) => `${API}/stream?path=${encodeURIComponent(path)}`,
   tags: (path: string) => json<any>(`${API}/tags?path=${encodeURIComponent(path)}`),

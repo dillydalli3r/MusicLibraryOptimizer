@@ -169,26 +169,68 @@ export default function ImportWizard() {
     return [];
   }, [albumPath, lib]);
 
+  // Refresh the library when the wizard opens so tags written externally
+  // (e.g. Picard) since the last fetch are picked up.
+  useEffect(() => {
+    qc.refetchQueries({ queryKey: ["library"] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Auto-recognize a pasted MusicBrainz release URL/ID.
   useEffect(() => {
     const id = extractMbid(mbLink);
     if (id && id !== releaseId) setReleaseId(id);
   }, [mbLink, releaseId]);
 
-  // Auto-detect a Picard-tagged MusicBrainz release (MUSICBRAINZ_ALBUMID on
-  // any track) and fetch it automatically when the Links step opens.
+  // Detection: payload tags first, then a live on-disk scan (catches fresh
+  // tags and non-standard key variants such as MUSICBRAINZ_ALBUM_ID).
+  const detectReleaseId = async (): Promise<string | null> => {
+    const tagged = trackList.find((t) => t.tags?.MUSICBRAINZ_ALBUMID);
+    const fromPayload = tagged ? extractMbid(tagged.tags.MUSICBRAINZ_ALBUMID ?? "") : null;
+    if (fromPayload) return fromPayload;
+    if (!albumPath) return null;
+    try {
+      const r = await api.mbDetect(albumPath);
+      return r.mbid ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  // Auto-detect a Picard-tagged MusicBrainz release and fetch it
+  // automatically when the Links step opens.
   const autoDetected = useRef(false);
   useEffect(() => {
     if (step !== 1 || !albumPath || releaseId || autoDetected.current) return;
-    const tagged = trackList.find((t) => t.tags?.MUSICBRAINZ_ALBUMID);
-    const id = tagged ? extractMbid(tagged.tags.MUSICBRAINZ_ALBUMID ?? "") : null;
-    if (!id) return;
-    autoDetected.current = true;
-    setDetectedFromTags(true);
-    setMbLink(`https://musicbrainz.org/release/${id}`);
-    setReleaseId(id);
-    pickRelease(id);
+    let cancelled = false;
+    (async () => {
+      const id = await detectReleaseId();
+      if (!id || cancelled) return;
+      autoDetected.current = true;
+      setDetectedFromTags(true);
+      setMbLink(`https://musicbrainz.org/release/${id}`);
+      setReleaseId(id);
+      pickRelease(id);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, albumPath, trackList, releaseId]);
+
+  // Fetch button: falls back to tag detection when the field is empty.
+  const handleFetch = async () => {
+    let id = releaseId || extractMbid(mbLink) || "";
+    if (!id && albumPath) {
+      const detected = await detectReleaseId();
+      if (detected) {
+        setDetectedFromTags(true);
+        setMbLink(`https://musicbrainz.org/release/${detected}`);
+        id = detected;
+      }
+    }
+    pickRelease(id);
+  };
 
   // Debounced RYM link validation.
   useEffect(() => {
@@ -836,7 +878,7 @@ export default function ImportWizard() {
               )}
             </div>
           </div>
-          <button className="btn-primary" onClick={() => pickRelease(releaseId || mbLink)} disabled={!mbLink || busy}>
+          <button className="btn-primary" onClick={handleFetch} disabled={busy}>
             <Wand2 className="h-4 w-4" /> Fetch release & auto-match
           </button>
         </div>
