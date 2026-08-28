@@ -209,11 +209,41 @@ export default function ImportWizard() {
     }
   };
 
-  const pickFolderBrowser = () => {
+  const pickFolderBrowser = async () => {
+    try {
+      // Preferred: File System Access API (Chromium/Edge).
+      const picker = (window as any).showDirectoryPicker;
+      if (picker) {
+        const dir = await picker({ mode: "read" });
+        const out: ImportFile[] = [];
+        const walk = async (entry: any, prefix: string) => {
+          for await (const e of entry.values()) {
+            if (e.kind === "file") {
+              const f = await e.getFile();
+              out.push({ file: f, relPath: prefix ? `${prefix}/${f.name}` : f.name });
+            } else if (e.kind === "directory") {
+              await walk(e, prefix ? `${prefix}/${e.name}` : e.name);
+            }
+          }
+        };
+        await walk(dir, "");
+        adoptImports(out.filter((o) => ALLOWED.test(o.relPath)), dir.name || "");
+        return;
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") toast(String(e));
+      return;
+    }
+    // Fallback: webkitdirectory input (Chrome/Edge/Firefox/WebView2).
     document.getElementById("import-folder")?.click();
   };
 
   const pickFolderNative = async () => {
+    const inTauri = !!(window as any).__TAURI_INTERNALS__;
+    if (!inTauri) {
+      toast("The native picker is only available in the desktop app — use 'Pick folder' instead");
+      return;
+    }
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const picked = await invoke<string | null>("pick_folder");
@@ -557,7 +587,7 @@ export default function ImportWizard() {
               e.preventDefault();
               handleDrop(e.dataTransfer.items);
             }}
-            onClick={() => document.getElementById("import-files")?.click()}
+            onClick={() => pickFolderBrowser()}
           >
             <UploadCloud className="h-10 w-10 text-zinc-600 mx-auto mb-3" />
             <div className="font-medium text-zinc-300">Drop albums or files here</div>
@@ -569,8 +599,32 @@ export default function ImportWizard() {
             <div className="text-[11px] text-zinc-600 mt-1">
               audio (flac, mp3, m4a, ogg, opus, wav, …) · images (jpg, png, webp, tiff, avif, heic, …) · .lrc .cue .log .accurip
             </div>
+            <div className="text-xs text-zinc-600 mt-2">
+              click to <b className="text-zinc-400">pick a folder</b> · or{" "}
+              <span
+                className="text-accent-soft underline underline-offset-2 cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  document.getElementById("import-files")?.click();
+                }}
+              >
+                browse individual files
+              </span>
+            </div>
             <input id="import-files" type="file" multiple className="hidden" onChange={(e) => e.target.files && handleFiles(e.target.files)} />
-            <input id="import-folder" type="file" multiple className="hidden" {...({ webkitdirectory: "", directory: "" } as any)} onChange={(e) => e.target.files && handleFiles(e.target.files)} />
+            <input
+              id="import-folder"
+              type="file"
+              multiple
+              className="hidden"
+              ref={(el) => {
+                if (el) {
+                  el.setAttribute("webkitdirectory", "");
+                  el.setAttribute("directory", "");
+                }
+              }}
+              onChange={(e) => e.target.files && handleFiles(e.target.files)}
+            />
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
