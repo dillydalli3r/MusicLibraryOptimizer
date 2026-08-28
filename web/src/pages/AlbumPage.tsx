@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ExternalLink, Play, Wand2 } from "lucide-react";
@@ -20,10 +20,7 @@ export default function AlbumPage() {
   const [sort, setSort] = useState<SortState | null>(null);
   const qc = useQueryClient();
 
-  const coverUrl = useMemo(() => {
-    if (!data?.cover_file || !data.path) return null;
-    return `/api/cover?album=${encodeURIComponent(data.path)}&file=${encodeURIComponent(data.cover_file)}`;
-  }, [data]);
+  const coverUrl = data?.cover_file && data.path ? api.coverUrl(data.path, data.cover_file) : null;
 
   if (error) return <EmptyState title="Album not found" hint={String(error)} />;
   if (isLoading || !data) return <div className="p-8 text-zinc-500">Loading album…</div>;

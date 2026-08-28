@@ -139,9 +139,12 @@ export const api = {
 
   rymValidate: (url: string) => json<{ valid: boolean }>(`${API}/rym/validate?url=${encodeURIComponent(url)}`),
 
-  importUpload: (targetDir: string, files: File[]) => {
+  coverUrl: (albumPath: string, coverFile?: string | null) =>
+    `${API}/cover?album=${encodeURIComponent(albumPath)}${coverFile ? `&file=${encodeURIComponent(coverFile)}` : ""}`,
+
+  importUpload: (targetDir: string, files: { file: File; relPath: string }[]) => {
     const fd = new FormData();
-    for (const f of files) fd.append("files", f);
+    for (const { file, relPath } of files) fd.append("files", file, relPath);
     return json<{ ok: boolean; saved: string[]; album_path: string }>(
       `${API}/import/upload?target_dir=${encodeURIComponent(targetDir)}`,
       { method: "POST", body: fd }

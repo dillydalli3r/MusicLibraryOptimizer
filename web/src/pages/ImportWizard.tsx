@@ -19,7 +19,7 @@ export default function ImportWizard() {
 
   const [albumPath, setAlbumPath] = useState<string | null>(initialAlbum);
   const [albumName, setAlbumName] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<{ file: File; relPath: string }[]>([]);
   const [uploading, setUploading] = useState(false);
 
   const [mbLink, setMbLink] = useState("");
@@ -53,29 +53,101 @@ export default function ImportWizard() {
   };
 
   // ---------------- Step 0: upload ----------------
-  const handleFiles = (list: FileList | File[]) => {
-    const arr = Array.from(list).filter((f) => /\.(flac|mp3|m4a|mp4|ogg|opus|wav|aac|cue|log|jpg|jpeg|png|webp|jxl|bmp)$/i.test(f.name));
+  interface ImportFile {
+    file: File;
+    relPath: string;
+  }
+
+  const ALLOWED = /\.(flac|mp3|m4a|mp4|ogg|opus|wav|aac|cue|log|jpg|jpeg|png|webp|jxl|bmp)$/i;
+
+  const handleFiles = (list: FileList | File[], baseDir = "") => {
+    const arr: ImportFile[] = [];
+    for (const f of Array.from(list)) {
+      const rel = (f as any).webkitRelativePath
+        ? (f as any).webkitRelativePath.replace(/\\/g, "/")
+        : f.name.replace(/\\/g, "/");
+      const full = baseDir ? `${baseDir}/${rel}` : rel;
+      if (ALLOWED.test(f.name)) arr.push({ file: f, relPath: full });
+    }
     setFiles(arr);
+  };
+
+  /** Recursively walk dropped entries (webkitGetAsEntry) to support
+   *  dropping a whole album folder, preserving its internal structure. */
+  const handleDrop = async (items: DataTransferItemList) => {
+    const out: { file: File; relPath: string }[] = [];
+    const roots: any[] = [];
+    for (const item of Array.from(items)) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) roots.push(entry);
+    }
+    if (roots.some((r) => r.isDirectory)) {
+      for (const root of roots) {
+        await walkEntry(root, root.isDirectory ? root.name : "", out);
+      }
+      const folderName = roots.find((r) => r.isDirectory)?.name;
+      if (folderName && !albumName) setAlbumName(folderName);
+    } else {
+      handleFiles(roots.map((r) => r.file ? r : null).filter(Boolean) as File[], "");
+      return;
+    }
+    setFiles(out.filter((o) => ALLOWED.test(o.file.name)));
+  };
+
+  const walkEntry = async (entry: any, prefix: string, out: { file: File; relPath: string }[]) => {
+    if (entry.isFile) {
+      const f = await new Promise<File>((resolve, reject) => entry.file(resolve, reject));
+      out.push({ file: f, relPath: prefix ? `${prefix}/${f.name}` : f.name });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const entries: any[] = await new Promise((resolve, reject) => {
+        const all: any[] = [];
+        const readBatch = () =>
+          reader.readEntries((batch: any[]) => {
+            if (!batch.length) return resolve(all);
+            all.push(...batch);
+            readBatch();
+          }, reject);
+        readBatch();
+      });
+      for (const e of entries) await walkEntry(e, prefix ? `${prefix}/${entry.name}` : entry.name, out);
+    }
   };
 
   const pickFolder = async () => {
     try {
+      const inTauri = !!(window as any).__TAURI_INTERNALS__;
+      if (inTauri) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const picked = await invoke<string | null>("pick_folder");
+        if (picked) {
+          const dirName = picked.split(/[\\/]/).pop() ?? "Album";
+          setAlbumName(dirName);
+          setAlbumPath(picked);
+          setStep(1);
+        }
+        return;
+      }
       const picker = (window as any).showDirectoryPicker;
       if (!picker) {
         toast("Folder picker unsupported — use the file input or drag & drop");
         return;
       }
       const dir = await picker({ mode: "read" });
-      const out: File[] = [];
-      const walk = async (entry: any) => {
+      const out: ImportFile[] = [];
+      const walk = async (entry: any, prefix: string) => {
         for await (const e of entry.values()) {
-          if (e.kind === "file") out.push(await e.getFile());
-          else if (e.kind === "directory") await walk(e);
+          if (e.kind === "file") {
+            const f = await e.getFile();
+            out.push({ file: f, relPath: prefix ? `${prefix}/${f.name}` : f.name });
+          } else if (e.kind === "directory") {
+            await walk(e, prefix ? `${prefix}/${e.name}` : e.name);
+          }
         }
       };
-      await walk(dir);
+      await walk(dir, "");
       setAlbumName(dir.name);
-      handleFiles(out);
+      setFiles(out.filter((o) => ALLOWED.test(o.file.name)));
     } catch (e) {
       if ((e as Error).name !== "AbortError") toast(String(e));
     }
@@ -328,13 +400,16 @@ export default function ImportWizard() {
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
-              handleFiles(e.dataTransfer.files);
+              handleDrop(e.dataTransfer.items);
             }}
             onClick={() => document.getElementById("import-files")?.click()}
           >
             <UploadCloud className="h-10 w-10 text-zinc-600 mx-auto mb-3" />
-            <div className="font-medium text-zinc-300">Drop audio files, folders or archives here</div>
-            <div className="text-xs text-zinc-600 mt-1">or click to browse · .flac .mp3 .m4a .ogg .opus .wav + covers, .cue, .log</div>
+            <div className="font-medium text-zinc-300">Drop a whole album folder (or files) here</div>
+            <div className="text-xs text-zinc-600 mt-1">
+              drop a folder like <b className="text-zinc-500">2024 - Album Name/</b> — cover, .cue, .log and
+              multi-disc subfolders are kept · or click to browse
+            </div>
             <input id="import-files" type="file" multiple className="hidden" onChange={(e) => e.target.files && handleFiles(e.target.files)} />
           </div>
           <div className="flex items-center gap-3">
@@ -348,12 +423,12 @@ export default function ImportWizard() {
               <div className="font-medium mb-2">{files.length} file(s)</div>
               <div className="max-h-40 overflow-auto text-xs text-zinc-500 grid grid-cols-2 gap-1">
                 {files.slice(0, 60).map((f, i) => (
-                  <span key={i} className="truncate">{f.name}</span>
+                  <span key={i} className="truncate">{f.relPath}</span>
                 ))}
                 {files.length > 60 && <span>…{files.length - 60} more</span>}
               </div>
               <button className="btn-primary mt-3" onClick={upload} disabled={uploading}>
-                {uploading ? "Uploading…" : "Upload to library"}
+                {uploading ? "Uploading…" : `Upload album → ${albumName || "New Album"}`}
               </button>
             </div>
           )}

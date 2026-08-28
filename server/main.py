@@ -729,7 +729,12 @@ async def import_upload(
     target_dir: str = Query(...),
     files: List[UploadFile] = File(...),
 ):
-    """Upload files into a new album directory under the music folder."""
+    """Upload files into a new album directory under the music folder.
+
+    Filenames may contain relative subpaths (e.g. "CD1/01 - Intro.flac")
+    so whole album folders keep their internal structure. Path traversal
+    and absolute paths are rejected.
+    """
     cfg = load_config()
     folder = cfg.get("music_folder") or ""
     if not folder or not os.path.isdir(folder):
@@ -740,10 +745,15 @@ async def import_upload(
     os.makedirs(target, exist_ok=True)
     saved = []
     for f in files:
-        safe = os.path.basename(f.filename or "file")
-        if not safe:
+        name = (f.filename or "file").replace("\\", "/")
+        parts = [p for p in name.split("/") if p and p not in (".", "..")]
+        if not parts:
             continue
-        dest = os.path.join(target, safe)
+        # reject absolute/escaping paths
+        if os.path.isabs(name) or ".." in name.split("/"):
+            raise HTTPException(400, f"unsafe filename: {name!r}")
+        dest = os.path.join(target, *parts)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
         data = await f.read()
         with open(dest, "wb") as out:
             out.write(data)
