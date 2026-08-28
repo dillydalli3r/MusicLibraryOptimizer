@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Search, FolderOpen, ListPlus, Play, Disc3, Trash2 } from "lucide-react";
+import {
+  Search, FolderOpen, ListPlus, Play, Disc3, Trash2, ChevronRight, ChevronDown, Columns3,
+} from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { sortRows, SortHeader, type SortState } from "../lib/sort.tsx";
@@ -35,6 +37,56 @@ const VIEW_TABS: { id: View; label: string }[] = [
   { id: "tracks", label: "Tracks" },
 ];
 
+const ALBUM_SORTS = [
+  { key: "meta.ALBUM", label: "Album name" },
+  { key: "artist", label: "Artist" },
+  { key: "meta.DATE", label: "Year" },
+  { key: "track_count", label: "Tracks" },
+  { key: "grade_pct", label: "Grade" },
+  { key: "audit_summary", label: "Audit" },
+];
+
+interface Col {
+  id: string;
+  label: string;
+  sortKey: string;
+}
+
+const ALBUM_COLS: Col[] = [
+  { id: "album", label: "Album", sortKey: "meta.ALBUM" },
+  { id: "artist", label: "Artist", sortKey: "artist" },
+  { id: "year", label: "Year", sortKey: "meta.DATE" },
+  { id: "tracks", label: "Tracks", sortKey: "track_count" },
+  { id: "grade", label: "Grade", sortKey: "grade_pct" },
+  { id: "audit", label: "Audit", sortKey: "audit_summary" },
+  { id: "media", label: "Media", sortKey: "media" },
+  { id: "source", label: "Source", sortKey: "source_summary" },
+];
+
+const ARTIST_COLS: Col[] = [
+  { id: "albums", label: "Albums", sortKey: "aggregate.album_count" },
+  { id: "tracks", label: "Tracks", sortKey: "aggregate.track_count" },
+  { id: "checks", label: "Checks", sortKey: "aggregate.grade_pct" },
+  { id: "grade", label: "Grade", sortKey: "aggregate.grade_pct" },
+  { id: "audit", label: "Audit", sortKey: "aggregate.audit_summary" },
+];
+
+const TRACK_COLS: Col[] = [
+  { id: "num", label: "#", sortKey: "tags.TRACKNUMBER" },
+  { id: "title", label: "Title", sortKey: "tags.TITLE" },
+  { id: "artist", label: "Artist", sortKey: "artist" },
+  { id: "album", label: "Album", sortKey: "album" },
+  { id: "year", label: "Year", sortKey: "tags.DATE" },
+  { id: "genre", label: "Genre", sortKey: "tags.GENRE" },
+  { id: "media", label: "Media", sortKey: "tags.MEDIA" },
+  { id: "grade", label: "Grade", sortKey: "grade_pass" },
+  { id: "audit", label: "Audit", sortKey: "audit" },
+  { id: "advisory", label: "Advisory", sortKey: "tags.ITUNESADVISORY" },
+  { id: "duration", label: "Duration", sortKey: "tech.length" },
+  { id: "bitrate", label: "Bitrate", sortKey: "tech.bitrate" },
+  { id: "source", label: "Source", sortKey: "tags.SOURCE" },
+];
+
 interface FlatAlbum extends Album {
   artist: string;
 }
@@ -54,6 +106,12 @@ export default function LibraryPage() {
   const [artistSort, setArtistSort] = useLocalSort("artist");
   const [trackSort, setTrackSort] = useLocalSort("track");
   const [removing, setRemoving] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [groupByArtist, setGroupByArtist] = useState(false);
+
+  const [albumCols, toggleAlbumCol] = useColumnPrefs("albums", ALBUM_COLS);
+  const [artistCols, toggleArtistCol] = useColumnPrefs("artists", ARTIST_COLS);
+  const [trackCols, toggleTrackCol] = useColumnPrefs("tracks", TRACK_COLS);
 
   const flat = useMemo(() => {
     const albums: FlatAlbum[] = [];
@@ -131,12 +189,35 @@ export default function LibraryPage() {
     }
   };
 
+  const toggleExpand = (path: string) =>
+    setExpanded((s) => {
+      const next = new Set(s);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+
   if (error) return <EmptyState title="Backend unreachable" hint={String(error)} />;
   if (isLoading || !lib) return <div className="p-8 text-zinc-500">Scanning library…</div>;
 
   const sortedAlbums = sortRows(filtered.albums, albumSort);
   const sortedArtists = sortRows(filtered.artists, artistSort);
   const sortedTracks = sortRows(filtered.tracks, trackSort);
+
+  // grouped rows for the albums view (artist section headers + albums)
+  const albumRows: ({ kind: "header"; artist: string } | { kind: "album"; album: FlatAlbum })[] = [];
+  if (groupByArtist) {
+    let current = "";
+    for (const al of sortedAlbums) {
+      if (al.artist !== current) {
+        current = al.artist;
+        albumRows.push({ kind: "header", artist: current });
+      }
+      albumRows.push({ kind: "album", album: al });
+    }
+  }
+
+  const albumColSpan = 2 + albumCols.length + 1; // chevron+cover, cols, actions
 
   return (
     <div className="p-4 space-y-3">
@@ -164,6 +245,35 @@ export default function LibraryPage() {
             </button>
           ))}
         </div>
+
+        {view === "albums" && (
+          <>
+            <select
+              className="input !w-auto text-xs"
+              value={albumSort?.key ?? ""}
+              onChange={(e) => setAlbumSort(e.target.value)}
+              title="Sort albums"
+            >
+              <option value="">Sort…</option>
+              {ALBUM_SORTS.map((s) => (
+                <option key={s.key} value={s.key}>
+                  {s.label} {albumSort?.key === s.key ? (albumSort.dir === 1 ? "↑" : "↓") : ""}
+                </option>
+              ))}
+            </select>
+            <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none" title="Group albums under artist headers">
+              <input type="checkbox" checked={groupByArtist} onChange={(e) => setGroupByArtist(e.target.checked)} className="accent-violet-500" />
+              Group by artist
+            </label>
+          </>
+        )}
+
+        <ColumnsMenu
+          cols={view === "albums" ? ALBUM_COLS : view === "artists" ? ARTIST_COLS : TRACK_COLS}
+          visible={view === "albums" ? albumCols : view === "artists" ? artistCols : trackCols}
+          onToggle={view === "albums" ? toggleAlbumCol : view === "artists" ? toggleArtistCol : toggleTrackCol}
+        />
+
         <span className="text-xs text-zinc-500 whitespace-nowrap">
           {sortedAlbums.length} albums · {sortedTracks.length} tracks
         </span>
@@ -223,68 +333,36 @@ export default function LibraryPage() {
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
+                  <th className="th w-8"></th>
                   <th className="th w-12"></th>
-                  <SortHeader label="Album" sort={albumSort} sortKey="meta.ALBUM" onSort={setAlbumSort} />
-                  <SortHeader label="Artist" sort={albumSort} sortKey="artist" onSort={setAlbumSort} />
-                  <SortHeader label="Year" sort={albumSort} sortKey="meta.DATE" onSort={setAlbumSort} />
-                  <SortHeader label="Tracks" sort={albumSort} sortKey="track_count" onSort={setAlbumSort} />
-                  <SortHeader label="Grade" sort={albumSort} sortKey="grade_pct" onSort={setAlbumSort} />
-                  <SortHeader label="Audit" sort={albumSort} sortKey="audit_summary" onSort={setAlbumSort} />
+                  {ALBUM_COLS.filter((c) => albumCols.includes(c.id)).map((c) => (
+                    <SortHeader key={c.id} label={c.label} sort={albumSort} sortKey={c.sortKey} onSort={setAlbumSort} />
+                  ))}
                   <th className="th text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedAlbums.map((al) => (
-                  <tr key={al.path} className="table-row group">
-                    <td className="td">
-                      <div className="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0">
-                        {al.cover_file ? (
-                          <img src={api.coverUrl(al.path, al.cover_file)} alt="" loading="lazy" className="h-full w-full object-cover" />
-                        ) : (
-                          <div className="h-full w-full flex items-center justify-center text-zinc-700">
-                            <Disc3 className="h-4 w-4" />
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td className="td max-w-[280px]">
-                      <Link to={`/album/${encodeURIComponent(al.path)}`} className="font-medium hover:text-accent-soft truncate inline-block max-w-full">
-                        {al.meta?.ALBUM ?? al.path.split("/").pop()}
-                      </Link>
-                    </td>
-                    <td className="td text-zinc-400 truncate max-w-[200px]">{al.artist}</td>
-                    <td className="td text-zinc-500">{al.meta?.DATE ?? "—"}</td>
-                    <td className="td text-zinc-500">{al.track_count}</td>
-                    <td className="td"><GradeBadge pass={al.pass} score={al.grade_pct} /></td>
-                    <td className="td"><AuditBadge audit={al.audit_summary} /></td>
-                    <td className="td text-right">
-                      <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          className="btn-ghost !px-1.5 !py-1"
-                          title="Play album"
-                          onClick={() =>
-                            useStore.getState().playNow(
-                              al.tracks.map((t) => ({ path: t.path, file: t.file, albumPath: al.path, artist: al.artist }))
-                            )
-                          }
-                        >
-                          <Play className="h-3.5 w-3.5" />
-                        </button>
-                        <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={() => addToPlaylist(al.tracks.map((t) => t.path))}>
-                          <ListPlus className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          className="btn-danger !px-1.5 !py-1"
-                          title="Remove album (to trash)"
-                          disabled={removing === al.path}
-                          onClick={() => removeAlbum(al)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {(groupByArtist ? albumRows : sortedAlbums.map((al) => ({ kind: "album" as const, album: al }))).map((row) =>
+                  row.kind === "header" ? (
+                    <tr key={`h-${row.artist}`} className="bg-panel/70">
+                      <td colSpan={albumColSpan} className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-zinc-300">
+                        {row.artist}
+                      </td>
+                    </tr>
+                  ) : (
+                    <AlbumRowGroup
+                      key={row.album.path}
+                      album={row.album}
+                      expanded={expanded.has(row.album.path)}
+                      onToggle={() => toggleExpand(row.album.path)}
+                      visibleCols={albumCols}
+                      removing={removing === row.album.path}
+                      onRemove={() => removeAlbum(row.album)}
+                      onPlaylist={() => addToPlaylist(row.album.tracks.map((t) => t.path))}
+                      colSpan={albumColSpan}
+                    />
+                  )
+                )}
               </tbody>
             </table>
           </div>
@@ -299,11 +377,9 @@ export default function LibraryPage() {
               <thead className="bg-panel/60">
                 <tr>
                   <SortHeader label="Artist" sort={artistSort} sortKey="name" onSort={setArtistSort} />
-                  <SortHeader label="Albums" sort={artistSort} sortKey="aggregate.album_count" onSort={setArtistSort} />
-                  <SortHeader label="Tracks" sort={artistSort} sortKey="aggregate.track_count" onSort={setArtistSort} />
-                  <SortHeader label="Checks" sort={artistSort} sortKey="aggregate.grade_pct" onSort={setArtistSort} />
-                  <SortHeader label="Grade" sort={artistSort} sortKey="aggregate.grade_pct" onSort={setArtistSort} />
-                  <SortHeader label="Audit" sort={artistSort} sortKey="aggregate.audit_summary" onSort={setArtistSort} />
+                  {ARTIST_COLS.filter((c) => artistCols.includes(c.id)).map((c) => (
+                    <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort} />
+                  ))}
                   <th className="th text-right">Actions</th>
                 </tr>
               </thead>
@@ -319,13 +395,15 @@ export default function LibraryPage() {
                           {a.name}
                         </Link>
                       </td>
-                      <td className="td text-zinc-500">{a.aggregate.album_count}</td>
-                      <td className="td text-zinc-500">{a.aggregate.track_count}</td>
-                      <td className="td text-zinc-500">
-                        {a.aggregate.pass_count}/{a.aggregate.total_checks}
-                      </td>
-                      <td className="td"><GradeBadge pass={(a.aggregate.grade_pct ?? 0) >= 100} score={a.aggregate.grade_pct} /></td>
-                      <td className="td"><AuditBadge audit={a.aggregate.audit_summary} /></td>
+                      {artistCols.includes("albums") && <td className="td text-zinc-500">{a.aggregate.album_count}</td>}
+                      {artistCols.includes("tracks") && <td className="td text-zinc-500">{a.aggregate.track_count}</td>}
+                      {artistCols.includes("checks") && (
+                        <td className="td text-zinc-500">{a.aggregate.pass_count}/{a.aggregate.total_checks}</td>
+                      )}
+                      {artistCols.includes("grade") && (
+                        <td className="td"><GradeBadge pass={(a.aggregate.grade_pct ?? 0) >= 100} score={a.aggregate.grade_pct} /></td>
+                      )}
+                      {artistCols.includes("audit") && <td className="td"><AuditBadge audit={a.aggregate.audit_summary} /></td>}
                       <td className="td text-right">
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           <button className="btn-ghost !px-1.5 !py-1" title="Play all" onClick={() => useStore.getState().playNow(all)}>
@@ -349,41 +427,37 @@ export default function LibraryPage() {
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
-                  <SortHeader label="#" sort={trackSort} sortKey="tags.TRACKNUMBER" onSort={setTrackSort} className="w-10" />
-                  <SortHeader label="Title" sort={trackSort} sortKey="tags.TITLE" onSort={setTrackSort} />
-                  <SortHeader label="Artist" sort={trackSort} sortKey="artist" onSort={setTrackSort} />
-                  <SortHeader label="Album" sort={trackSort} sortKey="album" onSort={setTrackSort} />
-                  <SortHeader label="Year" sort={trackSort} sortKey="tags.DATE" onSort={setTrackSort} />
-                  <SortHeader label="Genre" sort={trackSort} sortKey="tags.GENRE" onSort={setTrackSort} />
-                  <SortHeader label="Media" sort={trackSort} sortKey="tags.MEDIA" onSort={setTrackSort} />
-                  <SortHeader label="Grade" sort={trackSort} sortKey="grade_pass" onSort={setTrackSort} />
-                  <SortHeader label="Audit" sort={trackSort} sortKey="audit" onSort={setTrackSort} />
-                  <SortHeader label="Advisory" sort={trackSort} sortKey="tags.ITUNESADVISORY" onSort={setTrackSort} />
-                  <SortHeader label="Dur" sort={trackSort} sortKey="tech.length" onSort={setTrackSort} />
+                  {TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) => (
+                    <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort} />
+                  ))}
                   <th className="th text-right">Play</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedTracks.map((tr) => (
                   <tr key={tr.path} className="table-row group">
-                    <td className="td text-zinc-600">{tr.tags.TRACKNUMBER ?? "—"}</td>
-                    <td className="td max-w-[260px]">
-                      <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
-                        {tr.tags.TITLE ?? tr.file}
-                      </Link>
-                      {tr.tags.INSTRUMENTAL === "1" && (
-                        <span className="ml-2 chip bg-zinc-800 text-zinc-400 border border-border text-[10px]">INST</span>
-                      )}
-                    </td>
-                    <td className="td text-zinc-400 truncate max-w-[160px]">{tr.artist}</td>
-                    <td className="td text-zinc-500 truncate max-w-[160px]">{tr.album}</td>
-                    <td className="td text-zinc-500">{tr.tags.DATE ?? "—"}</td>
-                    <td className="td text-zinc-500 truncate max-w-[130px]">{tr.tags.GENRE ?? "—"}</td>
-                    <td className="td"><MediaChip media={tr.tags.MEDIA} /></td>
-                    <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : null} size="sm" /></td>
-                    <td className="td"><AuditBadge audit={tr.audit} size="sm" /></td>
-                    <td className="td"><AdvisoryBadge value={tr.tags.ITUNESADVISORY} /></td>
-                    <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>
+                    {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tags.TRACKNUMBER ?? "—"}</td>}
+                    {trackCols.includes("title") && (
+                      <td className="td max-w-[260px]">
+                        <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
+                          {tr.tags.TITLE ?? tr.file}
+                        </Link>
+                        {tr.tags.INSTRUMENTAL === "1" && (
+                          <span className="ml-2 chip bg-zinc-800 text-zinc-400 border border-border text-[10px]">INST</span>
+                        )}
+                      </td>
+                    )}
+                    {trackCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[160px]">{tr.artist}</td>}
+                    {trackCols.includes("album") && <td className="td text-zinc-500 truncate max-w-[160px]">{tr.album}</td>}
+                    {trackCols.includes("year") && <td className="td text-zinc-500">{tr.tags.DATE ?? "—"}</td>}
+                    {trackCols.includes("genre") && <td className="td text-zinc-500 truncate max-w-[130px]">{tr.tags.GENRE ?? "—"}</td>}
+                    {trackCols.includes("media") && <td className="td"><MediaChip media={tr.tags.MEDIA} /></td>}
+                    {trackCols.includes("grade") && <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : null} size="sm" /></td>}
+                    {trackCols.includes("audit") && <td className="td"><AuditBadge audit={tr.audit} size="sm" /></td>}
+                    {trackCols.includes("advisory") && <td className="td"><AdvisoryBadge value={tr.tags.ITUNESADVISORY} /></td>}
+                    {trackCols.includes("duration") && <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>}
+                    {trackCols.includes("bitrate") && <td className="td text-zinc-500">{tr.tech.bitrate ? `${Math.round(tr.tech.bitrate / 1000)}k` : "—"}</td>}
+                    {trackCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{tr.tags.SOURCE ?? "—"}</td>}
                     <td className="td text-right">
                       <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
@@ -412,6 +486,209 @@ export default function LibraryPage() {
       )}
     </div>
   );
+}
+
+function AlbumRowGroup({
+  album,
+  expanded,
+  onToggle,
+  visibleCols,
+  removing,
+  onRemove,
+  onPlaylist,
+  colSpan,
+}: {
+  album: FlatAlbum;
+  expanded: boolean;
+  onToggle: () => void;
+  visibleCols: string[];
+  removing: boolean;
+  onRemove: () => void;
+  onPlaylist: () => void;
+  colSpan: number;
+}) {
+  const tracks = [...(album.tracks ?? [])].sort((a, b) => {
+    const na = parseInt(a.tags.TRACKNUMBER ?? "0", 10) || 0;
+    const nb = parseInt(b.tags.TRACKNUMBER ?? "0", 10) || 0;
+    return na - nb;
+  });
+
+  return (
+    <>
+      <tr className="table-row group" onClick={onToggle}>
+        <td className="td pr-0">
+          <button className="p-1 text-zinc-500 hover:text-white" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
+            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </button>
+        </td>
+        <td className="td">
+          <div className="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0">
+            {album.cover_file ? (
+              <img src={api.coverUrl(album.path, album.cover_file)} alt="" loading="lazy" className="h-full w-full object-cover" />
+            ) : (
+              <div className="h-full w-full flex items-center justify-center text-zinc-700">
+                <Disc3 className="h-4 w-4" />
+              </div>
+            )}
+          </div>
+        </td>
+        {visibleCols.includes("album") && (
+          <td className="td max-w-[280px]">
+            <Link
+              to={`/album/${encodeURIComponent(album.path)}`}
+              onClick={(e) => e.stopPropagation()}
+              className="font-medium hover:text-accent-soft truncate inline-block max-w-full"
+            >
+              {album.meta?.ALBUM ?? album.path.split("/").pop()}
+            </Link>
+          </td>
+        )}
+        {visibleCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[200px]">{album.artist}</td>}
+        {visibleCols.includes("year") && <td className="td text-zinc-500">{album.meta?.DATE ?? "—"}</td>}
+        {visibleCols.includes("tracks") && <td className="td text-zinc-500">{album.track_count}</td>}
+        {visibleCols.includes("grade") && <td className="td"><GradeBadge pass={album.pass} score={album.grade_pct} /></td>}
+        {visibleCols.includes("audit") && <td className="td"><AuditBadge audit={album.audit_summary} /></td>}
+        {visibleCols.includes("media") && <td className="td"><MediaChip media={album.media} /></td>}
+        {visibleCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{album.source_summary ?? "—"}</td>}
+        <td className="td text-right">
+          <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="btn-ghost !px-1.5 !py-1"
+              title="Play album"
+              onClick={() =>
+                useStore.getState().playNow(
+                  tracks.map((t) => ({ path: t.path, file: t.file, albumPath: album.path, artist: album.artist }))
+                )
+              }
+            >
+              <Play className="h-3.5 w-3.5" />
+            </button>
+            <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={onPlaylist}>
+              <ListPlus className="h-3.5 w-3.5" />
+            </button>
+            <button className="btn-danger !px-1.5 !py-1" title="Remove album (to trash)" disabled={removing} onClick={onRemove}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="bg-panel/30">
+          <td colSpan={colSpan} className="p-0">
+            <table className="w-full">
+              <thead className="bg-panel/40">
+                <tr>
+                  <th className="th w-10">#</th>
+                  <th className="th">Title</th>
+                  <th className="th">Genre</th>
+                  <th className="th">Grade</th>
+                  <th className="th">Audit</th>
+                  <th className="th">Advisory</th>
+                  <th className="th">Dur</th>
+                  <th className="th text-right">Play</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tracks.map((t) => (
+                  <tr key={t.path} className="table-row">
+                    <td className="td text-zinc-600">{t.tags.TRACKNUMBER ?? "—"}</td>
+                    <td className="td max-w-[300px]">
+                      <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
+                        {t.tags.TITLE ?? t.file}
+                      </Link>
+                      {t.tags.INSTRUMENTAL === "1" && (
+                        <span className="ml-2 chip bg-zinc-800 text-zinc-400 border border-border text-[10px]">INST</span>
+                      )}
+                    </td>
+                    <td className="td text-zinc-500 truncate max-w-[150px]">{t.tags.GENRE ?? "—"}</td>
+                    <td className="td"><GradeBadge pass={t.grade_pass} score={t.grade_pass ? 100 : null} size="sm" /></td>
+                    <td className="td"><AuditBadge audit={t.audit} size="sm" /></td>
+                    <td className="td"><AdvisoryBadge value={t.tags.ITUNESADVISORY} /></td>
+                    <td className="td text-zinc-500">{fmtDuration(t.tech.length)}</td>
+                    <td className="td text-right">
+                      <button
+                        className="btn-ghost !px-1.5 !py-1"
+                        onClick={() =>
+                          useStore.getState().playNow(
+                            tracks.map((x) => ({ path: x.path, file: x.file, albumPath: album.path, artist: album.artist })),
+                            tracks.findIndex((x) => x.path === t.path)
+                          )
+                        }
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function ColumnsMenu({
+  cols,
+  visible,
+  onToggle,
+}: {
+  cols: Col[];
+  visible: string[];
+  onToggle: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button className={`btn-ghost text-xs ${open ? "!text-white !bg-raise" : ""}`} onClick={() => setOpen(!open)}>
+        <Columns3 className="h-3.5 w-3.5" /> Columns
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg p-2 w-48 shadow-2xl">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1.5">Visible columns</div>
+            {cols.map((c) => (
+              <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-panel rounded">
+                <input type="checkbox" checked={visible.includes(c.id)} onChange={() => onToggle(c.id)} className="accent-violet-500" />
+                {c.label}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function useColumnPrefs(key: string, defs: Col[]): [string[], (id: string) => void] {
+  const storageKey = `mlo-cols-${key}`;
+  const [visible, setVisible] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const arr = JSON.parse(raw) as string[];
+        const ids = new Set(defs.map((d) => d.id));
+        const kept = arr.filter((x) => ids.has(x));
+        if (kept.length) return kept;
+      }
+    } catch {
+      /* fall through to defaults */
+    }
+    return defs.map((d) => d.id);
+  });
+  const toggle = (id: string) =>
+    setVisible((v) => {
+      const next = v.includes(id) ? v.filter((x) => x !== id) : [...v, id];
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  return [visible, toggle];
 }
 
 export function fmtDuration(sec: number | undefined): string {
