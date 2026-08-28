@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -37,6 +37,12 @@ function dirOf(relPath: string): string {
 function baseName(p: string): string {
   const parts = p.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? "";
+}
+
+/** Extract a MusicBrainz ID from an ID or a musicbrainz.org URL. */
+function extractMbid(value: string): string | null {
+  const m = value.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return m ? m[0].toLowerCase() : null;
 }
 
 /** Detect album boundaries inside an import set.
@@ -124,6 +130,7 @@ export default function ImportWizard() {
 
   const [mbLink, setMbLink] = useState("");
   const [rymLink, setRymLink] = useState("");
+  const [rymValid, setRymValid] = useState<boolean | null>(null);
   const [mbSearch, setMbSearch] = useState("");
   const [searchHits, setSearchHits] = useState<any[]>([]);
   const [release, setRelease] = useState<MBRelease | null>(null);
@@ -146,6 +153,29 @@ export default function ImportWizard() {
         if (al.path === albumPath) return al.tracks;
     return [];
   }, [albumPath, lib]);
+
+  // Auto-recognize a pasted MusicBrainz release URL/ID.
+  useEffect(() => {
+    const id = extractMbid(mbLink);
+    if (id && id !== releaseId) setReleaseId(id);
+  }, [mbLink, releaseId]);
+
+  // Debounced RYM link validation.
+  useEffect(() => {
+    if (!rymLink.trim()) {
+      setRymValid(null);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const r = await api.rymValidate(rymLink.trim());
+        setRymValid(r.valid);
+      } catch {
+        setRymValid(false);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [rymLink]);
 
   const defaultTrackName = (p: string) => {
     const base = p.split("/").pop() ?? "";
@@ -371,13 +401,14 @@ export default function ImportWizard() {
   };
 
   const nextFromLinks = async () => {
-    if (!albumPath || !releaseId) {
-      toast("Pick a MusicBrainz release first");
+    const rid = releaseId || extractMbid(mbLink) || "";
+    if (!albumPath || !rid) {
+      toast("Enter a valid MusicBrainz release URL or ID first");
       return;
     }
     setBusy(true);
     try {
-      await api.importCommit(currentAlbumName, mbLink || `https://musicbrainz.org/release/${releaseId}`, rymLink || undefined);
+      await api.importCommit(currentAlbumName, mbLink || `https://musicbrainz.org/release/${rid}`, rymValid ? rymLink : undefined);
       toast("Links saved to album");
       setStep(2);
     } catch (e) {
@@ -530,7 +561,7 @@ export default function ImportWizard() {
     step === 0
       ? totalFiles > 0 && albums.length > 0 && albums.every((g) => g.name.trim() || g.files.length === 0)
       : step === 1
-        ? !!releaseId
+        ? !!(releaseId || extractMbid(mbLink))
         : true;
 
   return (
@@ -709,7 +740,21 @@ export default function ImportWizard() {
             <div className="text-sm font-semibold text-zinc-300">
               MusicBrainz release <span className="text-zinc-500 font-normal">— {currentAlbumName}</span>
             </div>
-            <input className="input" placeholder="MusicBrainz release URL or ID (e.g. https://musicbrainz.org/release/…)" value={mbLink} onChange={(e) => setMbLink(e.target.value)} />
+            <div className="flex items-center gap-2">
+              <input
+                className={`input flex-1 ${releaseId ? "!border-emerald-700" : ""}`}
+                placeholder="MusicBrainz release URL or ID (e.g. https://musicbrainz.org/release/…)"
+                value={mbLink}
+                onChange={(e) => setMbLink(e.target.value)}
+              />
+              {releaseId ? (
+                <span className="chip bg-emerald-900/60 text-emerald-300 border border-emerald-800 shrink-0">
+                  <Check className="h-3 w-3" /> recognized
+                </span>
+              ) : mbLink.trim() ? (
+                <span className="chip bg-amber-900/50 text-amber-300 border border-amber-900 shrink-0">no MBID found</span>
+              ) : null}
+            </div>
             <div className="text-xs text-zinc-600">or search:</div>
             <div className="flex gap-2">
               <input className="input" placeholder="Search release (title + artist)…" value={mbSearch} onChange={(e) => setMbSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
@@ -735,9 +780,24 @@ export default function ImportWizard() {
               </div>
             )}
             <div className="text-sm font-semibold text-zinc-300 pt-2">RateYourMusic album link (optional)</div>
-            <input className="input" placeholder="https://rateyourmusic.com/release/…" value={rymLink} onChange={(e) => setRymLink(e.target.value)} />
+            <div className="flex items-center gap-2">
+              <input
+                className={`input flex-1 ${rymValid === true ? "!border-emerald-700" : rymValid === false ? "!border-red-800" : ""}`}
+                placeholder="https://rateyourmusic.com/release/…"
+                value={rymLink}
+                onChange={(e) => setRymLink(e.target.value)}
+              />
+              {rymValid === true && (
+                <span className="chip bg-emerald-900/60 text-emerald-300 border border-emerald-800 shrink-0">
+                  <Check className="h-3 w-3" /> valid
+                </span>
+              )}
+              {rymValid === false && (
+                <span className="chip bg-red-900/50 text-red-300 border border-red-900 shrink-0">not a RYM URL</span>
+              )}
+            </div>
           </div>
-          <button className="btn-primary" onClick={() => pickRelease(releaseId)} disabled={!mbLink || busy}>
+          <button className="btn-primary" onClick={() => pickRelease(releaseId || mbLink)} disabled={!mbLink || busy}>
             <Wand2 className="h-4 w-4" /> Fetch release & auto-match
           </button>
         </div>

@@ -535,6 +535,31 @@ def re_safe_filename(name):
 # --------------------------------------------------------------------------- #
 # MusicBrainz / LRCLIB / RYM
 # --------------------------------------------------------------------------- #
+@app.get("/api/mb/release")
+def mb_release_query(mbid: str = Query(...)):
+    """Release lookup by ID or full URL (query param — URLs contain slashes
+    and cannot travel inside the path segment)."""
+    rid = intg._mbid(mbid)
+    if not rid:
+        raise HTTPException(400, "invalid MusicBrainz ID or URL")
+    try:
+        return intg.release_lookup(rid)
+    except Exception as e:
+        raise HTTPException(502, f"MusicBrainz lookup failed: {e}")
+
+
+@app.get("/api/mb/release-genres")
+def mb_release_genres_query(mbid: str = Query(...)):
+    rid = intg._mbid(mbid)
+    if not rid:
+        raise HTTPException(400, "invalid MusicBrainz ID or URL")
+    try:
+        release = intg.release_lookup(rid)
+        return intg.genre_cascade(release)
+    except Exception as e:
+        raise HTTPException(502, f"MusicBrainz genre lookup failed: {e}")
+
+
 @app.get("/api/mb/release/{mbid}")
 def mb_release(mbid: str):
     rid = intg._mbid(mbid)

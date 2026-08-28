@@ -262,13 +262,13 @@ def lrclib_get(artist, track, album=None, duration=None):
 # --------------------------------------------------------------------------- #
 # RateYourMusic (no public API — link helpers only)
 # --------------------------------------------------------------------------- #
-RYM_RE = re.compile(
-    r"^https?://(?:www\.)?rateyourmusic\.com/release/[\w%.-]+/[\w%.-]+(?:/[\w%.-]+)?/?$", re.I
-)
+# RYM slugs vary (artist/album, album/format, %-encoding, apostrophes…).
+# Keep it lenient: any rateyourmusic.com URL is a valid link to store.
+RYM_RE = re.compile(r"^https?://(?:www\.)?rateyourmusic\.com/.+$", re.I)
 
 
 def parse_rym_album_url(url):
-    """Validate a RYM album URL, returning the canonical URL or None."""
+    """Validate a RYM URL, returning the canonical URL or None."""
     url = (url or "").strip()
     if RYM_RE.match(url):
         return url
