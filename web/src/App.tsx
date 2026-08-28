@@ -28,9 +28,9 @@ export default function App() {
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
 
   useEffect(() => {
-    const ws = new WebSocket(
-      `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/progress`
-    );
+    const inTauri = !!(window as any).__TAURI_INTERNALS__;
+    const wsBase = inTauri ? "ws://127.0.0.1:8000" : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+    const ws = new WebSocket(`${wsBase}/ws/progress`);
     ws.onmessage = (e) => {
       try {
         setProgress(JSON.parse(e.data));

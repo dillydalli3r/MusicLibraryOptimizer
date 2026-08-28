@@ -1,4 +1,8 @@
-const API = "/api";
+// In the Tauri desktop shell the frontend is served from tauri://localhost,
+// so relative /api paths cannot reach the Python backend — use absolute.
+const IN_TAURI = !!(window as any).__TAURI_INTERNALS__;
+const BASE = IN_TAURI ? "http://127.0.0.1:8000" : "";
+const API = `${BASE}/api`;
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);

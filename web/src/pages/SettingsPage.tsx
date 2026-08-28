@@ -19,6 +19,20 @@ export default function SettingsPage() {
     }
   };
 
+  const pickNative = async () => {
+    if (!(window as any).__TAURI_INTERNALS__) {
+      toast("Native picker is only available in the desktop app");
+      return;
+    }
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const picked = await invoke<string | null>("pick_folder");
+      if (picked) setMusicFolder(picked);
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
   const save = async () => {
     try {
       await api.saveConfig({ ...config, music_folder: musicFolder, lyrics_format: lyricsFormat, worker_limit: workerLimit });
@@ -43,7 +57,7 @@ export default function SettingsPage() {
               <span className="text-xs text-zinc-500 uppercase">Music folder</span>
               <div className="flex gap-2 mt-1">
                 <input className="input" value={musicFolder} onChange={(e) => setMusicFolder(e.target.value)} placeholder="F:\Music" />
-                <button className="btn-ghost" onClick={async () => {}} title="Native picker (desktop only)">
+                <button className="btn-ghost" onClick={pickNative} title="Native folder picker (desktop)">
                   <FolderOpen className="h-4 w-4" />
                 </button>
               </div>
