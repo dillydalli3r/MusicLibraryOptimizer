@@ -32,6 +32,12 @@ export const api = {
   library: () => json<import("./types").Library>(`${API}/library`),
   album: (path: string) => json<import("./types").Album>(`${API}/album?path=${encodeURIComponent(path)}`),
   artist: (path: string) => json<import("./types").Artist>(`${API}/artist?path=${encodeURIComponent(path)}`),
+  removeAlbum: (path: string) =>
+    json<{ ok: boolean; trash: string }>(`${API}/album/remove`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }),
 
   streamUrl: (path: string) => `${API}/stream?path=${encodeURIComponent(path)}`,
   tags: (path: string) => json<any>(`${API}/tags?path=${encodeURIComponent(path)}`),

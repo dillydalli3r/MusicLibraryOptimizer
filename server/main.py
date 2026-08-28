@@ -136,6 +136,10 @@ class ImportCommit(BaseModel):
     rym_link: Optional[str] = None
 
 
+class AlbumRemove(BaseModel):
+    path: str
+
+
 # --------------------------------------------------------------------------- #
 # Health / config
 # --------------------------------------------------------------------------- #
@@ -747,6 +751,32 @@ def is_audio_file(name):
     return os.path.splitext(name)[1].lower() in {
         ".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".wav", ".aac",
     }
+
+
+@app.post("/api/album/remove")
+def album_remove(req: AlbumRemove):
+    """Remove an album from the library by moving it into
+    <music_folder>/.mlo_trash/ (recoverable, nothing is deleted)."""
+    import shutil
+    cfg = load_config()
+    folder = cfg.get("music_folder") or ""
+    if not folder or not os.path.isdir(folder):
+        raise HTTPException(400, "music_folder not set or not found")
+    p = os.path.normpath(req.path)
+    if not os.path.isdir(p):
+        raise HTTPException(404, "album not found")
+    if not os.path.abspath(p).lower().startswith(os.path.abspath(folder).lower()):
+        raise HTTPException(400, "album outside music folder")
+    trash = os.path.normpath(os.path.join(folder, ".mlo_trash"))
+    os.makedirs(trash, exist_ok=True)
+    name = os.path.basename(p) or "album"
+    dest = os.path.normpath(os.path.join(trash, name))
+    n = 2
+    while os.path.exists(dest):
+        dest = os.path.normpath(os.path.join(trash, f"{name} ({n})"))
+        n += 1
+    shutil.move(p, dest)
+    return {"ok": True, "trash": dest.replace("\\", "/")}
 
 
 @app.post("/api/import/upload")

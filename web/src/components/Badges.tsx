@@ -36,7 +36,7 @@ export function AuditBadge({ audit, size = "md" }: { audit: string | null; size?
   }
 }
 
-export function MediaChip({ media }: { media: string | null }) {
+export function MediaChip({ media }: { media: string | null | undefined }) {
   if (!media) return null;
   const cd = media.toUpperCase().includes("CD");
   return (

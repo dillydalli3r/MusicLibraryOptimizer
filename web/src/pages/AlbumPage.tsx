@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ExternalLink, Play, Wand2 } from "lucide-react";
+import { ExternalLink, Play, Wand2, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
 import { SortHeader, sortRows, toggleSort, type SortState } from "../lib/sort.tsx";
-import { useStore } from "../store";
+import { toast, useStore } from "../store";
 import { fmtDuration } from "./LibraryPage";
 
 export default function AlbumPage() {
@@ -32,6 +32,18 @@ export default function AlbumPage() {
   const runScripts = async (ids: number[]) => {
     await api.run(ids, [data.path]);
     qc.invalidateQueries({ queryKey: ["library"] });
+  };
+
+  const removeAlbum = async () => {
+    if (!window.confirm(`Remove "${data.meta?.ALBUM ?? data.path.split("/").pop()}" from the library?\nIt moves to .mlo_trash in your music folder (recoverable).`)) return;
+    try {
+      await api.removeAlbum(data.path);
+      toast("Album moved to trash");
+      qc.invalidateQueries({ queryKey: ["library"] });
+      navigate("/");
+    } catch (e) {
+      toast(String(e));
+    }
   };
 
   return (
@@ -83,6 +95,9 @@ export default function AlbumPage() {
           </button>
           <button className="btn-ghost" onClick={() => navigate(`/import?album=${encodeURIComponent(data.path)}`)}>
             <Wand2 className="h-4 w-4" /> Import & tag
+          </button>
+          <button className="btn-danger" onClick={removeAlbum}>
+            <Trash2 className="h-4 w-4" /> Remove
           </button>
         </div>
       </div>
