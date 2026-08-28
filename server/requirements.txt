@@ -1,0 +1,8 @@
+fastapi==0.141.1
+uvicorn==0.52.4
+websockets
+python-multipart
+aiofiles
+httpx
+mutagen
+Pillow
