@@ -2,14 +2,110 @@ import { useMemo, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  UploadCloud, ExternalLink, Check, ChevronLeft, ChevronRight, Search, Wand2, ListMusic,
+  UploadCloud, ExternalLink, Check, ChevronLeft, ChevronRight, Search, Wand2,
+  ListMusic, Plus, Trash2, Disc3, FolderOpen,
 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 import LyricsViewer, { parseLrc } from "../components/LyricsViewer";
 import type { MBRelease, MatchSuggestion } from "../types";
 
-const STEPS = ["Upload", "Links", "Match", "Genres", "Lyrics", "Advisory", "Finish"];
+const STEPS = ["Select & separate", "Links", "Match", "Genres", "Lyrics", "Advisory", "Finish"];
+
+// Everything the importer accepts: audio, all common image formats, and the
+// sidecars the optimizer understands (.lrc, .cue, .log, .accurip).
+const ALLOWED = /\.(flac|mp3|m4a|mp4|ogg|opus|wav|aac|wv|ape|alac|aiff|aif|dsf|dff|mka)$|\.(jpg|jpeg|png|webp|bmp|gif|tiff|tif|avif|heic|heif|jxl|svg)$|\.(lrc|cue|log|accurip)$/i;
+const AUDIO_RE = /\.(flac|mp3|m4a|mp4|ogg|opus|wav|aac|wv|ape|alac|aiff|aif|dsf|dff|mka)$/i;
+const DISC_RE = /^(cd|disc|disk)\s*\d+$/i;
+
+interface ImportFile {
+  file: File | null; // null = native pick (already on disk)
+  relPath: string;
+}
+
+interface AlbumGroup {
+  name: string;
+  root: string; // rel path of the album dir under the drop/native root ("" = root itself)
+  files: ImportFile[];
+}
+
+function dirOf(relPath: string): string {
+  const i = relPath.lastIndexOf("/");
+  return i === -1 ? "" : relPath.slice(0, i);
+}
+
+function baseName(p: string): string {
+  const parts = p.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? "";
+}
+
+/** Detect album boundaries inside an import set.
+ *  An album = any dir with immediate audio children (disc-like dirs such as
+ *  CD1/Disc 2 merge into their parent). Group names fall back to
+ *  "Parent - Album" when albums sit inside artist folders. */
+function detectAlbums(imports: ImportFile[], fallbackName: string): AlbumGroup[] {
+  const audio = imports.filter((f) => AUDIO_RE.test(f.relPath));
+  if (!audio.length) {
+    return [{ name: fallbackName || "New Album", root: "", files: [...imports] }];
+  }
+  const dirsWithAudio = new Set(audio.map((f) => dirOf(f.relPath)));
+
+  const isDiscDir = (d: string) => d !== "" && DISC_RE.test(baseName(d));
+  const roots = new Set<string>();
+  for (const d of dirsWithAudio) {
+    if (!d) {
+      roots.add("");
+      continue;
+    }
+    if (isDiscDir(d)) {
+      const parent = dirOf(d);
+      const siblings = [...dirsWithAudio].filter((x) => x && dirOf(x) === parent);
+      if (siblings.length && siblings.every((s) => isDiscDir(s))) {
+        roots.add(parent || "");
+      } else {
+        roots.add(d);
+      }
+    } else {
+      roots.add(d);
+    }
+  }
+  if (!roots.size) roots.add("");
+
+  const ordered = [...roots].sort((a, b) => {
+    const da = a ? a.split("/").length : 0;
+    const db = b ? b.split("/").length : 0;
+    return da - db || a.localeCompare(b);
+  });
+
+  // The wrapper folder the user dropped/picked (e.g. "Rips/"). Albums sitting
+  // directly inside it are named by their own folder only.
+  const firstSeg = imports[0]?.relPath.split("/")[0] ?? "";
+  const allShare = imports.every((f) => f.relPath.split("/")[0] === firstSeg);
+  const dropRoot = firstSeg && allShare ? firstSeg : "";
+
+  const nameFor = (d: string): string => {
+    if (!d) return fallbackName || "New Album";
+    const parent = dirOf(d);
+    const base = baseName(d);
+    if (!parent || parent === dropRoot) return base;
+    return `${baseName(parent)} - ${base}`;
+  };
+
+  const groups = new Map<string, ImportFile[]>();
+  const rootsDeep = [...roots].sort((a, b) => b.split("/").length - a.split("/").length);
+  for (const f of imports) {
+    const fd = dirOf(f.relPath);
+    const root = rootsDeep.find((r) => r === "" || fd === r || fd.startsWith(`${r}/`)) ?? ordered[0];
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push(f);
+  }
+
+  return ordered.map((r) => ({
+    name: nameFor(r),
+    root: r,
+    files: groups.get(r) ?? [],
+  }));
+}
 
 export default function ImportWizard() {
   const [params, setParams] = useSearchParams();
@@ -19,7 +115,11 @@ export default function ImportWizard() {
 
   const [albumPath, setAlbumPath] = useState<string | null>(initialAlbum);
   const [albumName, setAlbumName] = useState("");
-  const [files, setFiles] = useState<{ file: File; relPath: string }[]>([]);
+  const [source, setSource] = useState<"web" | "native">("web");
+  const [nativeRoot, setNativeRoot] = useState<string | null>(null);
+  const [albums, setAlbums] = useState<AlbumGroup[]>([]);
+  const [uploaded, setUploaded] = useState<{ name: string; path: string }[]>([]);
+  const [albumIndex, setAlbumIndex] = useState(0);
   const [uploading, setUploading] = useState(false);
 
   const [mbLink, setMbLink] = useState("");
@@ -52,49 +152,26 @@ export default function ImportWizard() {
     return base.replace(/^\d+\s*[-._]\s*/, "").replace(/\.[^.]+$/, "").trim();
   };
 
-  // ---------------- Step 0: upload ----------------
-  interface ImportFile {
-    file: File;
-    relPath: string;
-  }
+  const currentAlbumName = uploaded[albumIndex]?.name ?? albumPath?.split("/").pop() ?? "";
 
-  const ALLOWED = /\.(flac|mp3|m4a|mp4|ogg|opus|wav|aac|cue|log|jpg|jpeg|png|webp|jxl|bmp)$/i;
+  // ---------------- Step 0: selection + separation ----------------
+  const adoptImports = (list: ImportFile[], fallback: string) => {
+    if (list.length && fallback && !albumName) setAlbumName(fallback);
+    setAlbums(detectAlbums(list, fallback || albumName || "New Album"));
+  };
 
-  const handleFiles = (list: FileList | File[], baseDir = "") => {
+  const handleFiles = (list: FileList | File[]) => {
     const arr: ImportFile[] = [];
     for (const f of Array.from(list)) {
       const rel = (f as any).webkitRelativePath
         ? (f as any).webkitRelativePath.replace(/\\/g, "/")
         : f.name.replace(/\\/g, "/");
-      const full = baseDir ? `${baseDir}/${rel}` : rel;
-      if (ALLOWED.test(f.name)) arr.push({ file: f, relPath: full });
+      if (ALLOWED.test(rel)) arr.push({ file: f, relPath: rel });
     }
-    setFiles(arr);
+    adoptImports(arr, arr[0]?.relPath.split("/")[0] ?? "");
   };
 
-  /** Recursively walk dropped entries (webkitGetAsEntry) to support
-   *  dropping a whole album folder, preserving its internal structure. */
-  const handleDrop = async (items: DataTransferItemList) => {
-    const out: { file: File; relPath: string }[] = [];
-    const roots: any[] = [];
-    for (const item of Array.from(items)) {
-      const entry = item.webkitGetAsEntry?.();
-      if (entry) roots.push(entry);
-    }
-    if (roots.some((r) => r.isDirectory)) {
-      for (const root of roots) {
-        await walkEntry(root, root.isDirectory ? root.name : "", out);
-      }
-      const folderName = roots.find((r) => r.isDirectory)?.name;
-      if (folderName && !albumName) setAlbumName(folderName);
-    } else {
-      handleFiles(roots.map((r) => r.file ? r : null).filter(Boolean) as File[], "");
-      return;
-    }
-    setFiles(out.filter((o) => ALLOWED.test(o.file.name)));
-  };
-
-  const walkEntry = async (entry: any, prefix: string, out: { file: File; relPath: string }[]) => {
+  const walkEntry = async (entry: any, prefix: string, out: ImportFile[]) => {
     if (entry.isFile) {
       const f = await new Promise<File>((resolve, reject) => entry.file(resolve, reject));
       out.push({ file: f, relPath: prefix ? `${prefix}/${f.name}` : f.name });
@@ -114,54 +191,107 @@ export default function ImportWizard() {
     }
   };
 
-  const pickFolder = async () => {
-    try {
-      const inTauri = !!(window as any).__TAURI_INTERNALS__;
-      if (inTauri) {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const picked = await invoke<string | null>("pick_folder");
-        if (picked) {
-          const dirName = picked.split(/[\\/]/).pop() ?? "Album";
-          setAlbumName(dirName);
-          setAlbumPath(picked);
-          setStep(1);
-        }
-        return;
+  const handleDrop = async (items: DataTransferItemList) => {
+    const out: ImportFile[] = [];
+    const roots: any[] = [];
+    for (const item of Array.from(items)) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) roots.push(entry);
+    }
+    if (roots.some((r) => r.isDirectory)) {
+      for (const root of roots) {
+        await walkEntry(root, root.isDirectory ? root.name : "", out);
       }
-      const picker = (window as any).showDirectoryPicker;
-      if (!picker) {
-        toast("Folder picker unsupported — use the file input or drag & drop");
-        return;
-      }
-      const dir = await picker({ mode: "read" });
-      const out: ImportFile[] = [];
-      const walk = async (entry: any, prefix: string) => {
-        for await (const e of entry.values()) {
-          if (e.kind === "file") {
-            const f = await e.getFile();
-            out.push({ file: f, relPath: prefix ? `${prefix}/${f.name}` : f.name });
-          } else if (e.kind === "directory") {
-            await walk(e, prefix ? `${prefix}/${e.name}` : e.name);
-          }
-        }
-      };
-      await walk(dir, "");
-      setAlbumName(dir.name);
-      setFiles(out.filter((o) => ALLOWED.test(o.file.name)));
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") toast(String(e));
+      adoptImports(out.filter((o) => ALLOWED.test(o.relPath)), roots.find((r) => r.isDirectory)?.name ?? "");
+    } else {
+      const files = roots.filter((r) => r.isFile).map((r) => r.file) as File[];
+      handleFiles(files);
     }
   };
 
-  const upload = async () => {
-    if (!files.length) return;
+  const pickFolderBrowser = () => {
+    document.getElementById("import-folder")?.click();
+  };
+
+  const pickFolderNative = async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const picked = await invoke<string | null>("pick_folder");
+      if (!picked) return;
+      const scan = await api.importScan(picked);
+      setSource("native");
+      setNativeRoot(picked);
+      const list: ImportFile[] = scan.files
+        .filter((f) => ALLOWED.test(f.relPath))
+        .map((f) => ({ file: null, relPath: f.relPath }));
+      adoptImports(list, picked.split(/[\\/]/).pop() ?? "");
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
+  const renameGroup = (i: number, name: string) =>
+    setAlbums((gs) => gs.map((g, j) => (j === i ? { ...g, name } : g)));
+
+  const moveFile = (from: number, to: number, f: ImportFile) => {
+    if (from === to) return;
+    setAlbums((gs) =>
+      gs.map((g, i) => {
+        if (i === from) return { ...g, files: g.files.filter((x) => x !== f) };
+        if (i === to) return { ...g, files: [...g.files, f] };
+        return g;
+      })
+    );
+  };
+
+  const addAlbum = () =>
+    setAlbums((gs) => [...gs, { name: `Album ${gs.length + 1}`, root: "", files: [] }]);
+
+  const removeAlbum = (i: number) => {
+    setAlbums((gs) => {
+      if (gs.length <= 1) return gs;
+      const removed = gs[i];
+      const rest = gs.filter((_, j) => j !== i);
+      if (removed.files.length) {
+        rest[0] = { ...rest[0], files: [...removed.files, ...rest[0].files] };
+      }
+      return rest;
+    });
+  };
+
+  const doImport = async () => {
+    const groups = albums.filter((g) => g.name.trim() && g.files.length);
+    if (!groups.length) {
+      toast("Nothing to import — add files first");
+      return;
+    }
     setUploading(true);
     try {
-      const res = await api.importUpload(albumName || "New Album", files);
-      setAlbumPath(res.album_path);
+      const results: { name: string; path: string }[] = [];
+      for (const g of groups) {
+        const name = g.name.trim();
+        if (source === "web") {
+          const filesToSend = g.files.filter((f) => f.file) as { file: File; relPath: string }[];
+          if (!filesToSend.length) continue;
+          const res = await api.importUpload(name, filesToSend);
+          results.push({ name, path: res.album_path });
+        } else {
+          const src = nativeRoot ? (g.root ? `${nativeRoot}/${g.root}` : nativeRoot) : "";
+          if (!src) continue;
+          const res = await api.importIngest(src, name);
+          results.push({ name, path: res.path });
+        }
+      }
+      if (!results.length) {
+        toast("Nothing to import");
+        return;
+      }
+      setUploaded(results);
+      setAlbumIndex(0);
+      setAlbumPath(results[0].path);
       setStep(1);
       qc.invalidateQueries({ queryKey: ["library"] });
-      toast(`Uploaded ${res.saved.length} file(s)`);
+      toast(`Imported ${results.length} album${results.length > 1 ? "s" : ""}`);
     } catch (e) {
       toast(String(e));
     } finally {
@@ -217,7 +347,7 @@ export default function ImportWizard() {
     }
     setBusy(true);
     try {
-      await api.importCommit(albumPath.split("/").pop()!, mbLink || `https://musicbrainz.org/release/${releaseId}`, rymLink || undefined);
+      await api.importCommit(currentAlbumName, mbLink || `https://musicbrainz.org/release/${releaseId}`, rymLink || undefined);
       toast("Links saved to album");
       setStep(2);
     } catch (e) {
@@ -281,7 +411,7 @@ export default function ImportWizard() {
     const t = trackList.find((x) => x.path === p);
     return t?.tags.TITLE ?? defaultTrackName(p);
   };
-  const trackAlbum = trackList[0]?.tags.ALBUM ?? albumName;
+  const trackAlbum = trackList[0]?.tags.ALBUM ?? currentAlbumName;
 
   const importLyricsForAll = async () => {
     setBusy(true);
@@ -350,17 +480,42 @@ export default function ImportWizard() {
   const finish = () => {
     qc.invalidateQueries({ queryKey: ["library"] });
     setParams({});
-    toast("Import complete — album graded");
+    toast(uploaded.length > 1 ? `Imported ${uploaded.length} albums — enrich each from its album page` : "Import complete — album graded");
   };
 
-  const canNext = step === 0 ? files.length > 0 : step === 1 ? !!releaseId : true;
+  const switchAlbum = (i: number) => {
+    setAlbumIndex(i);
+    setAlbumPath(uploaded[i].path);
+    setRelease(null);
+    setReleaseId("");
+    setSuggestions([]);
+    setGenres({});
+    setMbLink("");
+    setRymLink("");
+    setSearchHits([]);
+  };
+
+  const totalFiles = albums.reduce((n, g) => n + g.files.length, 0);
+  const canNext =
+    step === 0
+      ? totalFiles > 0 && albums.length > 0 && albums.every((g) => g.name.trim() || g.files.length === 0)
+      : step === 1
+        ? !!releaseId
+        : true;
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-5">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <UploadCloud className="h-6 w-6 text-accent" /> Import album
+          <UploadCloud className="h-6 w-6 text-accent" /> Import
         </h1>
+        {uploaded.length > 1 && (
+          <select className="input !w-auto text-sm" value={albumIndex} onChange={(e) => switchAlbum(Number(e.target.value))}>
+            {uploaded.map((a, i) => (
+              <option key={a.path} value={i}>{a.name}</option>
+            ))}
+          </select>
+        )}
         {albumPath && (
           <span className="text-xs text-zinc-500 truncate">
             <Link to={`/album/${encodeURIComponent(albumPath)}`} className="hover:text-accent-soft">
@@ -392,11 +547,11 @@ export default function ImportWizard() {
         ))}
       </div>
 
-      {/* ---------------- Step 0: upload ---------------- */}
+      {/* ---------------- Step 0: select & separate ---------------- */}
       {step === 0 && (
         <div className="space-y-4">
           <div
-            className="rounded-xl border-2 border-dashed border-border bg-card p-12 text-center hover:border-accent/60 transition-colors cursor-pointer"
+            className="rounded-xl border-2 border-dashed border-border bg-card p-10 text-center hover:border-accent/60 transition-colors cursor-pointer"
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
@@ -405,30 +560,88 @@ export default function ImportWizard() {
             onClick={() => document.getElementById("import-files")?.click()}
           >
             <UploadCloud className="h-10 w-10 text-zinc-600 mx-auto mb-3" />
-            <div className="font-medium text-zinc-300">Drop a whole album folder (or files) here</div>
+            <div className="font-medium text-zinc-300">Drop albums or files here</div>
             <div className="text-xs text-zinc-600 mt-1">
-              drop a folder like <b className="text-zinc-500">2024 - Album Name/</b> — cover, .cue, .log and
-              multi-disc subfolders are kept · or click to browse
+              drop one or more folders (even from different artists) — they are separated into albums below ·
+              multi-disc folders (<b className="text-zinc-500">CD1/</b>, <b className="text-zinc-500">Disc 2/</b>) merge
+              into one album
+            </div>
+            <div className="text-[11px] text-zinc-600 mt-1">
+              audio (flac, mp3, m4a, ogg, opus, wav, …) · images (jpg, png, webp, tiff, avif, heic, …) · .lrc .cue .log .accurip
             </div>
             <input id="import-files" type="file" multiple className="hidden" onChange={(e) => e.target.files && handleFiles(e.target.files)} />
+            <input id="import-folder" type="file" multiple className="hidden" {...({ webkitdirectory: "", directory: "" } as any)} onChange={(e) => e.target.files && handleFiles(e.target.files)} />
           </div>
-          <div className="flex items-center gap-3">
-            <button className="btn-ghost" onClick={pickFolder}>
-              <ListMusic className="h-4 w-4" /> Pick folder…
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button className="btn-ghost" onClick={pickFolderBrowser}>
+              <FolderOpen className="h-4 w-4" /> Pick folder…
             </button>
-            <input className="input max-w-xs" placeholder="Album folder name (e.g. 2020 - First Album)" value={albumName} onChange={(e) => setAlbumName(e.target.value)} />
+            <button className="btn-ghost" onClick={pickFolderNative}>
+              <ListMusic className="h-4 w-4" /> Pick folder (native)…
+            </button>
+            <input
+              className="input max-w-xs"
+              placeholder="Default album name"
+              value={albumName}
+              onChange={(e) => setAlbumName(e.target.value)}
+            />
+            {source === "native" && (
+              <span className="text-xs text-zinc-500">importing from disk — files move into your library</span>
+            )}
           </div>
-          {files.length > 0 && (
-            <div className="bg-card rounded-lg border border-border p-3 text-sm">
-              <div className="font-medium mb-2">{files.length} file(s)</div>
-              <div className="max-h-40 overflow-auto text-xs text-zinc-500 grid grid-cols-2 gap-1">
-                {files.slice(0, 60).map((f, i) => (
-                  <span key={i} className="truncate">{f.relPath}</span>
-                ))}
-                {files.length > 60 && <span>…{files.length - 60} more</span>}
+
+          {totalFiles > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold">Separate into albums</span>
+                <span className="text-xs text-zinc-500">
+                  {totalFiles} file(s) → {albums.length} album(s) — rename, or move files between albums with the dropdown
+                </span>
+                <button className="btn-ghost !py-1 text-xs ml-auto" onClick={addAlbum}>
+                  <Plus className="h-3.5 w-3.5" /> Add album
+                </button>
               </div>
-              <button className="btn-primary mt-3" onClick={upload} disabled={uploading}>
-                {uploading ? "Uploading…" : `Upload album → ${albumName || "New Album"}`}
+              {albums.map((g, gi) => (
+                <div key={gi} className="bg-card rounded-lg border border-border p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Disc3 className="h-4 w-4 text-zinc-500 shrink-0" />
+                    <input
+                      className="input !w-auto min-w-[200px] font-medium"
+                      value={g.name}
+                      placeholder="Album name"
+                      onChange={(e) => renameGroup(gi, e.target.value)}
+                    />
+                    <span className="text-xs text-zinc-500">{g.files.length} file(s)</span>
+                    <button className="btn-danger !px-2 !py-1 ml-auto" onClick={() => removeAlbum(gi)} disabled={albums.length <= 1} title="Remove (files move to first album)">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="max-h-52 overflow-auto space-y-1">
+                    {g.files.length === 0 && <div className="text-xs text-zinc-600 px-2 py-1">Empty — move files here from other albums.</div>}
+                    {g.files.map((f) => (
+                      <div key={f.relPath} className="flex items-center gap-2 text-xs px-2">
+                        <span className="flex-1 truncate text-zinc-400" title={f.relPath}>{f.relPath}</span>
+                        <select
+                          className="input !w-auto !py-0.5 text-[11px]"
+                          value={gi}
+                          onChange={(e) => moveFile(gi, Number(e.target.value), f)}
+                        >
+                          {albums.map((a, i) => (
+                            <option key={i} value={i}>{a.name.trim() || `Album ${i + 1}`}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <button
+                className="btn-primary"
+                onClick={doImport}
+                disabled={uploading || !albums.some((g) => g.name.trim() && g.files.length)}
+              >
+                {uploading ? "Importing…" : `Import ${albums.filter((g) => g.files.length).length} album(s) into library`}
               </button>
             </div>
           )}
@@ -439,7 +652,9 @@ export default function ImportWizard() {
       {step === 1 && (
         <div className="space-y-4">
           <div className="bg-card rounded-lg border border-border p-4 space-y-3">
-            <div className="text-sm font-semibold text-zinc-300">MusicBrainz release</div>
+            <div className="text-sm font-semibold text-zinc-300">
+              MusicBrainz release <span className="text-zinc-500 font-normal">— {currentAlbumName}</span>
+            </div>
             <input className="input" placeholder="MusicBrainz release URL or ID (e.g. https://musicbrainz.org/release/…)" value={mbLink} onChange={(e) => setMbLink(e.target.value)} />
             <div className="text-xs text-zinc-600">or search:</div>
             <div className="flex gap-2">
@@ -616,8 +831,9 @@ export default function ImportWizard() {
           <Check className="h-10 w-10 text-emerald-400 mx-auto mb-3" />
           <div className="font-semibold text-lg">Import complete</div>
           <div className="text-sm text-zinc-500 mt-1">
-            Links, MBIDs, genres, lyrics and advisory ratings are written to the files.
-            Run grading on the album to verify a perfect score.
+            {uploaded.length > 1
+              ? `${uploaded.length} albums were added to your library. Use the dropdown above to finish linking, matching and tagging each one.`
+              : "Links, MBIDs, genres, lyrics and advisory ratings are written to the files. Run grading on the album to verify a perfect score."}
           </div>
           <div className="flex justify-center gap-2 mt-5">
             {albumPath && (

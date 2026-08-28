@@ -150,6 +150,16 @@ export const api = {
       { method: "POST", body: fd }
     );
   },
+  importScan: (path: string) =>
+    json<{ root: string; files: { relPath: string; size: number }[] }>(
+      `${API}/import/scan?path=${encodeURIComponent(path)}`,
+      { method: "POST" }
+    ),
+  importIngest: (source: string, target: string) =>
+    json<{ ok: boolean; path: string }>(
+      `${API}/import/ingest?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`,
+      { method: "POST" }
+    ),
   importCommit: (targetDir: string, mbLink?: string, rymLink?: string) =>
     json<{ ok: boolean; changed: number }>(`${API}/import/commit`, {
       method: "POST",

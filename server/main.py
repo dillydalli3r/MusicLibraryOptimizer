@@ -761,6 +761,57 @@ async def import_upload(
     return {"ok": True, "saved": saved, "album_path": target.replace("\\", "/")}
 
 
+@app.post("/api/import/scan")
+def import_scan(path: str = Query(...)):
+    """Recursively list a folder's files with relative paths (native picks)."""
+    p = os.path.normpath(path)
+    if not os.path.isdir(p):
+        raise HTTPException(404, "folder not found")
+    out = []
+    for root, dirs, files in os.walk(p):
+        for f in files:
+            full = os.path.join(root, f)
+            rel = os.path.relpath(full, p).replace("\\", "/")
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                size = 0
+            out.append({"relPath": rel, "size": size})
+    out.sort(key=lambda x: x["relPath"].lower())
+    return {"root": p.replace("\\", "/"), "files": out}
+
+
+@app.post("/api/import/ingest")
+def import_ingest(source: str = Query(...), target: str = Query(...)):
+    """Move (or copy across devices) an album folder into the library."""
+    import shutil
+    cfg = load_config()
+    folder = cfg.get("music_folder") or ""
+    if not folder or not os.path.isdir(folder):
+        raise HTTPException(400, "music_folder not set or not found")
+    src = os.path.normpath(source)
+    if not os.path.isdir(src):
+        raise HTTPException(404, "source folder not found")
+    name = re_safe_filename(os.path.basename(target or os.path.basename(src)))
+    if not name:
+        raise HTTPException(400, "invalid target name")
+    dest = os.path.normpath(os.path.join(folder, name))
+    if not os.path.abspath(dest).lower().startswith(os.path.abspath(folder).lower()):
+        raise HTTPException(400, "target outside music folder")
+    if os.path.normcase(os.path.abspath(dest)) == os.path.normcase(os.path.abspath(src)):
+        return {"ok": True, "path": dest.replace("\\", "/")}
+    n = 2
+    base = dest
+    while os.path.exists(dest):
+        dest = os.path.normpath(os.path.join(folder, f"{name} ({n})"))
+        n += 1
+    try:
+        shutil.move(src, dest)
+    except OSError:
+        shutil.copytree(src, dest)
+    return {"ok": True, "path": dest.replace("\\", "/")}
+
+
 @app.post("/api/import/commit")
 def import_commit(req: ImportCommit):
     """Store MB/RYM links on every track of a freshly imported album.
