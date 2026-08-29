@@ -4,7 +4,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   UploadCloud, ExternalLink, Check, ChevronLeft, ChevronRight, ChevronDown, Search, Wand2,
-  ListMusic, Plus, Trash2, Disc3, FolderOpen,
+  ListMusic, Plus, Trash2, Disc3, FolderOpen, X,
 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
@@ -179,6 +179,7 @@ export default function ImportWizard() {
   const [suggestions, setSuggestions] = useState<MatchSuggestion[]>([]);
   const [genres, setGenres] = useState<Record<string, string>>({});
   const [discGenres, setDiscGenres] = useState<Record<number, string>>({});
+  const [genreAddValues, setGenreAddValues] = useState<Record<string, string>>({});
   const [genreLimit, setGenreLimit] = useState<number | null>(null); // null = all
   const [genreSource, setGenreSource] = useState<string | null>(null);
   const [collapsedDiscs, setCollapsedDiscs] = useState<Set<number | null>>(new Set());
@@ -636,6 +637,22 @@ export default function ImportWizard() {
   };
 
   // ---------------- Step 3: genres ----------------
+  const genreList = (path: string): string[] =>
+    (genres[path] ?? "").split(";").map((g) => g.trim()).filter(Boolean);
+
+  const setGenreList = (path: string, list: string[]) =>
+    setGenres((g) => ({ ...g, [path]: list.join("; ") }));
+
+  const addGenre = (path: string, value: string) => {
+    const v = value.trim();
+    if (!v) return;
+    const list = genreList(path);
+    if (!list.includes(v)) setGenreList(path, [...list, v]);
+  };
+
+  const removeGenre = (path: string, genre: string) =>
+    setGenreList(path, genreList(path).filter((g) => g !== genre));
+
   const applyGenresToDisc = (disc: number, value: string) => {
     const paths = trackList.filter((t) => discOfTrack(t) === disc).map((t) => t.path);
     if (!paths.length) return;
@@ -1152,12 +1169,32 @@ export default function ImportWizard() {
                 <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
                   <span className="text-xs text-zinc-600 w-8">{t.tags.TRACKNUMBER ?? "—"}</span>
                   <span className="flex-1 truncate text-sm">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
-                  <input
-                    className="input max-w-sm"
-                    placeholder="Genre (semicolon separated)"
-                    value={genres[t.path] ?? ""}
-                    onChange={(e) => setGenres((g2) => ({ ...g2, [t.path]: e.target.value }))}
-                  />
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    {genreList(t.path).map((gen) => (
+                      <span key={gen} className="chip bg-violet-900/40 text-violet-200 border border-violet-800">
+                        {gen}
+                        <button
+                          className="hover:text-white transition-colors"
+                          onClick={() => removeGenre(t.path, gen)}
+                          title={`Remove ${gen}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                    <input
+                      className="input !w-36 !py-1 text-xs"
+                      placeholder={genreList(t.path).length ? "+ add genre…" : "Add genre…"}
+                      value={genreAddValues[t.path] ?? ""}
+                      onChange={(e) => setGenreAddValues((v) => ({ ...v, [t.path]: e.target.value }))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          addGenre(t.path, genreAddValues[t.path] ?? "");
+                          setGenreAddValues((v) => ({ ...v, [t.path]: "" }));
+                        }
+                      }}
+                    />
+                  </div>
                 </div>
               ))}
             </DiscSection>
