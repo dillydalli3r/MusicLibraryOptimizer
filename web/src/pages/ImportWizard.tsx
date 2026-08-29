@@ -157,6 +157,7 @@ export default function ImportWizard() {
   const [instrumental, setInstrumental] = useState<Record<string, string>>({});
   const [lyricsDrafts, setLyricsDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [fetchStatus, setFetchStatus] = useState<string | null>(null);
   const qc = useQueryClient();
 
   const { data: lib } = useQuery({ queryKey: ["library"], queryFn: api.library });
@@ -481,13 +482,16 @@ export default function ImportWizard() {
   const pickRelease = async (id: string) => {
     if (!id) return;
     setBusy(true);
+    setFetchStatus("Fetching release from MusicBrainz…");
     try {
       // MusicBrainz rate-limits and blips — retry the remote calls.
       const rel = await withRetry(() => api.mbRelease(id));
       setRelease(rel);
       setReleaseId(id);
+      setFetchStatus("Matching local tracks to the release…");
       const matched = await api.mbMatch(albumPath!, id);
       setSuggestions(matched.suggestions);
+      setFetchStatus("Importing genres from MusicBrainz…");
       let cascade: GenreCascade;
       try {
         cascade = await withRetry(() => api.mbGenres(id));
@@ -505,11 +509,16 @@ export default function ImportWizard() {
         if (src) setGenreSource(src);
       }
       setGenres(g);
-      toast(`Matched ${matched.suggestions.filter((s) => s.matched).length}/${matched.suggestions.length} tracks`);
+      if (!matched.suggestions.length) {
+        toast("No audio tracks found in this folder — check the album folder contains the music files");
+      } else {
+        toast(`Matched ${matched.suggestions.filter((s) => s.matched).length}/${matched.suggestions.length} tracks`);
+      }
     } catch (e) {
       toast(String(e));
     } finally {
       setBusy(false);
+      setFetchStatus(null);
     }
   };
 
@@ -937,6 +946,11 @@ export default function ImportWizard() {
             <button className="btn-ghost" onClick={detectFromTags} disabled={busy || !albumPath}>
               Detect from tags
             </button>
+            {busy && fetchStatus && (
+              <span className="text-xs text-violet-300 animate-pulse flex items-center gap-1.5">
+                {fetchStatus}
+              </span>
+            )}
           </div>
         </div>
       )}

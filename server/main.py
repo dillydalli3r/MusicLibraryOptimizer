@@ -663,35 +663,38 @@ def mb_match(req: MatchRequest):
 
     from mlo.audio import AudioFile
     local_tracks = []
-    for f in sorted(os.listdir(album_dir)):
-        if not is_audio_file(f):
-            continue
-        path = os.path.join(album_dir, f)
-        af = AudioFile(path)
-        tags = {}
-        if af.audio is not None:
-            for t in ("TRACKNUMBER", "DISCNUMBER", "TITLE"):
-                tags[t] = af.get_tag(t)
-        tn = tags.get("TRACKNUMBER")
-        dn = tags.get("DISCNUMBER")
-        try:
-            tn = int(str(tn).split("/")[0])
-        except (TypeError, ValueError):
-            tn = None
-        try:
-            dn = int(str(dn).split("/")[0])
-        except (TypeError, ValueError):
-            dn = None
-        info = af.audio.info if af.audio is not None else None
-        duration = float(info.length) if info is not None and hasattr(info, "length") else None
-        local_tracks.append({
-            "path": path.replace("\\", "/"),
-            "file": f,
-            "tracknumber": tn,
-            "discnumber": dn,
-            "title": tags.get("TITLE"),
-            "duration": duration,
-        })
+    # Recursive: libraries often nest the album folder inside a folder of the
+    # same name (or multi-album containers), so walk subdirectories.
+    for root, dirs, files in os.walk(album_dir):
+        for f in sorted(files):
+            if not is_audio_file(f):
+                continue
+            path = os.path.join(root, f)
+            af = AudioFile(path)
+            tags = {}
+            if af.audio is not None:
+                for t in ("TRACKNUMBER", "DISCNUMBER", "TITLE"):
+                    tags[t] = af.get_tag(t)
+            tn = tags.get("TRACKNUMBER")
+            dn = tags.get("DISCNUMBER")
+            try:
+                tn = int(str(tn).split("/")[0])
+            except (TypeError, ValueError):
+                tn = None
+            try:
+                dn = int(str(dn).split("/")[0])
+            except (TypeError, ValueError):
+                dn = None
+            info = af.audio.info if af.audio is not None else None
+            duration = float(info.length) if info is not None and hasattr(info, "length") else None
+            local_tracks.append({
+                "path": path.replace("\\", "/"),
+                "file": os.path.relpath(path, album_dir).replace("\\", "/"),
+                "tracknumber": tn,
+                "discnumber": dn,
+                "title": tags.get("TITLE"),
+                "duration": duration,
+            })
     return {"release": release, "suggestions": intg.match_tracks(local_tracks, release)}
 
 
