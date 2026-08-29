@@ -140,10 +140,12 @@ def artist_genres(artist_mbid):
         return []
 
 
-def genre_cascade(release):
+def genre_cascade(release, limit=None):
     """Cascading genre import: track -> release -> release-group -> artist.
 
-    Returns per-track genres plus the fallback chain used for each track.
+    Genres are merged across levels (deduped, in popularity order) and capped
+    at `limit` per track. limit=None imports everything. Returns per-track
+    genres plus the fallback chain used for each track.
     """
     rg = release.get("release_group_id")
     rg_genres = release_group_genres(rg) if rg else []
@@ -156,16 +158,27 @@ def genre_cascade(release):
 
     per_track = []
     for trk in release.get("media", []):
-        chosen = trk.get("genres") or release_genres or rg_genres or artist_genres_all
+        ordered = []
+        sources = []
+        for level, lst in (
+            ("track", trk.get("genres") or []),
+            ("release", release_genres),
+            ("release-group", rg_genres),
+            ("artist", artist_genres_all),
+        ):
+            if lst and not sources:
+                sources.append(level)
+            for g in lst:
+                if g not in ordered:
+                    ordered.append(g)
+        merged = ordered[:limit] if limit else ordered
         per_track.append({
             "position": trk["position"],
             "disc": trk["disc"],
             "title": trk["title"],
-            "genres": chosen,
-            "source": ("track" if trk.get("genres") else
-                       "release" if release_genres else
-                       "release-group" if rg_genres else
-                       "artist" if artist_genres_all else None),
+            "genres": merged,
+            "source": sources[0] if sources else None,
+            "levels_used": sources,
         })
     return {
         "per_track": per_track,

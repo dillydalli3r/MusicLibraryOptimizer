@@ -604,13 +604,13 @@ def mb_release_query(mbid: str = Query(...)):
 
 
 @app.get("/api/mb/release-genres")
-def mb_release_genres_query(mbid: str = Query(...)):
+def mb_release_genres_query(mbid: str = Query(...), limit: Optional[int] = Query(None)):
     rid = intg._mbid(mbid)
     if not rid:
         raise HTTPException(400, "invalid MusicBrainz ID or URL")
     try:
         release = intg.release_lookup(rid)
-        return intg.genre_cascade(release)
+        return intg.genre_cascade(release, limit=max(0, int(limit)) if limit else None)
     except Exception as e:
         raise HTTPException(502, f"MusicBrainz genre lookup failed: {e}")
 

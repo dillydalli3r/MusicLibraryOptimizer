@@ -127,7 +127,10 @@ export const api = {
 
   // integrations
   mbRelease: (id: string) => json<import("./types").MBRelease>(`${API}/mb/release?mbid=${encodeURIComponent(id)}`),
-  mbGenres: (id: string) => json<import("./types").GenreCascade>(`${API}/mb/release-genres?mbid=${encodeURIComponent(id)}`),
+  mbGenres: (id: string, limit?: number) =>
+    json<import("./types").GenreCascade>(
+      `${API}/mb/release-genres?mbid=${encodeURIComponent(id)}${limit ? `&limit=${limit}` : ""}`
+    ),
   mbSearchReleases: (q: string) => json<any[]>(`${API}/mb/search/releases?q=${encodeURIComponent(q)}`),
   mbSearchArtists: (q: string) => json<any[]>(`${API}/mb/search/artists?q=${encodeURIComponent(q)}`),
   mbMatch: (albumPath: string, releaseId: string) =>

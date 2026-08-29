@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  UploadCloud, ExternalLink, Check, ChevronLeft, ChevronRight, Search, Wand2,
+  UploadCloud, ExternalLink, Check, ChevronLeft, ChevronRight, ChevronDown, Search, Wand2,
   ListMusic, Plus, Trash2, Disc3, FolderOpen,
 } from "lucide-react";
 import { api } from "../api";
@@ -178,7 +179,9 @@ export default function ImportWizard() {
   const [suggestions, setSuggestions] = useState<MatchSuggestion[]>([]);
   const [genres, setGenres] = useState<Record<string, string>>({});
   const [discGenres, setDiscGenres] = useState<Record<number, string>>({});
+  const [genreLimit, setGenreLimit] = useState<number | null>(null); // null = all
   const [genreSource, setGenreSource] = useState<string | null>(null);
+  const [collapsedDiscs, setCollapsedDiscs] = useState<Set<number | null>>(new Set());
   const [advisory, setAdvisory] = useState<Record<string, string>>({});
   const [instrumental, setInstrumental] = useState<Record<string, string>>({});
   const [lyricsDrafts, setLyricsDrafts] = useState<Record<string, string>>({});
@@ -331,6 +334,14 @@ export default function ImportWizard() {
     const t = trackList.find((x) => x.path === s.local);
     return parseDisc(t?.tags?.DISCNUMBER);
   };
+
+  const toggleDisc = (d: number | null) =>
+    setCollapsedDiscs((s) => {
+      const next = new Set(s);
+      if (next.has(d)) next.delete(d);
+      else next.add(d);
+      return next;
+    });
 
   // ---------------- Step 0: selection + separation ----------------
   const adoptImports = (list: ImportFile[], fallback: string) => {
@@ -555,7 +566,7 @@ export default function ImportWizard() {
     setBusy(true);
     setFetchStatus("Importing genres from MusicBrainz…");
     try {
-      const cascade = await withRetry(() => api.mbGenres(rid));
+      const cascade = await withRetry(() => api.mbGenres(rid, genreLimit ?? undefined));
       const byPos = new Map(cascade.per_track.map((t) => [`${t.disc}-${t.position}`, t.genres.join("; ")]));
       const g: Record<string, string> = {};
       let src: string | null = null;
@@ -1031,12 +1042,13 @@ export default function ImportWizard() {
           </div>
           {suggestions.length === 0 && <div className="text-xs text-zinc-500">No data — go back and fetch the release.</div>}
           {groupByDisc(suggestions, discOfSuggestion).map((g) => (
-            <div key={g.disc ?? "unmatched"} className="space-y-1.5">
-              <div className="flex items-center gap-2 px-1 pt-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
-                <Disc3 className="h-3.5 w-3.5 text-zinc-500" />
-                {g.disc ? `Disc ${g.disc}` : "Unmatched"}
-                <span className="font-normal text-zinc-600 normal-case">{g.rows.length} track{g.rows.length === 1 ? "" : "s"}</span>
-              </div>
+            <DiscSection
+              key={g.disc ?? "unmatched"}
+              disc={g.disc}
+              count={g.rows.length}
+              collapsed={collapsedDiscs.has(g.disc ?? null)}
+              onToggle={() => toggleDisc(g.disc ?? null)}
+            >
               {g.rows.map((s) => {
                 const local = trackList.find((t) => t.path === s.local);
                 return (
@@ -1064,7 +1076,7 @@ export default function ImportWizard() {
                   </div>
                 );
               })}
-            </div>
+            </DiscSection>
           ))}
           <div className="flex justify-end">
             <button className="btn-primary" onClick={confirmMatch} disabled={busy}>
@@ -1084,37 +1096,58 @@ export default function ImportWizard() {
             {busy && fetchStatus && (
               <span className="text-xs text-violet-300 animate-pulse">{fetchStatus}</span>
             )}
-            <span className="text-xs text-zinc-500">
-              {genreSource
-                ? `Fetched via ${genreSource} fallback (track → release → release-group → artist). Edit freely.`
-                : "Genres are not fetched automatically — click to import them, then edit freely."}
-            </span>
+            <label className="flex items-center gap-1.5 text-xs text-zinc-400 ml-auto">
+              Max genres / track
+              <select
+                className="input !w-auto !py-1 text-xs"
+                value={genreLimit ?? 0}
+                onChange={(e) => setGenreLimit(e.target.value === "0" ? null : Number(e.target.value))}
+              >
+                <option value={0}>All</option>
+                <option value={1}>1 (primary)</option>
+                <option value={2}>2</option>
+                <option value={3}>3</option>
+                <option value={4}>4</option>
+                <option value={5}>5</option>
+                <option value={10}>10</option>
+              </select>
+            </label>
           </div>
+          <span className="text-xs text-zinc-500 -mt-1 block">
+            {genreSource
+              ? `Fetched via ${genreSource} fallback (track → release → release-group → artist). Edit freely.`
+              : "Genres are not fetched automatically — set the per-track limit, then click to import."}
+          </span>
           {trackList.length === 0 && <div className="text-xs text-zinc-500">No tracks — go back and fetch the release.</div>}
           {groupByDisc(trackList, discOfTrack).map((g) => (
-            <div key={g.disc ?? "unmatched"} className="space-y-1.5">
-              <div className="flex items-center gap-2 px-1 pt-2 text-xs font-bold uppercase tracking-wider text-zinc-400 flex-wrap">
-                <Disc3 className="h-3.5 w-3.5 text-zinc-500" />
-                {g.disc ? `Disc ${g.disc}` : "Unmatched"}
-                <span className="font-normal text-zinc-600 normal-case">{g.rows.length} track{g.rows.length === 1 ? "" : "s"}</span>
-                {g.disc && (
-                  <span className="ml-auto flex items-center gap-1.5 normal-case font-normal">
-                    <input
-                      className="input !w-52 !py-1 text-xs"
-                      placeholder="Apply genre to whole disc…"
-                      value={discGenres[g.disc] ?? ""}
-                      onChange={(e) => setDiscGenres((m) => ({ ...m, [g.disc!]: e.target.value }))}
-                      onKeyDown={(e) => e.key === "Enter" && applyGenresToDisc(g.disc!, (discGenres[g.disc!] ?? "").trim())}
-                    />
-                    <button
-                      className="btn-ghost !py-1 text-xs"
-                      onClick={() => applyGenresToDisc(g.disc!, (discGenres[g.disc!] ?? "").trim())}
-                    >
-                      Apply to all
-                    </button>
-                  </span>
-                )}
-              </div>
+            <DiscSection
+              key={g.disc ?? "unmatched"}
+              disc={g.disc}
+              count={g.rows.length}
+              collapsed={collapsedDiscs.has(g.disc ?? null)}
+              onToggle={() => toggleDisc(g.disc ?? null)}
+              extra={
+                g.disc
+                  ? [
+                      <input
+                        key="in"
+                        className="input !w-52 !py-1 text-xs"
+                        placeholder="Apply genre to whole disc…"
+                        value={discGenres[g.disc!] ?? ""}
+                        onChange={(e) => setDiscGenres((m) => ({ ...m, [g.disc!]: e.target.value }))}
+                        onKeyDown={(e) => e.key === "Enter" && applyGenresToDisc(g.disc!, (discGenres[g.disc!] ?? "").trim())}
+                      />,
+                      <button
+                        key="btn"
+                        className="btn-ghost !py-1 text-xs"
+                        onClick={() => applyGenresToDisc(g.disc!, (discGenres[g.disc!] ?? "").trim())}
+                      >
+                        Apply to all
+                      </button>,
+                    ]
+                  : undefined
+              }
+            >
               {g.rows.map((t) => (
                 <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
                   <span className="text-xs text-zinc-600 w-8">{t.tags.TRACKNUMBER ?? "—"}</span>
@@ -1127,7 +1160,7 @@ export default function ImportWizard() {
                   />
                 </div>
               ))}
-            </div>
+            </DiscSection>
           ))}
           <div className="flex justify-end">
             <button className="btn-primary" onClick={saveGenres} disabled={busy}>Save genres</button>
@@ -1255,4 +1288,45 @@ export default function ImportWizard() {
 
 function CloudDownloadIcon() {
   return <ExternalLink className="h-3.5 w-3.5" />;
+}
+
+/** Collapsible per-disc section header + body, shared by Match and Genres. */
+function DiscSection({
+  disc,
+  count,
+  collapsed,
+  onToggle,
+  extra,
+  children,
+}: {
+  disc: number | null;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  extra?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div
+        className="flex items-center gap-1.5 px-1 pt-2 text-xs font-bold uppercase tracking-wider text-zinc-400 cursor-pointer select-none"
+        onClick={onToggle}
+      >
+        <button className="p-0.5 text-zinc-500 hover:text-white">
+          {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        </button>
+        <Disc3 className="h-3.5 w-3.5 text-zinc-500" />
+        {disc ? `Disc ${disc}` : "Unmatched"}
+        <span className="font-normal text-zinc-600 normal-case">
+          {count} track{count === 1 ? "" : "s"}
+        </span>
+        {extra && (
+          <span className="ml-auto flex items-center gap-1.5 normal-case font-normal" onClick={(e) => e.stopPropagation()}>
+            {extra}
+          </span>
+        )}
+      </div>
+      {!collapsed && children}
+    </div>
+  );
 }
