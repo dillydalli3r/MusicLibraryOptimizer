@@ -151,8 +151,10 @@ export const api = {
 
   lyricsSearch: (artist: string, track: string, album?: string) =>
     json<any[]>(`${API}/lyrics/search?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}${album ? `&album=${encodeURIComponent(album)}` : ""}`),
-  lyricsGet: (artist: string, track: string, album?: string) =>
-    json<any>(`${API}/lyrics/get?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}${album ? `&album=${encodeURIComponent(album)}` : ""}`),
+  lyricsGet: (artist: string, track: string, album?: string, duration?: number) =>
+    json<any>(
+      `${API}/lyrics/get?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}${album ? `&album=${encodeURIComponent(album)}` : ""}${duration ? `&duration=${duration}` : ""}`
+    ),
   lyricsWrite: (path: string, lrc: string) =>
     json<{ ok: boolean; lrc: string }>(
       `${API}/lyrics/write?path=${encodeURIComponent(path)}&lrc=${encodeURIComponent(lrc)}`,

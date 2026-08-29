@@ -723,23 +723,38 @@ export default function ImportWizard() {
 
   // ---------------- Step 4: lyrics ----------------
   const trackArtist = (p: string) => {
+    const rt = suggByPath.get(p)?.release_track;
+    if (rt?.artist_credit) return rt.artist_credit;
     const t = trackList.find((x) => x.path === p);
     return t?.tags.ARTIST ?? "";
   };
   const trackTitle = (p: string) => {
+    const rt = suggByPath.get(p)?.release_track;
+    if (rt?.title) return rt.title;
     const t = trackList.find((x) => x.path === p);
     return t?.tags.TITLE ?? defaultTrackName(p);
+  };
+  const trackDuration = (p: string): number | undefined => {
+    const t = trackList.find((x) => x.path === p) ?? stepTracks.find((x) => x.path === p);
+    return t?.tech?.length ? Math.round(t.tech.length) : undefined;
   };
   const trackAlbum = stepTracks[0]?.tags.ALBUM ?? currentAlbumName;
 
   const importLyricsForAll = async () => {
     setBusy(true);
     let done = 0;
+    let skipped = 0;
     try {
       for (const t of stepTracks) {
         if (instrumental[t.path] === "1") continue;
+        const artist = trackArtist(t.path);
+        const title = trackTitle(t.path);
+        if (!artist || !title) {
+          skipped++;
+          continue;
+        }
         try {
-          const res = await api.lyricsGet(trackArtist(t.path), trackTitle(t.path), trackAlbum);
+          const res = await api.lyricsGet(artist, title, trackAlbum, trackDuration(t.path));
           const lrc = res?.syncedLyrics ?? res?.plainLyrics;
           if (lrc) {
             setLyricsDrafts((d) => ({ ...d, [t.path]: lrc }));
@@ -749,7 +764,13 @@ export default function ImportWizard() {
           /* per-track skip */
         }
       }
-      toast(`Imported lyrics for ${done} track(s)`);
+      if (done) {
+        toast(`Imported lyrics for ${done} track(s)`);
+      } else if (skipped) {
+        toast("No artist/title available for some tracks — matching the MusicBrainz release first improves lyrics results");
+      } else {
+        toast("No lyrics found on LRCLIB — matching the MusicBrainz release first improves results");
+      }
     } finally {
       setBusy(false);
     }

@@ -749,7 +749,7 @@ async def lyrics_search(
 
 @app.get("/api/lyrics/get")
 async def lyrics_get(
-    artist: str = Query(...), track: str = Query(...),
+    artist: str = Query(""), track: str = Query(...),
     album: str = Query(None), duration: int = Query(None),
 ):
     try:

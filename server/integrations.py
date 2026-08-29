@@ -270,28 +270,46 @@ def _similarity(a, b):
 # --------------------------------------------------------------------------- #
 # LRCLIB
 # --------------------------------------------------------------------------- #
+_LRCLIB_HEADERS = {"User-Agent": USER_AGENT}
+
+
 def lrclib_search(artist, track, album=None, duration=None):
     params = {"track_name": track, "artist_name": artist}
     if album:
         params["album_name"] = album
     if duration:
         params["duration"] = duration
-    r = httpx.get(f"{LRCLIB_BASE}/search", params=params, timeout=15)
+    r = httpx.get(f"{LRCLIB_BASE}/search", params=params, headers=_LRCLIB_HEADERS, timeout=15)
     if r.status_code == 200:
         return r.json()
     raise httpx.HTTPStatusError(f"lrclib search {r.status_code}", request=r.request, response=r)
 
 
 def lrclib_get(artist, track, album=None, duration=None):
+    """Exact-match lyrics lookup with a search fallback.
+
+    Falls back to /search (preferring synced lyrics, then closest duration)
+    when the exact /get returns 404.
+    """
     params = {"artist_name": artist, "track_name": track}
     if album:
         params["album_name"] = album
     if duration:
         params["duration"] = duration
-    r = httpx.get(f"{LRCLIB_BASE}/get", params=params, timeout=15)
+    r = httpx.get(f"{LRCLIB_BASE}/get", params=params, headers=_LRCLIB_HEADERS, timeout=15)
     if r.status_code == 200:
         return r.json()
     if r.status_code == 404:
+        try:
+            hits = lrclib_search(artist, track, album, duration)
+        except Exception:
+            hits = []
+        if isinstance(hits, list) and hits:
+            synced = [h for h in hits if h.get("syncedLyrics")]
+            pool = synced or hits
+            if duration:
+                pool = sorted(pool, key=lambda h: abs(int(h.get("duration") or 0) - int(duration)))
+            return pool[0]
         return None
     raise httpx.HTTPStatusError(f"lrclib get {r.status_code}", request=r.request, response=r)
 
