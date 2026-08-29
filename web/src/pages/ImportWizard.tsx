@@ -8,7 +8,7 @@ import {
 import { api } from "../api";
 import { toast } from "../store";
 import LyricsViewer, { parseLrc } from "../components/LyricsViewer";
-import type { GenreCascade, MBRelease, MatchSuggestion } from "../types";
+import type { MBRelease, MatchSuggestion } from "../types";
 
 const STEPS = ["Select & separate", "Links", "Match", "Genres", "Lyrics", "Advisory", "Finish"];
 
@@ -491,29 +491,43 @@ export default function ImportWizard() {
       setFetchStatus("Matching local tracks to the release…");
       const matched = await api.mbMatch(albumPath!, id);
       setSuggestions(matched.suggestions);
-      setFetchStatus("Importing genres from MusicBrainz…");
-      let cascade: GenreCascade;
-      try {
-        cascade = await withRetry(() => api.mbGenres(id));
-      } catch {
-        cascade = { per_track: [], levels: { track: false, release: false, release_group: false, artist: false } };
-      }
-      const g: Record<string, string> = {};
-      const byPos = new Map(cascade.per_track.map((t) => [`${t.disc}-${t.position}`, t.genres.join("; ")]));
-      for (const s of matched.suggestions) {
-        const m = s.release_track;
-        const key = m ? `${m.disc}-${m.position}` : "";
-        const found = byPos.get(key) ?? cascade.per_track.find((t) => t.title === m?.title)?.genres.join("; ");
-        g[s.local] = found ?? "";
-        const src = cascade.per_track.find((t) => t.title === m?.title)?.source;
-        if (src) setGenreSource(src);
-      }
-      setGenres(g);
       if (!matched.suggestions.length) {
         toast("No audio tracks found in this folder — check the album folder contains the music files");
       } else {
         toast(`Matched ${matched.suggestions.filter((s) => s.matched).length}/${matched.suggestions.length} tracks`);
       }
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBusy(false);
+      setFetchStatus(null);
+    }
+  };
+
+  // Genres are imported manually in the Genres step — never auto-fetched.
+  const importGenres = async () => {
+    const rid = releaseId || extractMbid(mbLink) || "";
+    if (!rid) {
+      toast("Fetch the MusicBrainz release first (Links step)");
+      return;
+    }
+    setBusy(true);
+    setFetchStatus("Importing genres from MusicBrainz…");
+    try {
+      const cascade = await withRetry(() => api.mbGenres(rid));
+      const byPos = new Map(cascade.per_track.map((t) => [`${t.disc}-${t.position}`, t.genres.join("; ")]));
+      const g: Record<string, string> = {};
+      let src: string | null = null;
+      for (const s of suggestions) {
+        const m = s.release_track;
+        const key = m ? `${m.disc}-${m.position}` : "";
+        g[s.local] = byPos.get(key) ?? "";
+        const s2 = cascade.per_track.find((t) => t.title === m?.title)?.source;
+        if (s2) src = s2;
+      }
+      setGenres(g);
+      setGenreSource(src ?? "MusicBrainz");
+      toast("Genres imported — review and edit below");
     } catch (e) {
       toast(String(e));
     } finally {
@@ -675,6 +689,7 @@ export default function ImportWizard() {
     setReleaseId("");
     setSuggestions([]);
     setGenres({});
+    setGenreSource(null);
     setMbLink("");
     setRymLink("");
     setSearchHits([]);
@@ -997,9 +1012,18 @@ export default function ImportWizard() {
       {/* ---------------- Step 3: genres ---------------- */}
       {step === 3 && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-sm text-zinc-400">
-            Genres auto-imported from {genreSource ?? "MusicBrainz"} (track → release → release-group → artist fallback).
-            Edit freely — imported genres stay editable.
+          <div className="flex items-center gap-2 flex-wrap">
+            <button className="btn-ghost" onClick={importGenres} disabled={busy || !(releaseId || extractMbid(mbLink))}>
+              <CloudDownloadIcon /> Import genres from MusicBrainz
+            </button>
+            {busy && fetchStatus && (
+              <span className="text-xs text-violet-300 animate-pulse">{fetchStatus}</span>
+            )}
+            <span className="text-xs text-zinc-500">
+              {genreSource
+                ? `Fetched via ${genreSource} fallback (track → release → release-group → artist). Edit freely.`
+                : "Genres are not fetched automatically — click to import them, then edit freely."}
+            </span>
           </div>
           {trackList.map((t) => (
             <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
