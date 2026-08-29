@@ -59,6 +59,31 @@ async function withRetry<T>(fn: () => Promise<T>, tries = 3, baseDelay = 1200): 
   throw lastErr;
 }
 
+/** Parse a disc number from a tag like "1", "1/2" or "Disc 2". */
+function parseDisc(v: string | null | undefined): number | null {
+  if (!v) return null;
+  const m = String(v).trim().match(/(\d+)/);
+  const n = m ? parseInt(m[1], 10) : NaN;
+  return Number.isNaN(n) ? null : n;
+}
+
+/** Group rows into per-disc sections (unmatched rows last). */
+function groupByDisc<T>(rows: T[], discOf: (r: T) => number | null): { disc: number | null; rows: T[] }[] {
+  const groups = new Map<number | null, T[]>();
+  for (const r of rows) {
+    const d = discOf(r);
+    if (!groups.has(d)) groups.set(d, []);
+    groups.get(d)!.push(r);
+  }
+  return [...groups.keys()]
+    .sort((a, b) => {
+      if (a === null) return 1;
+      if (b === null) return -1;
+      return a - b;
+    })
+    .map((d) => ({ disc: d, rows: groups.get(d)! }));
+}
+
 /** Detect album boundaries inside an import set.
  *  An album = any dir with immediate audio children (disc-like dirs such as
  *  CD1/Disc 2 merge into their parent). Group names fall back to
@@ -152,6 +177,7 @@ export default function ImportWizard() {
   const [releaseId, setReleaseId] = useState("");
   const [suggestions, setSuggestions] = useState<MatchSuggestion[]>([]);
   const [genres, setGenres] = useState<Record<string, string>>({});
+  const [discGenres, setDiscGenres] = useState<Record<number, string>>({});
   const [genreSource, setGenreSource] = useState<string | null>(null);
   const [advisory, setAdvisory] = useState<Record<string, string>>({});
   const [instrumental, setInstrumental] = useState<Record<string, string>>({});
@@ -290,6 +316,21 @@ export default function ImportWizard() {
   };
 
   const currentAlbumName = uploaded[albumIndex]?.name ?? albumPath?.split("/").pop() ?? "";
+
+  // ---- per-disc grouping helpers (shared by Match and Genres steps) ----
+  const suggByPath = useMemo(() => new Map(suggestions.map((s) => [s.local, s])), [suggestions]);
+
+  const discOfTrack = (t: { path: string; tags?: { DISCNUMBER?: string | null } }): number | null => {
+    const m = suggByPath.get(t.path)?.release_track;
+    if (m) return m.disc;
+    return parseDisc(t.tags?.DISCNUMBER);
+  };
+
+  const discOfSuggestion = (s: MatchSuggestion): number | null => {
+    if (s.release_track) return s.release_track.disc;
+    const t = trackList.find((x) => x.path === s.local);
+    return parseDisc(t?.tags?.DISCNUMBER);
+  };
 
   // ---------------- Step 0: selection + separation ----------------
   const adoptImports = (list: ImportFile[], fallback: string) => {
@@ -584,6 +625,17 @@ export default function ImportWizard() {
   };
 
   // ---------------- Step 3: genres ----------------
+  const applyGenresToDisc = (disc: number, value: string) => {
+    const paths = trackList.filter((t) => discOfTrack(t) === disc).map((t) => t.path);
+    if (!paths.length) return;
+    setGenres((g) => {
+      const next = { ...g };
+      for (const p of paths) next[p] = value;
+      return next;
+    });
+    setDiscGenres((m) => ({ ...m, [disc]: "" }));
+  };
+
   const saveGenres = async () => {
     setBusy(true);
     try {
@@ -689,6 +741,7 @@ export default function ImportWizard() {
     setReleaseId("");
     setSuggestions([]);
     setGenres({});
+    setDiscGenres({});
     setGenreSource(null);
     setMbLink("");
     setRymLink("");
@@ -977,28 +1030,40 @@ export default function ImportWizard() {
             Confirm each local track's MusicBrainz track/disc. Unmatched rows stay blank — you can also fix them manually later on the track page.
           </div>
           {suggestions.length === 0 && <div className="text-xs text-zinc-500">No data — go back and fetch the release.</div>}
-          {suggestions.map((s) => (
-            <div key={s.local} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
-              <span className="text-xs text-zinc-600 w-8">{s.file.split("/").pop()?.slice(0, 2)}</span>
-              <span className="flex-1 truncate text-sm">{s.file.split("/").pop()}</span>
-              <span className="text-xs text-zinc-500">
-                {s.matched ? `${s.release_track!.disc}.${s.release_track!.position} ${s.release_track!.title}` : "no match"}
-              </span>
-              <select
-                className="input !w-auto text-xs"
-                value={s.release_track ? `${s.release_track.disc}-${s.release_track.position}` : ""}
-                onChange={(e) => {
-                  const [d, p] = e.target.value.split("-").map(Number);
-                  setSuggestion(s.local, d, p);
-                }}
-              >
-                <option value="">— none —</option>
-                {release?.media.map((m) => (
-                  <option key={`${m.disc}-${m.position}`} value={`${m.disc}-${m.position}`}>
-                    {m.disc}.{m.position} {m.title}
-                  </option>
-                ))}
-              </select>
+          {groupByDisc(suggestions, discOfSuggestion).map((g) => (
+            <div key={g.disc ?? "unmatched"} className="space-y-1.5">
+              <div className="flex items-center gap-2 px-1 pt-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+                <Disc3 className="h-3.5 w-3.5 text-zinc-500" />
+                {g.disc ? `Disc ${g.disc}` : "Unmatched"}
+                <span className="font-normal text-zinc-600 normal-case">{g.rows.length} track{g.rows.length === 1 ? "" : "s"}</span>
+              </div>
+              {g.rows.map((s) => {
+                const local = trackList.find((t) => t.path === s.local);
+                return (
+                  <div key={s.local} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
+                    <span className="text-xs text-zinc-600 w-8">{local?.tags.TRACKNUMBER ?? s.file.split("/").pop()?.slice(0, 2)}</span>
+                    <span className="flex-1 truncate text-sm">{local?.tags.TITLE ?? s.file.split("/").pop()}</span>
+                    <span className="text-xs text-zinc-500">
+                      {s.matched ? `${s.release_track!.disc}.${s.release_track!.position} ${s.release_track!.title}` : "no match"}
+                    </span>
+                    <select
+                      className="input !w-auto text-xs"
+                      value={s.release_track ? `${s.release_track.disc}-${s.release_track.position}` : ""}
+                      onChange={(e) => {
+                        const [d, p] = e.target.value.split("-").map(Number);
+                        setSuggestion(s.local, d, p);
+                      }}
+                    >
+                      <option value="">— none —</option>
+                      {release?.media.map((m) => (
+                        <option key={`${m.disc}-${m.position}`} value={`${m.disc}-${m.position}`}>
+                          {m.disc}.{m.position} {m.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
             </div>
           ))}
           <div className="flex justify-end">
@@ -1025,10 +1090,43 @@ export default function ImportWizard() {
                 : "Genres are not fetched automatically — click to import them, then edit freely."}
             </span>
           </div>
-          {trackList.map((t) => (
-            <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
-              <span className="flex-1 truncate text-sm">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
-              <input className="input max-w-sm" placeholder="Genre (semicolon separated)" value={genres[t.path] ?? ""} onChange={(e) => setGenres((g) => ({ ...g, [t.path]: e.target.value }))} />
+          {trackList.length === 0 && <div className="text-xs text-zinc-500">No tracks — go back and fetch the release.</div>}
+          {groupByDisc(trackList, discOfTrack).map((g) => (
+            <div key={g.disc ?? "unmatched"} className="space-y-1.5">
+              <div className="flex items-center gap-2 px-1 pt-2 text-xs font-bold uppercase tracking-wider text-zinc-400 flex-wrap">
+                <Disc3 className="h-3.5 w-3.5 text-zinc-500" />
+                {g.disc ? `Disc ${g.disc}` : "Unmatched"}
+                <span className="font-normal text-zinc-600 normal-case">{g.rows.length} track{g.rows.length === 1 ? "" : "s"}</span>
+                {g.disc && (
+                  <span className="ml-auto flex items-center gap-1.5 normal-case font-normal">
+                    <input
+                      className="input !w-52 !py-1 text-xs"
+                      placeholder="Apply genre to whole disc…"
+                      value={discGenres[g.disc] ?? ""}
+                      onChange={(e) => setDiscGenres((m) => ({ ...m, [g.disc!]: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && applyGenresToDisc(g.disc!, (discGenres[g.disc!] ?? "").trim())}
+                    />
+                    <button
+                      className="btn-ghost !py-1 text-xs"
+                      onClick={() => applyGenresToDisc(g.disc!, (discGenres[g.disc!] ?? "").trim())}
+                    >
+                      Apply to all
+                    </button>
+                  </span>
+                )}
+              </div>
+              {g.rows.map((t) => (
+                <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
+                  <span className="text-xs text-zinc-600 w-8">{t.tags.TRACKNUMBER ?? "—"}</span>
+                  <span className="flex-1 truncate text-sm">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
+                  <input
+                    className="input max-w-sm"
+                    placeholder="Genre (semicolon separated)"
+                    value={genres[t.path] ?? ""}
+                    onChange={(e) => setGenres((g2) => ({ ...g2, [t.path]: e.target.value }))}
+                  />
+                </div>
+              ))}
             </div>
           ))}
           <div className="flex justify-end">
