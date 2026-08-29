@@ -9,7 +9,7 @@ import {
 import { api } from "../api";
 import { toast } from "../store";
 import LyricsViewer, { parseLrc } from "../components/LyricsViewer";
-import type { MBRelease, MatchSuggestion } from "../types";
+import type { MBRelease, MatchSuggestion, Track } from "../types";
 
 const STEPS = ["Select & separate", "Links", "Match", "Genres", "Lyrics", "Advisory", "Finish"];
 
@@ -320,6 +320,30 @@ export default function ImportWizard() {
   };
 
   const currentAlbumName = uploaded[albumIndex]?.name ?? albumPath?.split("/").pop() ?? "";
+
+  // Tracks for the per-track steps (genres/lyrics/advisory). Prefer the
+  // library payload, but fall back to the matched suggestions — the library
+  // only contains the exact album path, while matching scans the folder
+  // directly (nested/multi-album structures).
+  const stepTracks: Track[] = useMemo(() => {
+    if (trackList.length) return trackList;
+    if (!suggestions.length) return [];
+    return suggestions.map((s) => ({
+      path: s.local,
+      file: s.file,
+      issues: [],
+      values: {},
+      audit: null,
+      log_grade: null,
+      lyrics_embedded: false,
+      lyrics_lrc: false,
+      unreadable: false,
+      tech: {},
+      tags: {},
+      grade_pass: false,
+      lyrics_present: false,
+    }));
+  }, [trackList, suggestions]);
 
   // ---- per-disc grouping helpers (shared by Match and Genres steps) ----
   const suggByPath = useMemo(() => new Map(suggestions.map((s) => [s.local, s])), [suggestions]);
@@ -637,6 +661,24 @@ export default function ImportWizard() {
   };
 
   // ---------------- Step 3: genres ----------------
+  // When the Genres step opens, prefill untouched tracks with their existing
+  // GENRE tags so they are visible and editable right away.
+  useEffect(() => {
+    if (step !== 3) return;
+    setGenres((g) => {
+      let changed = false;
+      const next = { ...g };
+      for (const t of stepTracks) {
+        if (next[t.path] === undefined && t.tags?.GENRE) {
+          next[t.path] = t.tags.GENRE;
+          changed = true;
+        }
+      }
+      return changed ? next : g;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, stepTracks]);
+
   const genreList = (path: string): string[] =>
     (genres[path] ?? "").split(";").map((g) => g.trim()).filter(Boolean);
 
@@ -654,7 +696,7 @@ export default function ImportWizard() {
     setGenreList(path, genreList(path).filter((g) => g !== genre));
 
   const applyGenresToDisc = (disc: number, value: string) => {
-    const paths = trackList.filter((t) => discOfTrack(t) === disc).map((t) => t.path);
+    const paths = stepTracks.filter((t) => discOfTrack(t) === disc).map((t) => t.path);
     if (!paths.length) return;
     setGenres((g) => {
       const next = { ...g };
@@ -688,13 +730,13 @@ export default function ImportWizard() {
     const t = trackList.find((x) => x.path === p);
     return t?.tags.TITLE ?? defaultTrackName(p);
   };
-  const trackAlbum = trackList[0]?.tags.ALBUM ?? currentAlbumName;
+  const trackAlbum = stepTracks[0]?.tags.ALBUM ?? currentAlbumName;
 
   const importLyricsForAll = async () => {
     setBusy(true);
     let done = 0;
     try {
-      for (const t of trackList) {
+      for (const t of stepTracks) {
         if (instrumental[t.path] === "1") continue;
         try {
           const res = await api.lyricsGet(trackArtist(t.path), trackTitle(t.path), trackAlbum);
@@ -717,7 +759,7 @@ export default function ImportWizard() {
     setBusy(true);
     try {
       const writes: Record<string, Record<string, string | null>> = {};
-      for (const t of trackList) {
+      for (const t of stepTracks) {
         const inst = instrumental[t.path] ?? (t.tags.INSTRUMENTAL === "1" ? "1" : "0");
         writes[t.path] = { INSTRUMENTAL: inst };
         if (inst === "1") continue;
@@ -741,7 +783,7 @@ export default function ImportWizard() {
     setBusy(true);
     try {
       const writes: Record<string, Record<string, string | null>> = {};
-      for (const t of trackList) {
+      for (const t of stepTracks) {
         writes[t.path] = { ITUNESADVISORY: advisory[t.path] ?? null };
       }
       await api.mbAssign(writes);
@@ -1135,8 +1177,8 @@ export default function ImportWizard() {
               ? `Fetched via ${genreSource} fallback (track → release → release-group → artist). Edit freely.`
               : "Genres are not fetched automatically — set the per-track limit, then click to import."}
           </span>
-          {trackList.length === 0 && <div className="text-xs text-zinc-500">No tracks — go back and fetch the release.</div>}
-          {groupByDisc(trackList, discOfTrack).map((g) => (
+          {stepTracks.length === 0 && <div className="text-xs text-zinc-500">No tracks — go back and fetch the release.</div>}
+          {groupByDisc(stepTracks, discOfTrack).map((g) => (
             <DiscSection
               key={g.disc ?? "unmatched"}
               disc={g.disc}
@@ -1214,7 +1256,7 @@ export default function ImportWizard() {
             </button>
             <span className="text-xs text-zinc-500">Review below — Space stamps time while previewing; INSTRUMENTAL=1 skips lyrics.</span>
           </div>
-          {trackList.map((t) => {
+          {stepTracks.map((t) => {
             const inst = instrumental[t.path] ?? t.tags.INSTRUMENTAL;
             return (
               <details key={t.path} className="bg-card rounded-lg border border-border open:pb-3">
@@ -1257,7 +1299,7 @@ export default function ImportWizard() {
       {step === 5 && (
         <div className="space-y-3">
           <div className="text-sm text-zinc-400">Set iTunes advisory per track: <b className="text-zinc-200">0</b> unrated/clean, <b className="text-zinc-200">1</b> explicit, <b className="text-zinc-200">2</b> safe edited version.</div>
-          {trackList.map((t) => (
+          {stepTracks.map((t) => (
             <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
               <span className="flex-1 truncate text-sm">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
               <div className="flex gap-1">
