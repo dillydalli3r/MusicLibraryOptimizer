@@ -4,8 +4,15 @@ const IN_TAURI = !!(window as any).__TAURI_INTERNALS__;
 const BASE = IN_TAURI ? "http://127.0.0.1:8000" : "";
 const API = `${BASE}/api`;
 
-async function json<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init);
+async function json<T>(url: string, init?: RequestInit, timeoutMs = 20000): Promise<T> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let r: Response;
+  try {
+    r = await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!r.ok) {
     let detail = r.statusText;
     try {
@@ -40,7 +47,9 @@ export const api = {
     }),
   mbDetect: (path: string) =>
     json<{ mbid: string | null; key?: string; track?: string }>(
-      `${API}/album/mbdetect?path=${encodeURIComponent(path)}`
+      `${API}/album/mbdetect?path=${encodeURIComponent(path)}`,
+      undefined,
+      8000
     ),
 
   streamUrl: (path: string) => `${API}/stream?path=${encodeURIComponent(path)}`,

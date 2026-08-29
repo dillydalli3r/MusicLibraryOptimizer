@@ -188,11 +188,18 @@ def album_mbdetect(path: str = Query(...)):
         raise HTTPException(404, "album not found")
     uuid_re = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
     # Recursive: some libraries nest the album folder inside a folder of the
-    # same name, so scan subdirectories too.
+    # same name, so scan subdirectories too. Album tags are uniform across
+    # tracks, so checking a handful of audio files is enough — this keeps the
+    # scan instant even on huge folders.
+    scanned = 0
+    MAX_SCAN = 12
     for root, dirs, files in os.walk(p):
         for f in sorted(files):
             if not is_audio_file(f):
                 continue
+            scanned += 1
+            if scanned > MAX_SCAN:
+                return {"mbid": None, "truncated": True}
             af = AudioFile(os.path.join(root, f))
             if af.audio is None:
                 continue
@@ -212,7 +219,7 @@ def album_mbdetect(path: str = Query(...)):
                             return {"mbid": m.group(0).lower(), "key": k, "track": rel}
             except Exception:
                 continue
-    return {"mbid": None}
+    return {"mbid": None, "scanned": scanned}
 
 
 @app.get("/api/album")
