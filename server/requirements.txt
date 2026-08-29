@@ -6,3 +6,4 @@ aiofiles
 httpx
 mutagen
 Pillow
+pystray

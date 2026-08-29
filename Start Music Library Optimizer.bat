@@ -1,5 +1,7 @@
 @echo off
-rem Start Music Library Optimizer — starts the backend and opens the browser.
+rem Start Music Library Optimizer — system tray app (taskbar icon).
+rem Starts the backend if needed, opens the browser, and keeps running
+rem in the tray: Open / Restart / Auto-start on login / Exit.
 cd /d "%~dp0"
 where python >nul 2>nul
 if errorlevel 1 (
@@ -7,5 +9,10 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-start "" /min python start_app.py
+where pythonw >nul 2>nul
+if not errorlevel 1 (
+    start "" pythonw tray.py
+    exit /b 0
+)
+start "" /min python tray.py
 exit /b 0
