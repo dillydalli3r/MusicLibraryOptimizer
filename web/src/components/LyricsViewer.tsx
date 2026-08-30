@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CloudDownload, Play, Square, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
@@ -46,6 +46,7 @@ export default function LyricsViewer({
   artist,
   track,
   album,
+  duration,
   decimals = 2,
 }: {
   path: string;
@@ -54,107 +55,42 @@ export default function LyricsViewer({
   artist?: string;
   track?: string;
   album?: string;
+  duration?: number;
   decimals?: number;
 }) {
   const [lines, setLines] = useState<LrcLine[]>(() => parseLrc(initialLyrics));
   const [rawMode, setRawMode] = useState(false);
   const [raw, setRaw] = useState(initialLyrics);
   const [playing, setPlaying] = useState(false);
-  const [current, setCurrent] = useState(-1);
-  const [loading, setLoading] = useState(false);
+  const [playTime, setPlayTime] = useState(0);
   const [selIdx, setSelIdx] = useState(0);
+  const [loading, setLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
-  useEffect(() => setLines(parseLrc(initialLyrics)), [initialLyrics]);
-
   useEffect(() => {
-    if (!lines.length) return;
-    const idx = lines.findIndex((l) => l.time > current + 0.05);
-    const shown = idx === -1 ? lines.length - 1 : Math.max(0, idx - 1);
-    if (shown !== current && shown >= 0) {
-      setCurrent(shown);
-      lineRefs.current[shown]?.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
-  }, [current, lines]);
+    setLines(parseLrc(initialLyrics));
+    setRaw(initialLyrics);
+  }, [initialLyrics]);
 
-  // Spacebar = stamp current playback time into the selected lyric line.
+  // Active line derived from playback time (never conflated with the index).
+  const activeLine = useMemo(() => {
+    let idx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].time <= playTime + 0.02) idx = i;
+      else break;
+    }
+    return idx;
+  }, [playTime, lines]);
+
+  // Follow the playing line.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) {
-        if (e.code === "Space") {
-          e.preventDefault();
-          stampTime();
-        }
-        return;
-      }
-      if (e.code === "Space") {
-        e.preventDefault();
-        stampTime();
-      }
-    };
-    const stampTime = () => {
-      const audio = audioRef.current;
-      if (!audio || !playing) return;
-      const t = Math.max(0, audio.currentTime - 0.05);
-      setLines((ls) => {
-        const next = [...ls];
-        const target = Math.min(selIdx, Math.max(0, next.length - 1));
-        if (next[target]) next[target] = { ...next[target], time: t };
-        emit(next);
-        return next;
-      });
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, selIdx, lines.length]);
+    if (!playing || activeLine < 0) return;
+    lineRefs.current[activeLine]?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [activeLine, playing]);
 
-  const emit = (ls: LrcLine[]) => {
-    onChange(serializeLrc(ls, decimals));
-  };
-
-  const togglePlay = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (playing) {
-      audio.pause();
-      setPlaying(false);
-    } else {
-      audio.src = api.streamUrl(path);
-      audio.play().catch(() => toast("Playback failed"));
-      setPlaying(true);
-    }
-  };
-
-  const importFromLrclib = async () => {
-    if (!artist || !track) {
-      toast("Track needs ARTIST and TITLE tags first");
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await api.lyricsGet(artist, track, album);
-      const lrc = res?.syncedLyrics ?? res?.plainLyrics;
-      if (!lrc) {
-        toast("No lyrics found on LRCLIB");
-        return;
-      }
-      const parsed = parseLrc(lrc);
-      if (!parsed.length) {
-        toast("LRCLIB returned unsynced lyrics — check the track page");
-        return;
-      }
-      setLines(parsed);
-      emit(parsed);
-      toast("Imported from LRCLIB");
-    } catch (e) {
-      toast(String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const emit = (ls: LrcLine[]) => onChange(serializeLrc(ls, decimals));
 
   const updateLine = (i: number, patch: Partial<LrcLine>) => {
     setLines((ls) => {
@@ -182,11 +118,97 @@ export default function LyricsViewer({
       emit(next);
       return next;
     });
+    setSelIdx((s) => Math.max(0, Math.min(s, lines.length - 2)));
+  };
+
+  const togglePlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+      setPlaying(false);
+    } else {
+      audio.src = api.streamUrl(path);
+      audio.play().catch(() => toast("Playback failed — audio format unsupported in browser"));
+      setPlaying(true);
+    }
+  };
+
+  const seekTo = (time: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = time;
+    setPlayTime(time);
+  };
+
+  // Spacebar stamps the current playback time into the selected line and
+  // advances to the next line. Typing spaces inside lyric text inputs is
+  // never intercepted.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const t = e.target as HTMLElement;
+      const isLyricTextInput =
+        t instanceof HTMLInputElement && t.dataset.lyrictext !== undefined;
+      const isOtherInput =
+        (t instanceof HTMLInputElement && t.dataset.lyrictext === undefined) ||
+        t instanceof HTMLTextAreaElement ||
+        t.isContentEditable;
+      if (isLyricTextInput) return; // normal space while typing lyrics
+      if (isOtherInput) return; // don't hijack other fields
+      e.preventDefault();
+      stampTime();
+    };
+    const stampTime = () => {
+      const audio = audioRef.current;
+      if (!audio || !playing) {
+        toast("Press Play first, then Space on each line to stamp its time");
+        return;
+      }
+      const t = Math.max(0, audio.currentTime - 0.05);
+      setLines((ls) => {
+        const next = [...ls];
+        const target = Math.min(selIdx, Math.max(0, next.length - 1));
+        if (next[target]) next[target] = { ...next[target], time: t };
+        emit(next);
+        return next;
+      });
+      setSelIdx((s) => Math.min(s + 1, Math.max(0, lines.length - 1)));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, selIdx, lines.length]);
+
+  const importFromLrclib = async () => {
+    if (!artist || !track) {
+      toast("Track needs ARTIST and TITLE tags first");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await api.lyricsGet(artist, track, album, duration);
+      const lrc = res?.syncedLyrics ?? res?.plainLyrics;
+      if (!lrc) {
+        toast("No lyrics found on LRCLIB");
+        return;
+      }
+      const parsed = parseLrc(lrc);
+      setLines(parsed);
+      setRaw(lrc);
+      emit(parsed);
+      setSelIdx(0);
+      toast("Imported from LRCLIB");
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="bg-card rounded-lg border border-border p-4 flex flex-col">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-1.5">
         <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Lyrics</div>
         <div className="flex gap-1.5">
           <button className="btn-ghost !py-1 text-xs" onClick={togglePlay}>
@@ -208,7 +230,12 @@ export default function LyricsViewer({
         </div>
       </div>
 
-      <audio ref={audioRef} onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)} onEnded={() => setPlaying(false)} className="hidden" />
+      <audio
+        ref={audioRef}
+        onTimeUpdate={(e) => setPlayTime(e.currentTarget.currentTime)}
+        onEnded={() => setPlaying(false)}
+        className="hidden"
+      />
 
       {rawMode ? (
         <textarea
@@ -221,39 +248,58 @@ export default function LyricsViewer({
         />
       ) : lines.length === 0 ? (
         <div className="text-sm text-zinc-500 py-10 text-center">
-          No lyrics. Press <kbd className="chip bg-raise border border-border">Space</kbd> while previewing to stamp the
-          selected line's timestamp, or import from LRCLIB.
+          No lyrics yet. Press <kbd className="chip bg-raise border border-border">Play</kbd>, then select a line and
+          press <kbd className="chip bg-raise border border-border">Space</kbd> on each line to stamp its timestamp —
+          or import from LRCLIB.
         </div>
       ) : (
-        <div className="flex-1 space-y-1.5 max-h-[420px] overflow-auto pr-1">
+        <div ref={listRef} className="flex-1 space-y-1 max-h-[420px] overflow-auto pr-1">
           {lines.map((l, i) => (
             <div
               key={i}
-              ref={(el) => { lineRefs.current[i] = el; }}
+              ref={(el) => {
+                lineRefs.current[i] = el;
+              }}
               className={`group flex items-center gap-2 rounded-md border px-2 py-1.5 transition-colors ${
-                i === current && playing
-                  ? "border-accent/50 bg-violet-950/30"
-                  : "border-transparent hover:border-border hover:bg-panel"
+                i === activeLine && playing
+                  ? "border-accent/60 bg-violet-950/40"
+                  : i === selIdx
+                    ? "border-accent/30 bg-panel"
+                    : "border-transparent hover:border-border hover:bg-panel"
               }`}
               onClick={() => setSelIdx(i)}
             >
+              <button
+                className="p-0.5 text-zinc-600 hover:text-accent-soft shrink-0"
+                title={`Seek to ${l.ts}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  seekTo(l.time);
+                }}
+              >
+                <Play className="h-3 w-3" />
+              </button>
               <input
-                className="w-[88px] bg-transparent font-mono text-xs text-zinc-400 outline-none border border-transparent focus:border-accent rounded px-1 py-0.5"
+                className="w-[86px] bg-transparent font-mono text-xs text-zinc-400 outline-none border border-transparent focus:border-accent rounded px-1 py-0.5"
                 value={l.ts}
                 onChange={(e) => {
                   const m = e.target.value.match(/(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?/);
                   if (!m) return;
-                  const time = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + parseInt((m[3] ?? "0").padEnd(2, "0").slice(0, 2), 10) / 100;
+                  const time =
+                    parseInt(m[1], 10) * 60 +
+                    parseInt(m[2], 10) +
+                    parseInt((m[3] ?? "0").padEnd(2, "0").slice(0, 2), 10) / 100;
                   updateLine(i, { ts: e.target.value, time });
                 }}
               />
               <input
+                data-lyrictext
                 className="flex-1 bg-transparent text-sm text-zinc-200 outline-none border border-transparent focus:border-accent rounded px-1 py-0.5"
                 value={l.text}
                 placeholder="Lyric line…"
                 onChange={(e) => updateLine(i, { text: e.target.value })}
               />
-              <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
+              <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity shrink-0">
                 <button className="text-zinc-500 hover:text-accent-soft" onClick={() => addLine(i)} title="Add line after">
                   <Plus className="h-3.5 w-3.5" />
                 </button>
@@ -266,7 +312,8 @@ export default function LyricsViewer({
         </div>
       )}
       <div className="mt-2 text-[10px] text-zinc-600">
-        Space = stamp current preview time into the selected line · timestamps auto-format to {decimals} decimals on save
+        Play → click a line → Space stamps its time and advances · ▶ seeks to a line · timestamps format to {decimals}{" "}
+        decimals on save
       </div>
     </div>
   );

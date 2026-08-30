@@ -186,7 +186,49 @@ def make_icon():
     return img
 
 
+def _pid_alive(pid):
+    if os.name == "nt":
+        import ctypes
+        SYNCHRONIZE = 0x00100000
+        h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, int(pid))
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+
+
+LOCK_PATH = os.path.join(ROOT, "server", "data", "tray.lock")
+
+
+def _another_tray_running():
+    """Single-instance guard via a PID lockfile (stale locks are reclaimed)."""
+    try:
+        os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
+        if os.path.exists(LOCK_PATH):
+            try:
+                with open(LOCK_PATH, "r") as f:
+                    pid = int(f.read().strip() or 0)
+                if pid and pid != os.getpid() and _pid_alive(pid):
+                    return True
+            except (ValueError, OSError):
+                pass
+        with open(LOCK_PATH, "w") as f:
+            f.write(str(os.getpid()))
+        return False
+    except OSError:
+        return False
+
+
 def run_tray():
+    if _another_tray_running():
+        # A tray instance already manages the backend — just open the app.
+        webbrowser.open(URL)
+        return
     status = backend.ensure_running()
     if status == "failed":
         # no console on pythonw — fall back to a spawned console for errors

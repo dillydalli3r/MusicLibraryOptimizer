@@ -163,7 +163,15 @@ export default function TrackPage() {
           </div>
         </div>
 
-        <LyricsViewer path={decoded} initialLyrics={lyrics} onChange={(v) => { setLyrics(v); setDirty(true); }} />
+        <LyricsViewer
+                  path={decoded}
+                  initialLyrics={lyrics}
+                  onChange={(v) => { setLyrics(v); setDirty(true); }}
+                  artist={tags.ARTIST}
+                  track={tags.TITLE}
+                  album={tags.ALBUM}
+                  duration={tech.length ? Math.round(tech.length) : undefined}
+                />
       </div>
     </div>
   );

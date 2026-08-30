@@ -738,7 +738,7 @@ export default function ImportWizard() {
     const t = trackList.find((x) => x.path === p) ?? stepTracks.find((x) => x.path === p);
     return t?.tech?.length ? Math.round(t.tech.length) : undefined;
   };
-  const trackAlbum = stepTracks[0]?.tags.ALBUM ?? currentAlbumName;
+  const trackAlbum = release?.title || stepTracks[0]?.tags.ALBUM || undefined;
 
   const importLyricsForAll = async () => {
     setBusy(true);
@@ -1279,10 +1279,17 @@ export default function ImportWizard() {
           </div>
           {stepTracks.map((t) => {
             const inst = instrumental[t.path] ?? t.tags.INSTRUMENTAL;
+            const hasDraft = !!(lyricsDrafts[t.path] && parseLrc(lyricsDrafts[t.path]).length) || !!t.lyrics_present;
             return (
               <details key={t.path} className="bg-card rounded-lg border border-border open:pb-3">
                 <summary className="px-3 py-2 text-sm font-medium cursor-pointer flex items-center gap-2">
+                  <span className="text-xs text-zinc-600 w-8">{t.tags.TRACKNUMBER ?? "—"}</span>
                   <span className="flex-1 truncate">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
+                  {hasDraft && (
+                    <span className="chip bg-emerald-900/60 text-emerald-300 border border-emerald-800">
+                      <Check className="h-3 w-3" /> lyrics
+                    </span>
+                  )}
                   <label className="flex items-center gap-1.5 text-xs text-zinc-400 select-none" onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
@@ -1302,6 +1309,7 @@ export default function ImportWizard() {
                       artist={trackArtist(t.path)}
                       track={trackTitle(t.path)}
                       album={trackAlbum}
+                      duration={trackDuration(t.path)}
                     />
                   </div>
                 ) : (
