@@ -1,0 +1,180 @@
+"""Picard-style file naming script evaluator.
+
+Supports the subset of Picard scripting used by typical naming patterns:
+  * %variable% substitution
+  * $if(cond, then[, else])   — cond is truthy when non-empty
+  * $left(s, n), $num(s, n), $lower(s), $upper(s), $replace(s, a, b)
+  * literal text and "/" path separators
+
+Example (the default):
+  %albumartist% [%musicbrainz_albumartistid%]/$if(%releasetype%,[%releasetype%] ,)$if(%originaldate%,%originaldate% - ,)$if(%date%,%date% - ,)%album% {$if(%releasecountry%,%releasecountry% - )%media%$if(%catalognumber%, - %catalognumber%)}/%discnumber%-$num(%tracknumber%,2) %title%
+"""
+import os
+import re
+
+DEFAULT_NAMING_SCRIPT = (
+    "%albumartist% [%musicbrainz_albumartistid%]/"
+    "$if(%releasetype%,[%releasetype%] ,)"
+    "$if(%originaldate%,%originaldate% - ,)"
+    "$if(%date%,%date% - ,)"
+    "%album% {$if(%releasecountry%,%releasecountry% - )%media%$if(%catalognumber%, - %catalognumber%)}/"
+    "%discnumber%-$num(%tracknumber%,2) %title%"
+)
+
+_ILLEGAL = '<>:"\\|?*'
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def sanitize_path(text):
+    """Sanitize each path segment (keeps the script's own '/' separators)."""
+    # drop empty bracket groups left by skipped conditionals
+    text = re.sub(r"\[\s*\]|\{\s*\}", "", text)
+    out = []
+    for seg in text.split("/"):
+        seg = seg.strip()
+        seg = "".join(ch for ch in seg if ch not in _ILLEGAL)
+        seg = re.sub(r"\s+", " ", seg).strip().rstrip(".")
+        out.append(seg)
+    return "/".join(s for s in out if s)
+
+
+def _find_balanced(text, start):
+    """Return (content, index_after_close) for the parens starting at `start`
+    which must point at '('. Handles nesting; no string literals needed."""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:i], i + 1
+    return text[start + 1:], len(text)
+
+
+def _split_args(argtext):
+    """Split on top-level commas."""
+    args, depth, cur = [], 0, []
+    for ch in argtext:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    args.append("".join(cur))
+    # NOTE: no stripping — trailing spaces in Picard scripts are significant
+    # (e.g. "$if(%releasetype%,[%releasetype%] ,)")
+    return args
+
+
+def _func(name, args, variables):
+    a = [_eval(x, variables) for x in args]
+    if name == "if":
+        if len(a) >= 2:
+            cond = a[0].strip()
+            if cond and cond != "0":
+                return a[1]
+            return a[2] if len(a) >= 3 else ""
+        return ""
+    if name == "left" and len(a) >= 2:
+        try:
+            n = int(float(a[1]))
+        except ValueError:
+            n = 0
+        return a[0][:n]
+    if name == "num" and len(a) >= 2:
+        try:
+            n = int(float(a[1]))
+        except ValueError:
+            n = 0
+        digits = ""
+        for ch in a[0]:
+            if ch.isdigit():
+                digits += ch
+            elif digits:
+                break
+        try:
+            return str(int(digits or 0)).zfill(n)
+        except ValueError:
+            return a[0]
+    if name == "lower" and a:
+        return a[0].lower()
+    if name == "upper" and a:
+        return a[0].upper()
+    if name == "replace" and len(a) >= 3:
+        return a[0].replace(a[1], a[2])
+    return ""
+
+
+def _eval(script, variables):
+    """Raw evaluation (no sanitization — applied once at the top level)."""
+    out = []
+    i = 0
+    n = len(script)
+    while i < n:
+        ch = script[i]
+        if ch == "%":
+            j = script.find("%", i + 1)
+            if j == -1:
+                out.append(ch)
+                i += 1
+                continue
+            name = script[i + 1:j]
+            out.append(str(variables.get(name, "") or ""))
+            i = j + 1
+        elif ch == "$":
+            m = re.match(r"\$(\w+)\(", script[i:])
+            if m:
+                name = m.group(1)
+                body, end = _find_balanced(script, i + 1 + len(name))
+                out.append(_func(name, _split_args(body), variables))
+                i = end
+            else:
+                out.append(ch)
+                i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def eval_script(script, variables, shorter_ids=False):
+    """Evaluate a Picard-style naming script into a relative path string.
+
+    When shorter_ids is True, full MusicBrainz UUIDs in the output are
+    truncated to their first 8 characters.
+    """
+    text = _eval(script, variables)
+    if shorter_ids:
+        text = _UUID_RE.sub(lambda m: m.group(0)[:8], text)
+    return sanitize_path(text)
+
+
+def track_variables(tags, release_type=None):
+    """Build the variable map for one track from its tag dict."""
+    tags = tags or {}
+    date = tags.get("DATE") or ""
+    return {
+        "albumartist": tags.get("ALBUMARTIST") or tags.get("ARTIST") or "",
+        "artist": tags.get("ARTIST") or "",
+        "albumartistsort": tags.get("ALBUMARTISTSORT") or "",
+        "musicbrainz_albumartistid": tags.get("MUSICBRAINZ_ALBUMARTISTID") or "",
+        "musicbrainz_artistid": tags.get("MUSICBRAINZ_ARTISTID") or "",
+        "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID") or "",
+        "releasetype": release_type or tags.get("RELEASETYPE") or "",
+        "originaldate": tags.get("ORIGINALDATE") or "",
+        "date": date,
+        "year": (date.split("-")[0] if date else ""),
+        "album": tags.get("ALBUM") or "",
+        "releasecountry": tags.get("RELEASECOUNTRY") or "",
+        "media": tags.get("MEDIA") or "",
+        "catalognumber": tags.get("CATALOGNUMBER") or "",
+        "discnumber": tags.get("DISCNUMBER") or "1",
+        "tracknumber": tags.get("TRACKNUMBER") or "",
+        "title": tags.get("TITLE") or "",
+        "genre": tags.get("GENRE") or "",
+    }

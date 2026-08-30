@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Save } from "lucide-react";
+import { FolderOpen, Save, RotateCcw } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
+
+const DEFAULT_NAMING_SCRIPT =
+  "%albumartist% [%musicbrainz_albumartistid%]/$if(%releasetype%,[%releasetype%] ,)$if(%originaldate%,%originaldate% - ,)$if(%date%,%date% - ,)%album% {$if(%releasecountry%,%releasecountry% - )%media%$if(%catalognumber%, - %catalognumber%)}/%discnumber%-$num(%tracknumber%,2) %title%";
 
 export default function SettingsPage() {
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
@@ -10,14 +13,19 @@ export default function SettingsPage() {
   const [musicFolder, setMusicFolder] = useState("");
   const [lyricsFormat, setLyricsFormat] = useState("EMBEDDED");
   const [workerLimit, setWorkerLimit] = useState(0);
+  const [namingScript, setNamingScript] = useState(DEFAULT_NAMING_SCRIPT);
+  const [shortFolderNames, setShortFolderNames] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
-  const apply = () => {
-    if (config) {
-      setMusicFolder(String(config.music_folder ?? ""));
-      setLyricsFormat(String(config.lyrics_format ?? "EMBEDDED"));
-      setWorkerLimit(Number(config.worker_limit ?? 0));
-    }
-  };
+  useEffect(() => {
+    if (!config || loaded) return;
+    setMusicFolder(String(config.music_folder ?? ""));
+    setLyricsFormat(String(config.lyrics_format ?? "EMBEDDED"));
+    setWorkerLimit(Number(config.worker_limit ?? 0));
+    setNamingScript(String(config.naming_script ?? "") || DEFAULT_NAMING_SCRIPT);
+    setShortFolderNames(!!config.short_folder_names);
+    setLoaded(true);
+  }, [config, loaded]);
 
   const pickNative = async () => {
     if (!(window as any).__TAURI_INTERNALS__) {
@@ -35,7 +43,14 @@ export default function SettingsPage() {
 
   const save = async () => {
     try {
-      await api.saveConfig({ ...config, music_folder: musicFolder, lyrics_format: lyricsFormat, worker_limit: workerLimit });
+      await api.saveConfig({
+        ...config,
+        music_folder: musicFolder,
+        lyrics_format: lyricsFormat,
+        worker_limit: workerLimit,
+        naming_script: namingScript,
+        short_folder_names: shortFolderNames,
+      });
       toast("Config saved");
       qc.invalidateQueries({ queryKey: ["config"] });
       qc.invalidateQueries({ queryKey: ["library"] });
@@ -45,46 +60,71 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="p-6 max-w-2xl space-y-5">
+    <div className="p-6 max-w-3xl space-y-5">
       <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
 
-      {!config ? (
-        <button className="btn-primary" onClick={apply}>Load config</button>
-      ) : (
-        <>
-          <div className="bg-card rounded-lg border border-border p-4 space-y-3">
-            <label className="block">
-              <span className="text-xs text-zinc-500 uppercase">Music folder</span>
-              <div className="flex gap-2 mt-1">
-                <input className="input" value={musicFolder} onChange={(e) => setMusicFolder(e.target.value)} placeholder="F:\Music" />
-                <button className="btn-ghost" onClick={pickNative} title="Native folder picker (desktop)">
-                  <FolderOpen className="h-4 w-4" />
-                </button>
-              </div>
-            </label>
-            <label className="block">
-              <span className="text-xs text-zinc-500 uppercase">Lyrics format</span>
-              <select className="input mt-1" value={lyricsFormat} onChange={(e) => setLyricsFormat(e.target.value)}>
-                <option value="EMBEDDED">Embedded</option>
-                <option value="LRC">LRC sidecar</option>
-                <option value="BOTH">Both</option>
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-xs text-zinc-500 uppercase">Worker limit (0 = auto)</span>
-              <input className="input mt-1" type="number" min={0} value={workerLimit} onChange={(e) => setWorkerLimit(Number(e.target.value))} />
-            </label>
-            <button className="btn-primary" onClick={save}>
-              <Save className="h-4 w-4" /> Save
+      <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Library</div>
+        <label className="block">
+          <span className="text-xs text-zinc-500 uppercase">Music folder</span>
+          <div className="flex gap-2 mt-1">
+            <input className="input" value={musicFolder} onChange={(e) => setMusicFolder(e.target.value)} placeholder="F:\Music" />
+            <button className="btn-ghost" onClick={pickNative} title="Native folder picker (desktop)">
+              <FolderOpen className="h-4 w-4" />
             </button>
           </div>
+        </label>
+        <label className="block">
+          <span className="text-xs text-zinc-500 uppercase">Lyrics format</span>
+          <select className="input mt-1" value={lyricsFormat} onChange={(e) => setLyricsFormat(e.target.value)}>
+            <option value="EMBEDDED">Embedded</option>
+            <option value="LRC">LRC sidecar</option>
+            <option value="BOTH">Both</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-xs text-zinc-500 uppercase">Worker limit (0 = auto)</span>
+          <input className="input mt-1" type="number" min={0} value={workerLimit} onChange={(e) => setWorkerLimit(Number(e.target.value))} />
+        </label>
+      </div>
 
-          <details className="bg-card rounded-lg border border-border p-4">
-            <summary className="text-sm font-semibold cursor-pointer">Raw config (advanced)</summary>
-            <pre className="mt-2 text-xs text-zinc-400 overflow-auto max-h-80">{JSON.stringify(config, null, 2)}</pre>
-          </details>
-        </>
-      )}
+      <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">File naming (Picard-style script)</div>
+        <textarea
+          className="input font-mono text-xs min-h-[110px]"
+          value={namingScript}
+          onChange={(e) => setNamingScript(e.target.value)}
+          spellCheck={false}
+        />
+        <div className="text-[11px] text-zinc-600 leading-relaxed">
+          Variables: <code>%albumartist% %musicbrainz_albumartistid% %releasetype% %originaldate% %date% %album% %releasecountry% %media% %catalognumber% %discnumber% %tracknumber% %title%</code> ·
+          Functions: <code>$if(a,b,c) $left(s,n) $num(s,n) $lower $upper $replace</code> · <code>/</code> creates folders.
+          Applied from the album page or the bulk selection toolbar.
+        </div>
+        <div className="flex items-center gap-4 flex-wrap">
+          <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={shortFolderNames}
+              onChange={(e) => setShortFolderNames(e.target.checked)}
+              className="accent-violet-500"
+            />
+            Shorter folder names (truncate MusicBrainz IDs to 8 chars)
+          </label>
+          <button className="btn-ghost !py-1 text-xs" onClick={() => setNamingScript(DEFAULT_NAMING_SCRIPT)}>
+            <RotateCcw className="h-3.5 w-3.5" /> Reset to default
+          </button>
+        </div>
+      </div>
+
+      <button className="btn-primary" onClick={save}>
+        <Save className="h-4 w-4" /> Save
+      </button>
+
+      <details className="bg-card rounded-lg border border-border p-4">
+        <summary className="text-sm font-semibold cursor-pointer">Raw config (advanced)</summary>
+        <pre className="mt-2 text-xs text-zinc-400 overflow-auto max-h-80">{JSON.stringify(config, null, 2)}</pre>
+      </details>
     </div>
   );
 }

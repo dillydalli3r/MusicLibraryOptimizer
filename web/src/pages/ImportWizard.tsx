@@ -325,25 +325,60 @@ export default function ImportWizard() {
   // library payload, but fall back to the matched suggestions — the library
   // only contains the exact album path, while matching scans the folder
   // directly (nested/multi-album structures).
+  // Third fallback: direct folder scan — always reflects what's on disk.
+  const [scannedTracks, setScannedTracks] = useState<Track[]>([]);
+  useEffect(() => {
+    setScannedTracks([]);
+    if (trackList.length || suggestions.length || !albumPath) return;
+    let cancelled = false;
+    api.scanTracks(albumPath)
+      .then((r) => {
+        if (cancelled) return;
+        setScannedTracks(
+          r.tracks.map((t) => ({
+            path: t.path,
+            file: t.file,
+            issues: [],
+            values: {},
+            audit: null,
+            log_grade: null,
+            lyrics_embedded: false,
+            lyrics_lrc: false,
+            unreadable: false,
+            tech: t.tech ?? {},
+            tags: t.tags ?? {},
+            grade_pass: false,
+            lyrics_present: false,
+          })) as Track[]
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [albumPath, trackList.length, suggestions.length]);
+
   const stepTracks: Track[] = useMemo(() => {
     if (trackList.length) return trackList;
-    if (!suggestions.length) return [];
-    return suggestions.map((s) => ({
-      path: s.local,
-      file: s.file,
-      issues: [],
-      values: {},
-      audit: null,
-      log_grade: null,
-      lyrics_embedded: false,
-      lyrics_lrc: false,
-      unreadable: false,
-      tech: {},
-      tags: {},
-      grade_pass: false,
-      lyrics_present: false,
-    }));
-  }, [trackList, suggestions]);
+    if (suggestions.length) {
+      return suggestions.map((s) => ({
+        path: s.local,
+        file: s.file,
+        issues: [],
+        values: {},
+        audit: null,
+        log_grade: null,
+        lyrics_embedded: false,
+        lyrics_lrc: false,
+        unreadable: false,
+        tech: {},
+        tags: {},
+        grade_pass: false,
+        lyrics_present: false,
+      }));
+    }
+    return scannedTracks;
+  }, [trackList, suggestions, scannedTracks]);
 
   // ---- per-disc grouping helpers (shared by Match and Genres steps) ----
   const suggByPath = useMemo(() => new Map(suggestions.map((s) => [s.local, s])), [suggestions]);
@@ -725,14 +760,14 @@ export default function ImportWizard() {
   const trackArtist = (p: string) => {
     const rt = suggByPath.get(p)?.release_track;
     if (rt?.artist_credit) return rt.artist_credit;
-    const t = trackList.find((x) => x.path === p);
-    return t?.tags.ARTIST ?? "";
+    const t = trackList.find((x) => x.path === p) ?? stepTracks.find((x) => x.path === p);
+    return t?.tags?.ARTIST ?? "";
   };
   const trackTitle = (p: string) => {
     const rt = suggByPath.get(p)?.release_track;
     if (rt?.title) return rt.title;
-    const t = trackList.find((x) => x.path === p);
-    return t?.tags.TITLE ?? defaultTrackName(p);
+    const t = trackList.find((x) => x.path === p) ?? stepTracks.find((x) => x.path === p);
+    return t?.tags?.TITLE ?? defaultTrackName(p);
   };
   const trackDuration = (p: string): number | undefined => {
     const t = trackList.find((x) => x.path === p) ?? stepTracks.find((x) => x.path === p);

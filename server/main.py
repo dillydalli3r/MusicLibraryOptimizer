@@ -655,6 +655,58 @@ def mb_search_artists(q: str = Query(..., min_length=1), limit: int = 5):
 
 
 @app.post("/api/mb/match")
+def _scan_album_tracks(album_dir):
+    """Recursively list audio files in an album folder with tags + tech info."""
+    from mlo.audio import AudioFile
+    tracks = []
+    for root, dirs, files in os.walk(album_dir):
+        for f in sorted(files):
+            if not is_audio_file(f):
+                continue
+            path = os.path.join(root, f)
+            af = AudioFile(path)
+            tags = {}
+            tech = {}
+            duration = None
+            if af.audio is not None:
+                for t in ("TITLE", "ARTIST", "ALBUM", "ALBUMARTIST", "GENRE", "DATE",
+                          "TRACKNUMBER", "DISCNUMBER", "MEDIA", "MUSICBRAINZ_ALBUMID",
+                          "MUSICBRAINZ_ALBUMARTISTID", "RELEASETYPE", "ORIGINALDATE",
+                          "RELEASECOUNTRY", "CATALOGNUMBER"):
+                    tags[t] = af.get_tag(t)
+                info = af.audio.info
+                if info is not None:
+                    duration = float(getattr(info, "length", 0) or 0)
+                    tech = {
+                        "length": round(duration, 3),
+                        "bitrate": getattr(info, "bitrate", None),
+                        "sample_rate": getattr(info, "sample_rate", None),
+                        "bits_per_sample": getattr(info, "bits_per_sample", None),
+                    }
+            tn = tags.get("TRACKNUMBER")
+            dn = tags.get("DISCNUMBER")
+            try:
+                tn = int(str(tn).split("/")[0])
+            except (TypeError, ValueError):
+                tn = None
+            try:
+                dn = int(str(dn).split("/")[0])
+            except (TypeError, ValueError):
+                dn = None
+            tracks.append({
+                "path": path.replace("\\", "/"),
+                "file": os.path.relpath(path, album_dir).replace("\\", "/"),
+                "tracknumber": tn,
+                "discnumber": dn,
+                "title": tags.get("TITLE"),
+                "artist": tags.get("ARTIST"),
+                "duration": duration,
+                "tags": tags,
+                "tech": tech,
+            })
+    return tracks
+
+
 def mb_match(req: MatchRequest):
     """Suggest release track/disc matches for local files in an album."""
     album_dir = os.path.normpath(req.album_path)
@@ -669,39 +721,10 @@ def mb_match(req: MatchRequest):
         raise HTTPException(502, f"MusicBrainz lookup failed: {e}")
 
     from mlo.audio import AudioFile
-    local_tracks = []
-    # Recursive: libraries often nest the album folder inside a folder of the
-    # same name (or multi-album containers), so walk subdirectories.
-    for root, dirs, files in os.walk(album_dir):
-        for f in sorted(files):
-            if not is_audio_file(f):
-                continue
-            path = os.path.join(root, f)
-            af = AudioFile(path)
-            tags = {}
-            if af.audio is not None:
-                for t in ("TRACKNUMBER", "DISCNUMBER", "TITLE"):
-                    tags[t] = af.get_tag(t)
-            tn = tags.get("TRACKNUMBER")
-            dn = tags.get("DISCNUMBER")
-            try:
-                tn = int(str(tn).split("/")[0])
-            except (TypeError, ValueError):
-                tn = None
-            try:
-                dn = int(str(dn).split("/")[0])
-            except (TypeError, ValueError):
-                dn = None
-            info = af.audio.info if af.audio is not None else None
-            duration = float(info.length) if info is not None and hasattr(info, "length") else None
-            local_tracks.append({
-                "path": path.replace("\\", "/"),
-                "file": os.path.relpath(path, album_dir).replace("\\", "/"),
-                "tracknumber": tn,
-                "discnumber": dn,
-                "title": tags.get("TITLE"),
-                "duration": duration,
-            })
+    local_tracks = _scan_album_tracks(album_dir)
+    for lt in local_tracks:
+        lt.pop("tags", None)
+        lt.pop("tech", None)
     return {"release": release, "suggestions": intg.match_tracks(local_tracks, release)}
 
 
@@ -831,6 +854,175 @@ def album_remove(req: AlbumRemove):
         n += 1
     shutil.move(p, dest)
     return {"ok": True, "trash": dest.replace("\\", "/")}
+
+
+@app.get("/api/album/scan-tracks")
+def album_scan_tracks(path: str = Query(...)):
+    """Direct folder scan: audio files with tags (independent of the library)."""
+    p = os.path.normpath(path)
+    if not os.path.isdir(p):
+        raise HTTPException(404, "folder not found")
+    return {"path": p.replace("\\", "/"), "tracks": _scan_album_tracks(p)}
+
+
+class OrganizeRequest(BaseModel):
+    paths: List[str]
+    dry_run: bool = False
+
+
+@app.post("/api/organize")
+def organize(req: OrganizeRequest):
+    """Rename/move albums according to the configured naming script.
+
+    For each album: evaluate the script per track, move the audio files,
+    move same-stem sidecars (.lrc/.cue/...) next to their track, move
+    leftover album files (cover art etc.) to the new album root, and prune
+    emptied folders. Nothing leaves the music folder.
+    """
+    import shutil
+    from server.naming import DEFAULT_NAMING_SCRIPT, eval_script, track_variables
+
+    cfg = load_config()
+    folder = cfg.get("music_folder") or ""
+    if not folder or not os.path.isdir(folder):
+        raise HTTPException(400, "music_folder not set or not found")
+    script = (cfg.get("naming_script") or "").strip() or DEFAULT_NAMING_SCRIPT
+    shorter = bool(cfg.get("short_folder_names", False))
+
+    results = []
+    for album_dir in req.paths:
+        p = os.path.normpath(album_dir)
+        if not os.path.isdir(p):
+            results.append({"path": album_dir, "error": "album not found"})
+            continue
+        if not os.path.abspath(p).lower().startswith(os.path.abspath(folder).lower()):
+            results.append({"path": album_dir, "error": "album outside music folder"})
+            continue
+        tracks = _scan_album_tracks(p)
+        if not tracks:
+            results.append({"path": album_dir, "error": "no audio files found"})
+            continue
+
+        # album-level tags from the first tagged track
+        meta_tags = next((t["tags"] for t in tracks if t["tags"].get("TITLE") or t["tags"].get("ALBUM")), tracks[0]["tags"])
+        release_type = meta_tags.get("RELEASETYPE")
+        if not release_type and meta_tags.get("MUSICBRAINZ_ALBUMID"):
+            try:
+                rel = intg.release_lookup(meta_tags["MUSICBRAINZ_ALBUMID"])
+                release_type = rel.get("release_type")
+            except Exception:
+                release_type = None
+
+        moves = []  # (src, dst)
+        new_root = None
+        errors = []
+        for t in tracks:
+            vars_ = track_variables(t["tags"], release_type=release_type)
+            rel = eval_script(script, vars_, shorter_ids=shorter)
+            if not rel:
+                errors.append(f"{t['file']}: script evaluated to empty path")
+                continue
+            dst = os.path.normpath(os.path.join(folder, rel))
+            if not os.path.abspath(dst).lower().startswith(os.path.abspath(folder).lower()):
+                errors.append(f"{t['file']}: destination outside music folder")
+                continue
+            src = os.path.normpath(t["path"])
+            if os.path.normcase(src) == os.path.normcase(dst):
+                continue
+            stem, ext = os.path.splitext(dst)
+            n = 2
+            while os.path.exists(dst) and os.path.normcase(dst) != os.path.normcase(src):
+                dst = f"{stem} ({n}){ext}"
+                n += 1
+            moves.append((src, dst))
+            if new_root is None:
+                new_root = os.path.dirname(dst)
+
+        if new_root is None:
+            results.append({"path": album_dir, "error": "nothing to move (already organized?)", "errors": errors})
+            continue
+
+        # companion sidecars: same stem as an audio file, different extension
+        sidecar_moves = []
+        for src, dst in moves:
+            sdir, sname = os.path.split(src)
+            sstem = os.path.splitext(sname)[0].lower()
+            ddir, dname = os.path.split(dst)
+            dstem = os.path.splitext(dname)[0]
+            try:
+                for f in os.listdir(sdir):
+                    fpath = os.path.join(sdir, f)
+                    fstem, fext = os.path.splitext(f)
+                    if f.lower() == sname.lower() or os.path.isdir(fpath):
+                        continue
+                    if fstem.lower() == sstem and fext.lower() not in (".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".wav", ".aac"):
+                        sidecar_moves.append((fpath, os.path.join(ddir, dstem + fext)))
+            except OSError:
+                pass
+
+        if req.dry_run:
+            results.append({
+                "path": album_dir,
+                "dry_run": True,
+                "album_root": new_root.replace("\\", "/"),
+                "moves": [{"from": s.replace("\\", "/"), "to": d.replace("\\", "/")} for s, d in moves],
+                "sidecars": [{"from": s.replace("\\", "/"), "to": d.replace("\\", "/")} for s, d in sidecar_moves],
+                "errors": errors,
+            })
+            continue
+
+        moved = 0
+        for src, dst in moves + sidecar_moves:
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+                moved += 1
+            except Exception as e:
+                errors.append(f"{os.path.basename(src)}: {e}")
+
+        # leftovers (cover art, logs, anything else) -> new album root
+        leftovers = 0
+        for root, dirs, files in os.walk(p):
+            for f in list(files):
+                fpath = os.path.join(root, f)
+                if not os.path.exists(fpath):
+                    continue
+                dst = os.path.join(new_root, f)
+                n = 2
+                while os.path.exists(dst):
+                    base, ext = os.path.splitext(f)
+                    dst = os.path.join(new_root, f"{base} ({n}){ext}")
+                    n += 1
+                try:
+                    os.makedirs(new_root, exist_ok=True)
+                    shutil.move(fpath, dst)
+                    leftovers += 1
+                except Exception as e:
+                    errors.append(f"{f}: {e}")
+
+        # prune emptied folders (up to music_folder)
+        pruned = 0
+        cursor = p
+        while os.path.abspath(cursor).lower() != os.path.abspath(folder).lower():
+            try:
+                if os.listdir(cursor):
+                    break
+                os.rmdir(cursor)
+                pruned += 1
+                cursor = os.path.dirname(cursor)
+            except OSError:
+                break
+
+        results.append({
+            "path": album_dir,
+            "ok": True,
+            "moved": moved,
+            "leftovers": leftovers,
+            "album_root": new_root.replace("\\", "/"),
+            "pruned": pruned,
+            "errors": errors,
+        })
+    return {"results": results}
 
 
 @app.post("/api/import/upload")

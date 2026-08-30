@@ -112,11 +112,17 @@ def release_lookup(mbid):
         {"name": ac.get("name", ""), "mbid": ac["artist"].get("id")}
         for ac in data.get("artist-credit", []) if "artist" in ac
     ]
+    rg_obj = data.get("release-group") or {}
+    primary = (rg_obj.get("primary-type") or "").lower()
+    secondary = [s.lower() for s in (rg_obj.get("secondary-types") or [])]
+    release_type = "+".join([primary] + secondary) if primary else ""
+
     return {
         "id": data.get("id"),
         "title": data.get("title"),
         "date": (data.get("date") or ""),
         "release_group_id": (data.get("release-group") or {}).get("id"),
+        "release_type": release_type,
         "artists": release_artists,
         "genres": _genres(data),
         "media": tracks,

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Search, FolderOpen, ListPlus, Play, Disc3, Trash2, ChevronRight, ChevronDown, Columns3, Wand2,
+  Search, FolderOpen, ListPlus, Play, Disc3, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync,
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
@@ -249,6 +249,25 @@ export default function LibraryPage() {
     }
   };
 
+  const organizeSelection = async () => {
+    if (!selectionAlbumDirs.length) {
+      toast("Select albums or artists to organize");
+      return;
+    }
+    if (!window.confirm(`Organize ${selectionAlbumDirs.length} album(s) with the naming script from Settings?\nFiles are MOVED into the scripted folder structure.`)) return;
+    try {
+      const r = await api.organize(selectionAlbumDirs);
+      const moved = r.results.reduce((n: number, x: any) => n + (x.moved ?? 0), 0);
+      const errs = r.results.filter((x: any) => x.error);
+      if (errs.length) toast(`Organized ${moved} file(s) — ${errs.length} album(s) had errors`);
+      else toast(`Organized ${moved} file(s)`);
+      clearSelection();
+      qc.invalidateQueries({ queryKey: ["library"] });
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
   const playSelection = () => {
     const out: { path: string; file: string; albumPath: string; artist?: string }[] = [];
     for (const al of sortedAlbums)
@@ -436,6 +455,14 @@ export default function LibraryPage() {
               <Trash2 className="h-3.5 w-3.5" /> Remove
             </button>
             <ScriptsDropdown onRun={runScriptsOnSelection} />
+            <button
+              className="btn-ghost !py-1 text-xs"
+              onClick={organizeSelection}
+              disabled={removing === "batch" || !selectionAlbumDirs.length}
+              title="Apply the naming script from Settings"
+            >
+              <FolderSync className="h-3.5 w-3.5" /> Organize
+            </button>
             <button className="btn-ghost !py-1 text-xs" onClick={clearSelection}>
               Clear
             </button>

@@ -51,6 +51,18 @@ export const api = {
       undefined,
       8000
     ),
+  scanTracks: (path: string) =>
+    json<{ path: string; tracks: any[] }>(
+      `${API}/album/scan-tracks?path=${encodeURIComponent(path)}`,
+      undefined,
+      30000
+    ),
+  organize: (paths: string[], dryRun = false) =>
+    json<{ results: any[] }>(`${API}/organize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths, dry_run: dryRun }),
+    }),
 
   streamUrl: (path: string) => `${API}/stream?path=${encodeURIComponent(path)}`,
   tags: (path: string) => json<any>(`${API}/tags?path=${encodeURIComponent(path)}`),

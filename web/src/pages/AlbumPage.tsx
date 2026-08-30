@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ExternalLink, Play, Wand2, Trash2 } from "lucide-react";
+import { ExternalLink, Play, Wand2, Trash2, FolderSync } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
 import { SortHeader, sortRows, toggleSort, type SortState } from "../lib/sort.tsx";
@@ -39,6 +39,23 @@ export default function AlbumPage() {
     try {
       await api.removeAlbum(data.path);
       toast("Album moved to trash");
+      qc.invalidateQueries({ queryKey: ["library"] });
+      navigate("/");
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
+  const organizeAlbum = async () => {
+    if (!window.confirm("Organize this album with the naming script from Settings?\nFiles are MOVED into the scripted folder structure.")) return;
+    try {
+      const r = await api.organize([data.path]);
+      const res = r.results[0];
+      if (res.error) {
+        toast(`Organize failed: ${res.error}`);
+        return;
+      }
+      toast(`Organized — ${res.moved} file(s) moved, ${res.leftovers} sidecar(s)`);
       qc.invalidateQueries({ queryKey: ["library"] });
       navigate("/");
     } catch (e) {
@@ -95,6 +112,9 @@ export default function AlbumPage() {
           </button>
           <button className="btn-ghost" onClick={() => navigate(`/import?album=${encodeURIComponent(data.path)}`)}>
             <Wand2 className="h-4 w-4" /> Import & tag
+          </button>
+          <button className="btn-ghost" onClick={organizeAlbum} title="Apply the naming script from Settings">
+            <FolderSync className="h-4 w-4" /> Organize
           </button>
           <button className="btn-danger" onClick={removeAlbum}>
             <Trash2 className="h-4 w-4" /> Remove
