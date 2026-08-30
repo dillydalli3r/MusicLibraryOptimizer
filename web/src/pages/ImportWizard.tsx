@@ -779,6 +779,7 @@ export default function ImportWizard() {
     setBusy(true);
     let done = 0;
     let skipped = 0;
+    let missing = 0;
     try {
       for (const t of stepTracks) {
         if (instrumental[t.path] === "1") continue;
@@ -794,17 +795,20 @@ export default function ImportWizard() {
           if (lrc) {
             setLyricsDrafts((d) => ({ ...d, [t.path]: lrc }));
             done++;
+          } else {
+            missing++;
           }
         } catch {
-          /* per-track skip */
+          missing++;
         }
+        await new Promise((r) => setTimeout(r, 350)); // gentle pacing for LRCLIB
       }
       if (done) {
-        toast(`Imported lyrics for ${done} track(s)`);
+        toast(`Imported lyrics for ${done} track(s)${missing ? ` — ${missing} not found on LRCLIB` : ""}`);
       } else if (skipped) {
         toast("No artist/title available for some tracks — matching the MusicBrainz release first improves lyrics results");
       } else {
-        toast("No lyrics found on LRCLIB — matching the MusicBrainz release first improves results");
+        toast("No lyrics found on LRCLIB for these tracks (some songs genuinely have none)");
       }
     } finally {
       setBusy(false);
@@ -835,6 +839,14 @@ export default function ImportWizard() {
   };
 
   // ---------------- Step 5: advisory ----------------
+  const applyAdvisoryToAll = (v: string) => {
+    setAdvisory((a) => {
+      const next = { ...a };
+      for (const t of stepTracks) next[t.path] = v;
+      return next;
+    });
+  };
+
   const saveAdvisory = async () => {
     setBusy(true);
     try {
@@ -1363,6 +1375,19 @@ export default function ImportWizard() {
       {step === 5 && (
         <div className="space-y-3">
           <div className="text-sm text-zinc-400">Set iTunes advisory per track: <b className="text-zinc-200">0</b> unrated/clean, <b className="text-zinc-200">1</b> explicit, <b className="text-zinc-200">2</b> safe edited version.</div>
+          <div className="flex items-center gap-2 bg-card rounded-lg border border-border px-3 py-2 flex-wrap">
+            <span className="text-xs font-semibold text-zinc-400">Apply to all tracks:</span>
+            {["0", "1", "2"].map((v) => (
+              <button
+                key={v}
+                onClick={() => applyAdvisoryToAll(v)}
+                className="btn-ghost !py-1 text-xs"
+                title={`Set every track to ${v === "0" ? "clean" : v === "1" ? "explicit" : "safe"}`}
+              >
+                {v === "0" ? "0 · clean" : v === "1" ? "1 · explicit" : "2 · safe"}
+              </button>
+            ))}
+          </div>
           {stepTracks.map((t) => (
             <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
               <span className="flex-1 truncate text-sm">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>

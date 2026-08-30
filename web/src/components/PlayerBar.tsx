@@ -15,23 +15,29 @@ export default function PlayerBar() {
 
   const current = queue[index] ?? null;
 
+  // Reload + play whenever the queue index changes (keyed on index, not the
+  // path — duplicate paths in the queue must still skip).
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !current) return;
-    audio.src = api.streamUrl(current.path);
+    const track = queue[index];
+    if (!audio || !track) return;
+    audio.src = api.streamUrl(track.path);
     audio.play().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.path]);
+  }, [index]);
 
   const step = (dir: 1 | -1) => {
-    if (!queue.length) return;
+    const n = queue.length;
+    if (!n) return;
+    let next: number;
     if (shuffle) {
-      let n = Math.floor(Math.random() * queue.length);
-      if (queue.length > 1) while (n === index) n = Math.floor(Math.random() * queue.length);
-      setIndex(n);
-      return;
+      next = Math.floor(Math.random() * n);
+      if (n > 1) while (next === index) next = Math.floor(Math.random() * n);
+    } else {
+      next = (index + dir + n) % n;
     }
-    setIndex((index + dir + queue.length) % queue.length);
+    setIndex(next);
+    setPlaying(queue[next]?.path ?? null);
   };
 
   useEffect(() => {

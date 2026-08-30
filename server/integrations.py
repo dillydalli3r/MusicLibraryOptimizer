@@ -277,6 +277,26 @@ def _similarity(a, b):
 # LRCLIB
 # --------------------------------------------------------------------------- #
 _LRCLIB_HEADERS = {"User-Agent": USER_AGENT}
+_lrclib_last = 0.0
+_lrclib_lock = threading.Lock()
+
+
+def _lrclib_get(endpoint, params, timeout=15, retries=3):
+    """Rate-throttled LRCLIB GET with retry on 429/5xx (they throttle IPs)."""
+    global _lrclib_last
+    for attempt in range(retries):
+        with _lrclib_lock:
+            elapsed = time.time() - _lrclib_last
+            if elapsed < 0.4:
+                time.sleep(0.4 - elapsed)
+            r = httpx.get(f"{LRCLIB_BASE}/{endpoint}", params=params,
+                          headers=_LRCLIB_HEADERS, timeout=timeout)
+            _lrclib_last = time.time()
+        if r.status_code in (429, 500, 502, 503, 504) and attempt < retries - 1:
+            time.sleep(2.0 * (attempt + 1))
+            continue
+        return r
+    return r
 
 
 def lrclib_search(artist, track, album=None, duration=None):
@@ -285,9 +305,11 @@ def lrclib_search(artist, track, album=None, duration=None):
         params["album_name"] = album
     if duration:
         params["duration"] = duration
-    r = httpx.get(f"{LRCLIB_BASE}/search", params=params, headers=_LRCLIB_HEADERS, timeout=15)
+    r = _lrclib_get("search", params)
     if r.status_code == 200:
         return r.json()
+    if r.status_code in (400, 404):
+        return []
     raise httpx.HTTPStatusError(f"lrclib search {r.status_code}", request=r.request, response=r)
 
 
@@ -295,27 +317,29 @@ def lrclib_get(artist, track, album=None, duration=None):
     """Exact-match lyrics lookup with a search fallback.
 
     Falls back to /search (preferring synced lyrics, then closest duration)
-    when the exact /get returns 404.
+    when the exact /get comes back empty; 400/404 are treated as not-found.
     """
     params = {"artist_name": artist, "track_name": track}
     if album:
         params["album_name"] = album
     if duration:
         params["duration"] = duration
-    r = httpx.get(f"{LRCLIB_BASE}/get", params=params, headers=_LRCLIB_HEADERS, timeout=15)
+    r = _lrclib_get("get", params)
     if r.status_code == 200:
         return r.json()
-    if r.status_code == 404:
-        try:
-            hits = lrclib_search(artist, track, album, duration)
-        except Exception:
-            hits = []
-        if isinstance(hits, list) and hits:
-            synced = [h for h in hits if h.get("syncedLyrics")]
-            pool = synced or hits
-            if duration:
-                pool = sorted(pool, key=lambda h: abs(int(h.get("duration") or 0) - int(duration)))
-            return pool[0]
+    if r.status_code in (400, 404):
+        # retry the search without the album filter — it can hurt matches
+        for album_filter in (None, album):
+            try:
+                hits = lrclib_search(artist, track, album_filter, duration)
+            except Exception:
+                hits = []
+            if isinstance(hits, list) and hits:
+                synced = [h for h in hits if h.get("syncedLyrics")]
+                pool = synced or hits
+                if duration:
+                    pool = sorted(pool, key=lambda h: abs(int(h.get("duration") or 0) - int(duration)))
+                return pool[0]
         return None
     raise httpx.HTTPStatusError(f"lrclib get {r.status_code}", request=r.request, response=r)
 
