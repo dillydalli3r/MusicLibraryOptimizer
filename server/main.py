@@ -654,7 +654,6 @@ def mb_search_artists(q: str = Query(..., min_length=1), limit: int = 5):
         raise HTTPException(502, f"MusicBrainz search failed: {e}")
 
 
-@app.post("/api/mb/match")
 def _scan_album_tracks(album_dir):
     """Recursively list audio files in an album folder with tags + tech info."""
     from mlo.audio import AudioFile
@@ -707,6 +706,7 @@ def _scan_album_tracks(album_dir):
     return tracks
 
 
+@app.post("/api/mb/match")
 def mb_match(req: MatchRequest):
     """Suggest release track/disc matches for local files in an album."""
     album_dir = os.path.normpath(req.album_path)
