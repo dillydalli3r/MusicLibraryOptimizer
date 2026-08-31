@@ -3,38 +3,89 @@ import { CloudDownload, Play, Square, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 
-export interface LrcLine {
-  ts: string; // [mm:ss.xx]
+export interface LrcWord {
   time: number; // seconds
   text: string;
 }
 
+export interface LrcLine {
+  ts: string; // [mm:ss.xx]
+  time: number; // seconds
+  text: string;
+  words?: LrcWord[]; // ELRC inline word-level timestamps <mm:ss.xx>
+}
+
+const META_RE = /\[(?:ar|ti|al|by|re|ve|length|offset):[^\]]*\]/gi;
+const TIME_RE = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+const WORD_RE = /<(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?>/g;
+
+function tsToTime(mm: string, ss: string, frac?: string): number {
+  const f = (frac ?? "0").padEnd(2, "0").slice(0, 2);
+  return parseInt(mm, 10) * 60 + parseInt(ss, 10) + parseInt(f, 10) / 100;
+}
+
+export function fmtTs(t: number, decimals = 2): string {
+  const mm = Math.floor(t / 60);
+  const ss = Math.floor(t % 60);
+  const frac = Math.round((t - Math.floor(t)) * 10 ** decimals);
+  const fracStr = String(frac).padStart(decimals, "0");
+  return `[${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}.${fracStr}]`;
+}
+
 export function parseLrc(lrc: string): LrcLine[] {
-  const re = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+  let offsetMs = 0;
+  const off = lrc.match(/\[offset:\s*([+-]?\d+)\s*\]/i);
+  if (off) offsetMs = parseInt(off[1], 10) || 0;
   const lines: LrcLine[] = [];
   for (const raw of lrc.split(/\r?\n/)) {
-    const matches = [...raw.matchAll(re)];
-    if (!matches.length) continue;
-    const text = raw.replace(re, "").trim();
-    for (const m of matches) {
-      const mm = parseInt(m[1], 10);
-      const ss = parseInt(m[2], 10);
-      const frac = (m[3] ?? "0").padEnd(2, "0").slice(0, 2);
-      const time = mm * 60 + ss + parseInt(frac, 10) / 100;
-      lines.push({ ts: `[${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}.${frac}]`, time, text });
+    // drop metadata tags like [ti:...] / [ar:...] (never lyric content)
+    const cleaned = raw.replace(META_RE, "");
+    const times = [...cleaned.matchAll(TIME_RE)];
+    if (!times.length) continue;
+    const body = cleaned.replace(TIME_RE, "");
+    // ELRC word-level timestamps: <mm:ss.xx>word <mm:ss.xx>word2
+    const parts = body.split(WORD_RE);
+    const words: LrcWord[] = [];
+    for (let k = 0; 4 * k + 3 < parts.length; k++) {
+      const mm = parts[4 * k + 1];
+      const ss = parts[4 * k + 2];
+      if (mm === undefined || ss === undefined) break;
+      words.push({ time: tsToTime(mm, ss, parts[4 * k + 3]), text: parts[4 * k + 4] ?? "" });
+    }
+    const text = words.length
+      ? words.map((w) => w.text).join("").replace(/\s+/g, " ").trim()
+      : body.trim();
+    if (!text && !words.length) continue;
+    for (const m of times) {
+      const time = tsToTime(m[1], m[2], m[3]) + offsetMs / 1000;
+      lines.push({
+        ts: fmtTs(time, 2),
+        time,
+        text,
+        words: words.length ? words.map((w) => ({ ...w, time: w.time + offsetMs / 1000 })) : undefined,
+      });
     }
   }
-  return lines.sort((a, b) => a.time - b.time);
+  // sort + drop exact duplicates (LRCLIB occasionally repeats lines)
+  lines.sort((a, b) => a.time - b.time);
+  const seen = new Set<string>();
+  return lines.filter((l) => {
+    const key = `${l.time.toFixed(3)}|${l.text}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function serializeLrc(lines: LrcLine[], decimals = 2): string {
   return lines
     .map((l) => {
-      const mm = Math.floor(l.time / 60);
-      const ss = Math.floor(l.time % 60);
-      const frac = Math.round((l.time - Math.floor(l.time)) * 10 ** decimals);
-      const fracStr = String(frac).padStart(decimals, "0");
-      return `[${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}.${fracStr}]${l.text}`;
+      const ts = fmtTs(l.time, decimals);
+      if (l.words?.length) {
+        const body = l.words.map((w) => `<${fmtTs(w.time, decimals)}>${w.text}`).join("");
+        return `${ts} ${body}`;
+      }
+      return `${ts}${l.text}`;
     })
     .join("\n");
 }
@@ -63,6 +114,7 @@ export default function LyricsViewer({
   const [raw, setRaw] = useState(initialLyrics);
   const [playing, setPlaying] = useState(false);
   const [playTime, setPlayTime] = useState(0);
+  const [dur, setDur] = useState(duration ?? 0);
   const [selIdx, setSelIdx] = useState(0);
   const [loading, setLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -95,7 +147,9 @@ export default function LyricsViewer({
   const updateLine = (i: number, patch: Partial<LrcLine>) => {
     setLines((ls) => {
       const next = [...ls];
-      next[i] = { ...next[i], ...patch };
+      // manual text edits take over from ELRC word timestamps
+      if ("text" in patch) next[i] = { ...next[i], ...patch, words: undefined };
+      else next[i] = { ...next[i], ...patch };
       emit(next);
       return next;
     });
@@ -141,9 +195,10 @@ export default function LyricsViewer({
     setPlayTime(time);
   };
 
-  // Spacebar stamps the current playback time into the selected line and
-  // advances to the next line. Typing spaces inside lyric text inputs is
-  // never intercepted.
+  // Spacebar stamps the current playback time. While playing, the line being
+  // sung (activeLine, which follows playback) is stamped and the selection
+  // advances to the next line — so the editor always moves forward in sync
+  // with the song. When paused, the selected line is stamped instead.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code !== "Space") return;
@@ -166,19 +221,21 @@ export default function LyricsViewer({
         return;
       }
       const t = Math.max(0, audio.currentTime - 0.05);
+      const target = activeLine >= 0 ? activeLine : selIdx;
       setLines((ls) => {
         const next = [...ls];
-        const target = Math.min(selIdx, Math.max(0, next.length - 1));
-        if (next[target]) next[target] = { ...next[target], time: t };
+        const idx = Math.min(target, Math.max(0, next.length - 1));
+        if (next[idx]) next[idx] = { ...next[idx], time: t, ts: fmtTs(t, decimals) };
         emit(next);
         return next;
       });
       setSelIdx((s) => Math.min(s + 1, Math.max(0, lines.length - 1)));
+      setPlayTime(t);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, selIdx, lines.length]);
+  }, [playing, selIdx, lines.length, activeLine]);
 
   const importFromLrclib = async () => {
     if (!artist || !track) {
@@ -198,7 +255,12 @@ export default function LyricsViewer({
       setRaw(lrc);
       emit(parsed);
       setSelIdx(0);
-      toast("Imported from LRCLIB");
+      const wordCount = parsed.reduce((n, l) => n + (l.words?.length ? 1 : 0), 0);
+      toast(
+        wordCount
+          ? `Imported from LRCLIB — ${parsed.length} lines, ${wordCount} word-synced (ELRC)`
+          : `Imported from LRCLIB — ${parsed.length} lines`,
+      );
     } catch (e) {
       toast(String(e));
     } finally {
@@ -206,8 +268,14 @@ export default function LyricsViewer({
     }
   };
 
+  const fmtDur = (t: number) => {
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
+  };
+
   return (
-    <div className="bg-card rounded-lg border border-border p-4 flex flex-col">
+    <div data-lrc-editor className="bg-card rounded-lg border border-border p-4 flex flex-col">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-1.5">
         <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Lyrics</div>
         <div className="flex gap-1.5">
@@ -233,6 +301,7 @@ export default function LyricsViewer({
       <audio
         ref={audioRef}
         onTimeUpdate={(e) => setPlayTime(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setDur(e.currentTarget.duration || 0)}
         onEnded={() => setPlaying(false)}
         className="hidden"
       />
@@ -292,13 +361,28 @@ export default function LyricsViewer({
                   updateLine(i, { ts: e.target.value, time });
                 }}
               />
-              <input
-                data-lyrictext
-                className="flex-1 bg-transparent text-sm text-zinc-200 outline-none border border-transparent focus:border-accent rounded px-1 py-0.5"
-                value={l.text}
-                placeholder="Lyric line…"
-                onChange={(e) => updateLine(i, { text: e.target.value })}
-              />
+              {i === activeLine && playing && l.words?.length ? (
+                <span className="flex-1 text-sm text-zinc-300 px-1">
+                  {l.words.map((w, wi) => {
+                    const isActive =
+                      w.time <= playTime + 0.04 &&
+                      (wi === l.words!.length - 1 || (l.words![wi + 1].time > playTime + 0.04));
+                    return (
+                      <span key={wi} className={isActive ? "text-accent font-semibold" : ""}>
+                        {w.text}
+                      </span>
+                    );
+                  })}
+                </span>
+              ) : (
+                <input
+                  data-lyrictext
+                  className="flex-1 bg-transparent text-sm text-zinc-200 outline-none border border-transparent focus:border-accent rounded px-1 py-0.5"
+                  value={l.text}
+                  placeholder="Lyric line…"
+                  onChange={(e) => updateLine(i, { text: e.target.value })}
+                />
+              )}
               <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity shrink-0">
                 <button className="text-zinc-500 hover:text-accent-soft" onClick={() => addLine(i)} title="Add line after">
                   <Plus className="h-3.5 w-3.5" />
@@ -311,9 +395,24 @@ export default function LyricsViewer({
           ))}
         </div>
       )}
-      <div className="mt-2 text-[10px] text-zinc-600">
-        Play → click a line → Space stamps its time and advances · ▶ seeks to a line · timestamps format to {decimals}{" "}
-        decimals on save
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-[10px] font-mono text-zinc-500 w-10 text-right shrink-0">{fmtDur(playTime)}</span>
+        <input
+          type="range"
+          min={0}
+          max={dur || 0}
+          step={0.05}
+          value={Math.min(playTime, dur || 0)}
+          onChange={(e) => seekTo(Number(e.target.value))}
+          className="flex-1 accent-violet-500"
+          title="Seek within the track"
+        />
+        <span className="text-[10px] font-mono text-zinc-500 w-10 shrink-0">{fmtDur(dur || 0)}</span>
+      </div>
+      <div className="mt-1.5 text-[10px] text-zinc-600">
+        Play → Space stamps the <b>line being sung</b> and advances · ELRC word-level tags{" "}
+        <span className="font-mono">{"<mm:ss.xx>word"}</span> highlight word-by-word · ▶ seeks to a line · timestamps
+        format to {decimals} decimals on save
       </div>
     </div>
   );

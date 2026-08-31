@@ -12,6 +12,7 @@ export default function PlayerBar() {
   const [shuffle, setShuffle] = useState(false);
   const [loop, setLoop] = useState(false);
   const [vol, setVol] = useState(1);
+  const [speed, setSpeed] = useState(1);
 
   const current = queue[index] ?? null;
 
@@ -22,9 +23,62 @@ export default function PlayerBar() {
     const track = queue[index];
     if (!audio || !track) return;
     audio.src = api.streamUrl(track.path);
+    audio.playbackRate = speed; // fresh <src> resets the rate
     audio.play().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio) audio.playbackRate = speed;
+  }, [speed]);
+
+  // Keyboard shortcuts: Space pause/play · [ / ] speed down/up · 0 reset ·
+  // ← / → seek ±5s. Never hijacks typing or the lyrics editor (which owns
+  // Space while stamping).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable) return;
+      const code = e.code;
+      if (code === "Space") {
+        if (document.querySelector("[data-lrc-editor]")) return;
+        e.preventDefault();
+        const a = audioRef.current;
+        if (!a || !current) return;
+        if (playing) {
+          a.pause();
+          setPlaying(null);
+        } else {
+          a.play().catch(() => {});
+          setPlaying(current.path);
+        }
+      } else if (code === "BracketLeft") {
+        setSpeed((s) => Math.max(0.5, Math.round((s - 0.25) * 100) / 100));
+      } else if (code === "BracketRight") {
+        setSpeed((s) => Math.min(2, Math.round((s + 0.25) * 100) / 100));
+      } else if (code === "Digit0") {
+        setSpeed(1);
+      } else if (code === "ArrowLeft") {
+        const a = audioRef.current;
+        if (a) a.currentTime = Math.max(0, a.currentTime - 5);
+      } else if (code === "ArrowRight") {
+        const a = audioRef.current;
+        if (a && a.duration) a.currentTime = Math.min(a.duration, a.currentTime + 5);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [playing, current]);
+
+  const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
+  const cycleSpeed = () =>
+    setSpeed((s) => {
+      const i = SPEEDS.indexOf(s);
+      return SPEEDS[(i + 1) % SPEEDS.length];
+    });
+  const fmtSpeed = (s: number) =>
+    s === 1 ? "1×" : `${s.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}×`;
 
   const step = (dir: 1 | -1) => {
     const n = queue.length;
@@ -109,10 +163,17 @@ export default function PlayerBar() {
         <button className={`p-2 rounded hover:bg-raise ${loop ? "text-accent" : "text-zinc-500"}`} onClick={() => setLoop(!loop)} title="Repeat one">
           <Repeat className="h-4 w-4" />
         </button>
+        <button
+          className="p-1.5 rounded hover:bg-raise text-xs font-mono text-zinc-400 min-w-[46px]"
+          onClick={cycleSpeed}
+          title="Playback speed — [ slower · ] faster · 0 reset to 1×"
+        >
+          {fmtSpeed(speed)}
+        </button>
       </div>
 
-      <div className="hidden md:flex items-center gap-2 text-xs text-zinc-400 w-[420px]">
-        <span className="w-10 text-right">{fmtDuration(time)}</span>
+      <div className="flex items-center gap-2 text-xs text-zinc-400 flex-1 max-w-[460px]">
+        <span className="w-10 text-right shrink-0">{fmtDuration(time)}</span>
         <input
           type="range"
           min={0}
@@ -126,8 +187,9 @@ export default function PlayerBar() {
             setTime(Number(e.target.value));
           }}
           className="flex-1 accent-violet-500"
+          title="Seek — ← / → nudge 5s"
         />
-        <span className="w-10">{fmtDuration(duration)}</span>
+        <span className="w-10 shrink-0">{fmtDuration(duration)}</span>
         <Volume2 className="h-4 w-4 text-zinc-500" />
         <input
           type="range"

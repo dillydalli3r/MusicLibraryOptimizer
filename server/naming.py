@@ -80,12 +80,28 @@ def _func(name, args, variables):
                 return a[1]
             return a[2] if len(a) >= 3 else ""
         return ""
+    if name == "eq" and len(a) >= 2:
+        return "1" if a[0] == a[1] else ""
+    if name == "ne" and len(a) >= 2:
+        return "1" if a[0] != a[1] else ""
+    if name == "not" and a:
+        return "" if (a[0].strip() and a[0].strip() != "0") else "1"
+    if name == "and" and len(a) >= 2:
+        return a[0] if not (a[0].strip() and a[0].strip() != "0") else a[1]
+    if name == "or" and len(a) >= 2:
+        return a[0] if (a[0].strip() and a[0].strip() != "0") else a[1]
     if name == "left" and len(a) >= 2:
         try:
             n = int(float(a[1]))
         except ValueError:
             n = 0
         return a[0][:n]
+    if name == "right" and len(a) >= 2:
+        try:
+            n = int(float(a[1]))
+        except ValueError:
+            n = 0
+        return a[0][-n:]
     if name == "num" and len(a) >= 2:
         try:
             n = int(float(a[1]))
@@ -154,6 +170,17 @@ def eval_script(script, variables, shorter_ids=False):
     return sanitize_path(text)
 
 
+def _first_part(value):
+    """'1/1' (disc 1 of 1) → '1' — multi-value tags must not inject '/'
+    into paths where the sanitizer treats '/' as a folder separator."""
+    s = str(value or "")
+    if "/" in s:
+        head = s.split("/")[0]
+        if head.isdigit():
+            return head
+    return s
+
+
 def track_variables(tags, release_type=None):
     """Build the variable map for one track from its tag dict."""
     tags = tags or {}
@@ -169,12 +196,15 @@ def track_variables(tags, release_type=None):
         "originaldate": tags.get("ORIGINALDATE") or "",
         "date": date,
         "year": (date.split("-")[0] if date else ""),
+        "originalyear": (tags.get("ORIGINALDATE") or "").split("-")[0],
         "album": tags.get("ALBUM") or "",
         "releasecountry": tags.get("RELEASECOUNTRY") or "",
         "media": tags.get("MEDIA") or "",
         "catalognumber": tags.get("CATALOGNUMBER") or "",
-        "discnumber": tags.get("DISCNUMBER") or "1",
-        "tracknumber": tags.get("TRACKNUMBER") or "",
+        "discnumber": _first_part(tags.get("DISCNUMBER")) or "1",
+        "disctotal": _first_part(tags.get("DISCTOTAL") or tags.get("TOTALDISCS")) or "",
+        "tracknumber": _first_part(tags.get("TRACKNUMBER")) or "",
+        "tracktotal": _first_part(tags.get("TRACKTOTAL") or tags.get("TOTALTRACKS")) or "",
         "title": tags.get("TITLE") or "",
         "genre": tags.get("GENRE") or "",
     }
