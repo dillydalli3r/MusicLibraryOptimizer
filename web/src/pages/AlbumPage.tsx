@@ -187,11 +187,13 @@ export default function AlbumPage() {
                 <td className="td text-zinc-500">{tr.tags.TRACKNUMBER ?? "—"}</td>
                 <td className="td">
                   <div className="flex items-center gap-2">
-                    <CoverImg
-                      albumPath={data.path}
-                      coverFile={tr.cover_file ?? null}
-                      wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
-                    />
+                    {tr.cover_file && (
+                      <CoverImg
+                        albumPath={data.path}
+                        coverFile={tr.cover_file}
+                        wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
+                      />
+                    )}
                     <div className="min-w-0">
                       <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
                         {tr.tags.TITLE ?? tr.file}

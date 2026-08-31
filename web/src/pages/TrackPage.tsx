@@ -208,7 +208,9 @@ export default function TrackPage() {
 
         <div className="space-y-4">
           <div className="flex items-center gap-3">
-            <CoverImg albumPath={albumDir} coverFile={track?.cover_file ?? null} wrapperClass="h-16 w-16 rounded-lg bg-raise border border-border overflow-hidden shrink-0" />
+            {track?.cover_file && (
+              <CoverImg albumPath={albumDir} coverFile={track.cover_file} wrapperClass="h-16 w-16 rounded-lg bg-raise border border-border overflow-hidden shrink-0" />
+            )}
             <div className="text-xs text-zinc-500">
               {track?.cover_file ? `Per-track cover: ${track.cover_file}` : "No per-track cover — add an image named like this track next to it."}
             </div>

@@ -812,11 +812,13 @@ function AlbumRowGroup({
                     <td className="td text-zinc-600">{t.tags.TRACKNUMBER ?? "—"}</td>
                     <td className="td max-w-[300px]">
                       <div className="flex items-center gap-2">
-                        <CoverImg
-                          albumPath={album.path}
-                          coverFile={t.cover_file ?? null}
-                          wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
-                        />
+                        {t.cover_file && (
+                          <CoverImg
+                            albumPath={album.path}
+                            coverFile={t.cover_file}
+                            wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
+                          />
+                        )}
                         <div className="min-w-0">
                           <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
                             {t.tags.TITLE ?? t.file}
