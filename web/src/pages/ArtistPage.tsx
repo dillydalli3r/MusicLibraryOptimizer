@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { Music2, ExternalLink } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, ScoreRing } from "../components/Badges";
+import CoverImg from "../components/CoverImg";
 import { useStore } from "../store";
 
 export default function ArtistPage() {
@@ -48,13 +49,18 @@ export default function ArtistPage() {
       <div className="space-y-3">
         {data.albums.map((al) => (
           <div key={al.path} className="bg-card rounded-lg border border-border p-4 flex items-center gap-4">
+            <CoverImg
+              albumPath={al.path}
+              coverFile={al.cover_file}
+              wrapperClass="h-14 w-14 rounded-md bg-raise border border-border overflow-hidden shrink-0"
+            />
             <ScoreRing pct={al.grade_pct} size={40} />
             <div className="flex-1 min-w-0">
               <Link to={`/album/${encodeURIComponent(al.path)}`} className="font-semibold hover:text-accent-soft">
                 {al.meta?.ALBUM ?? al.path.split("/").pop()}
               </Link>
               <div className="text-xs text-zinc-500 mt-0.5">
-                {al.meta?.DATE ?? "—"} · {al.media} · {al.track_count} tracks · cover {al.cover_file ?? "missing"}
+                {al.meta?.DATE ?? "—"} · {al.media} · {al.track_count} tracks
               </div>
             </div>
             <AuditBadge audit={al.audit_summary} />
