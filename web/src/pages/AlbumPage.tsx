@@ -186,9 +186,23 @@ export default function AlbumPage() {
               <tr key={tr.path} className="table-row">
                 <td className="td text-zinc-500">{tr.tags.TRACKNUMBER ?? "—"}</td>
                 <td className="td">
-                  <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft">
-                    {tr.tags.TITLE ?? tr.file}
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <CoverImg
+                      albumPath={data.path}
+                      coverFile={tr.cover_file ?? null}
+                      wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
+                        {tr.tags.TITLE ?? tr.file}
+                      </Link>
+                      {!!tr.issues?.length && (
+                        <div className="text-[9px] text-red-400" title={tr.issues.join("\n")}>
+                          {tr.issues.length} check{tr.issues.length === 1 ? "" : "s"} failed
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </td>
                 <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : null} size="sm" /></td>
                 <td className="td"><AuditBadge audit={tr.audit} size="sm" /></td>

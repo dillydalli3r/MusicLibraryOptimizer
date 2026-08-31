@@ -10,6 +10,7 @@ import os
 from mlo.stats import _find_albums
 from mlo.grader import _grade_album
 from mlo.audio import AudioFile
+from mlo.paths import get_sidecar_cover_path
 from server import tagcache
 
 # Tags surfaced per track for sorting/filtering on the frontend.
@@ -42,12 +43,18 @@ def _read_tags(path):
 
 
 def _enrich_track(tr, album_dir):
-    """Add path, tech info and tags to a grader track dict (cached reads)."""
+    """Add path, tech info, tags and per-track sidecar cover (cached reads)."""
     p = os.path.join(album_dir, tr["file"])
     tr["path"] = p.replace("\\", "/")
     tags, tech = tagcache.read_track(p, TRACK_TAGS)
     tr["tags"] = tags
     tr["tech"] = tech
+    # Per-track sidecar cover: "01 - Song.jpg" next to "01 - Song.flac"
+    try:
+        sc = get_sidecar_cover_path(album_dir, tr["file"])
+        tr["cover_file"] = os.path.basename(sc) if sc else None
+    except Exception:
+        tr["cover_file"] = None
     # Per-track audit/grade convenience fields for sorting.
     tr["grade_pass"] = not tr.get("issues")
     tr["lyrics_present"] = bool(tr.get("lyrics_embedded") or tr.get("lyrics_lrc"))

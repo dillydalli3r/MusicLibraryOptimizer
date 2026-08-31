@@ -164,6 +164,7 @@ export default function ImportWizard() {
   const [source, setSource] = useState<"web" | "native">("web");
   const [nativeRoot, setNativeRoot] = useState<string | null>(null);
   const [albums, setAlbums] = useState<AlbumGroup[]>([]);
+  const [mediaType, setMediaType] = useState<string>(""); // "" unsure | "CD" | "Digital Media"
   const [uploaded, setUploaded] = useState<{ name: string; path: string }[]>([]);
   const [albumIndex, setAlbumIndex] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -679,7 +680,7 @@ export default function ImportWizard() {
     try {
       const writes: Record<string, Record<string, string | null>> = {};
       const albumArtist = (release?.artists ?? []).map((a) => a.name).join(", ") || null;
-      const mediumFormat = release?.medium_formats?.[0] || null;
+      const mediumFormat = release?.medium_formats?.[0] || mediaType || null;
       for (const s of suggestions) {
         const t = s.release_track;
         writes[s.local] = {
@@ -953,6 +954,7 @@ const finish = async () => {
   };
 
   const totalFiles = albums.reduce((n, g) => n + g.files.length, 0);
+  const hasRipFiles = albums.some((g) => g.files.some((f) => /\.(cue|log|accurip)$/i.test(f.relPath)));
   const canNext =
     step === 0
       ? totalFiles > 0 && albums.length > 0 && albums.every((g) => g.name.trim() || g.files.length === 0)
@@ -1067,10 +1069,27 @@ const finish = async () => {
               value={albumName}
               onChange={(e) => setAlbumName(e.target.value)}
             />
+            <label className="flex items-center gap-1.5 text-xs text-zinc-400">
+              Media type:
+              <select className="input !w-auto !py-1 text-xs" value={mediaType} onChange={(e) => setMediaType(e.target.value)}>
+                <option value="">Not sure</option>
+                <option value="CD">CD rip</option>
+                <option value="Digital Media">Digital Media</option>
+              </select>
+            </label>
             {source === "native" && (
               <span className="text-xs text-zinc-500">importing from disk — files move into your library</span>
             )}
           </div>
+
+          {(mediaType === "" || mediaType === "CD") && totalFiles > 0 && (
+            <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+              {mediaType === "CD"
+                ? "CD rip: include the .cue, .log and .accurip files alongside the audio so grading and audit can verify the rip."
+                : "CD rip? If these files came from a CD, set Media type to “CD rip” and include the .cue and .log files (drop them here or browse them alongside the audio)."}
+              {!hasRipFiles && " No .cue/.log files detected in the current selection."}
+            </div>
+          )}
 
           {totalFiles > 0 && (
             <div className="space-y-3">

@@ -1124,7 +1124,9 @@ def organize(req: OrganizeRequest):
             results.append({"path": album_dir, "error": "nothing to move (already organized?)", "errors": errors})
             continue
 
-        # companion sidecars: same stem as an audio file, different extension
+        # companion sidecars: same stem as an audio file, different extension.
+        # Matches exact stems ("04 - Psycho.jpg") AND extended stems
+        # ("04 - Psycho.cover.jpg" / "04 - Psycho - front.jpg").
         sidecar_moves = []
         for src, dst in moves:
             sdir, sname = os.path.split(src)
@@ -1137,8 +1139,10 @@ def organize(req: OrganizeRequest):
                     fstem, fext = os.path.splitext(f)
                     if f.lower() == sname.lower() or os.path.isdir(fpath):
                         continue
-                    if fstem.lower() == sstem and fext.lower() not in (".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".wav", ".aac"):
-                        sidecar_moves.append((fpath, os.path.join(ddir, dstem + fext)))
+                    if fext.lower() not in (".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".wav", ".aac"):
+                        fstem_l = fstem.lower()
+                        if fstem_l == sstem or fstem_l.startswith(sstem + "."):
+                            sidecar_moves.append((fpath, os.path.join(ddir, dstem + fext)))
             except OSError:
                 pass
 

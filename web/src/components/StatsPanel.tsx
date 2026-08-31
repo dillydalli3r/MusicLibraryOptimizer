@@ -1,13 +1,16 @@
 import { BarChart3, X } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import type { TrackTags } from "../types";
 
 interface StatTrack {
+  path?: string;
   grade_pass?: boolean;
   audit?: string | null;
   log_grade?: string | number | null;
   lyrics_present?: boolean;
   tags?: TrackTags;
+  issues?: string[];
 }
 
 interface StatAlbum {
@@ -171,6 +174,57 @@ export default function StatsPanel({
               {!s.genres.length && <span className="text-xs text-zinc-600">no genre tags</span>}
             </div>
           </div>
+
+          {tracks.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">
+                Per-track breakdown ({tracks.length})
+              </div>
+              <div className="rounded-md border border-border overflow-hidden max-h-64 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-panel/60">
+                    <tr>
+                      <th className="th">Title</th>
+                      <th className="th">Grade</th>
+                      <th className="th">Checks</th>
+                      <th className="th">Audit</th>
+                      <th className="th">Log</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tracks.map((t, i) => {
+                      const name = t.tags?.TITLE ?? `Track ${i + 1}`;
+                      const cell = (inner: ReactNode) =>
+                        t.path ? (
+                          <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft">
+                            {inner}
+                          </Link>
+                        ) : (
+                          <span>{inner}</span>
+                        );
+                      return (
+                        <tr key={t.path ?? i} className={`table-row ${t.issues?.length ? "bg-red-950/20" : ""}`}>
+                          <td className="td truncate max-w-[220px]">{cell(name)}</td>
+                          <td className="td">{cell(t.grade_pass ? <span className="text-emerald-400">PASS</span> : <span className="text-red-400">FAIL</span>)}</td>
+                          <td className="td text-zinc-500">{cell(t.issues?.length ?? 0)}</td>
+                          <td className="td">
+                            {cell(
+                              t.audit === "REAL" ? <span className="text-emerald-400">REAL</span>
+                              : t.audit === "FAKE" ? <span className="text-red-400">FAKE</span>
+                              : t.audit === "MIX" ? <span className="text-amber-400">MIX</span>
+                              : <span className="text-zinc-600">—</span>
+                            )}
+                          </td>
+                          <td className="td text-zinc-500">{cell(t.log_grade != null && t.log_grade !== "" ? `${t.log_grade}/100` : "—")}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="text-[10px] text-zinc-600 mt-1">Click a row to open the track page with full check details.</div>
+            </div>
+          )}
         </div>
       </div>
     </div>

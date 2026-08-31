@@ -69,6 +69,7 @@ export interface Track {
   tags: TrackTags;
   grade_pass: boolean;
   lyrics_present: boolean;
+  cover_file?: string | null;
 }
 
 export interface Album {

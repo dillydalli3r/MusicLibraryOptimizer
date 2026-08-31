@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
-import { ExternalLink, Save, Play, Disc3, ListPlus } from "lucide-react";
+import { ExternalLink, Save, Play, Disc3, ListPlus, ShieldCheck } from "lucide-react";
 import { api } from "../api";
 import { useStore, toast } from "../store";
 import { AuditBadge, GradeBadge, IssueList } from "../components/Badges";
+import CoverImg from "../components/CoverImg";
 import LyricsViewer from "../components/LyricsViewer";
 
 export default function TrackPage() {
@@ -17,6 +18,16 @@ export default function TrackPage() {
     queryKey: ["track-tags", decoded],
     queryFn: () => api.tags(decoded),
   });
+
+  // Full grading/audit context from the album payload (issues, checks,
+  // audit verdict, log grade, AccurateRip status, tech).
+  const albumDir = decoded.split("/").slice(0, -1).join("/");
+  const { data: album } = useQuery({
+    queryKey: ["album", albumDir],
+    queryFn: () => api.album(albumDir),
+    retry: false,
+  });
+  const track = (album?.tracks ?? []).find((t) => t.path === decoded);
 
   const [tags, setTags] = useState<Record<string, string>>({});
   const [lyrics, setLyrics] = useState("");
@@ -36,8 +47,12 @@ export default function TrackPage() {
   if (error) return <div className="p-8 text-zinc-500">Track not found: {String(error)}</div>;
   if (isLoading || !data) return <div className="p-8 text-zinc-500">Loading track…</div>;
 
-  const albumDir = decoded.split("/").slice(0, -1).join("/");
-  const tech = data.tech ?? {};
+  const tech = track?.tech ?? data.tech ?? {};
+  const issues: string[] = track?.issues ?? [];
+  const audit = track?.audit ?? null;
+  const logGrade = track?.log_grade ?? null;
+  const arStatus = track?.accuraterip_status ?? null;
+  const csStatus = track?.checksum_status ?? null;
 
   const save = async () => {
     try {
@@ -94,9 +109,9 @@ export default function TrackPage() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight truncate">{tags.TITLE ?? decoded.split("/").pop()}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <GradeBadge pass={!data.issues?.length} score={data.issues?.length ? 0 : 100} />
-            <AuditBadge audit={data.audit} />
-            <IssueList issues={data.issues ?? []} />
+            <GradeBadge pass={!issues.length} score={issues.length ? 0 : 100} />
+            <AuditBadge audit={audit} />
+            <IssueList issues={issues} />
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
@@ -161,17 +176,53 @@ export default function TrackPage() {
               <div>Channels <span className="text-zinc-200">{tech.channels ?? "—"}</span></div>
             </div>
           </div>
+
+          <div className="bg-card rounded-lg border border-border p-4">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">
+              <ShieldCheck className="h-3.5 w-3.5" /> Grading & AUDIT details
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-sm text-zinc-400">
+              <div>Grade <span className={issues.length ? "text-red-300" : "text-emerald-300"}>{issues.length ? `FAILED (${issues.length} check${issues.length === 1 ? "" : "s"})` : "PASS"}</span></div>
+              <div>AUDIT <span className="text-zinc-200">{audit ?? "not audited"}</span></div>
+              <div>Log score <span className="text-zinc-200">{logGrade != null ? `${logGrade}/100` : "—"}</span></div>
+              <div>AccurateRip <span className="text-zinc-200">{arStatus ?? "—"}</span></div>
+              <div>Checksum <span className="text-zinc-200">{csStatus ?? "—"}</span></div>
+              {["AUDIO_MD5", "INTEGRITY", "LOG_CRC", "REPLAYGAIN_TRACK_GAIN", "DYNAMIC RANGE"].map((k) => (
+                tags[k] ? (
+                  <div key={k}>{k.replace(/_/g, " ")} <span className="text-zinc-200 break-all">{tags[k]}</span></div>
+                ) : null
+              ))}
+            </div>
+            {issues.length > 0 && (
+              <>
+                <div className="text-[10px] text-zinc-500 uppercase tracking-wider mt-3 mb-1">Failed checks</div>
+                <ul className="space-y-1">
+                  {issues.map((iss, i) => (
+                    <li key={i} className="text-xs text-red-300/90 bg-red-950/30 border border-red-900/40 rounded px-2 py-1">{iss}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         </div>
 
-        <LyricsViewer
-                  path={decoded}
-                  initialLyrics={lyrics}
-                  onChange={(v) => { setLyrics(v); setDirty(true); }}
-                  artist={tags.ARTIST}
-                  track={tags.TITLE}
-                  album={tags.ALBUM}
-                  duration={tech.length ? Math.round(tech.length) : undefined}
-                />
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <CoverImg albumPath={albumDir} coverFile={track?.cover_file ?? null} wrapperClass="h-16 w-16 rounded-lg bg-raise border border-border overflow-hidden shrink-0" />
+            <div className="text-xs text-zinc-500">
+              {track?.cover_file ? `Per-track cover: ${track.cover_file}` : "No per-track cover — add an image named like this track next to it."}
+            </div>
+          </div>
+          <LyricsViewer
+            path={decoded}
+            initialLyrics={lyrics}
+            onChange={(v) => { setLyrics(v); setDirty(true); }}
+            artist={tags.ARTIST}
+            track={tags.TITLE}
+            album={tags.ALBUM}
+            duration={tech.length ? Math.round(tech.length) : undefined}
+          />
+        </div>
       </div>
     </div>
   );
