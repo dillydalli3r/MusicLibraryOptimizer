@@ -794,6 +794,7 @@ function AlbumRowGroup({
                 <tr>
                   <th className="th w-8"></th>
                   <th className="th w-10">#</th>
+                  <th className="th w-10"></th>
                   <th className="th">Title</th>
                   <th className="th">Genre</th>
                   <th className="th">Grade</th>
@@ -810,16 +811,17 @@ function AlbumRowGroup({
                       <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
                     </td>
                     <td className="td text-zinc-600">{t.tags.TRACKNUMBER ?? "—"}</td>
+                    <td className="td pr-0">
+                      {t.cover_file && (
+                        <CoverImg
+                          albumPath={album.path}
+                          coverFile={t.cover_file}
+                          wrapperClass="h-8 w-8 rounded bg-raise border border-border overflow-hidden shrink-0"
+                        />
+                      )}
+                    </td>
                     <td className="td max-w-[300px]">
-                      <div className="flex items-center gap-2">
-                        {t.cover_file && (
-                          <CoverImg
-                            albumPath={album.path}
-                            coverFile={t.cover_file}
-                            wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
-                          />
-                        )}
-                        <div className="min-w-0">
+                      <div className="min-w-0">
                           <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
                             {t.tags.TITLE ?? t.file}
                           </Link>
@@ -842,7 +844,6 @@ function AlbumRowGroup({
                             )}
                           </div>
                         </div>
-                      </div>
                     </td>
                     <td className="td text-zinc-500 truncate max-w-[150px]">{t.tags.GENRE ?? "—"}</td>
                     <td className="td"><GradeBadge pass={t.grade_pass} score={t.grade_pass ? 100 : null} size="sm" /></td>
