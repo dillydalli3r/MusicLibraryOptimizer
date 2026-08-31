@@ -18,7 +18,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +31,8 @@ from mlo import stats as stats_mod
 from server import library as lib_mod
 from server import playlists as pl_mod
 from server import integrations as intg
+from server import tagcache
+from mlo.paths import SKIP_DIRS
 
 app = FastAPI(title="MusicLibraryOptimizer API", version="2.0.0")
 
@@ -164,6 +166,23 @@ def set_config(cfg: dict):
 # --------------------------------------------------------------------------- #
 # Library
 # --------------------------------------------------------------------------- #
+def _music_folder(cfg=None):
+    cfg = cfg or load_config()
+    folder = cfg.get("music_folder") or ""
+    if not folder or not os.path.isdir(folder):
+        raise HTTPException(400, "music_folder not set or not found")
+    return folder
+
+
+def _in_music_folder(p, folder):
+    """Path-containment guard shared by every path-taking endpoint."""
+    return os.path.abspath(p).lower().startswith(os.path.abspath(folder).lower())
+
+
+def _skip_names():
+    return {d.lower() for d in SKIP_DIRS}
+
+
 @app.get("/api/library")
 def library():
     """Tag-rich library tree: artists -> albums -> tracks (grade/audit + tags)."""
@@ -186,6 +205,8 @@ def album_mbdetect(path: str = Query(...)):
     p = os.path.normpath(path)
     if not os.path.isdir(p):
         raise HTTPException(404, "album not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "album outside music folder")
     uuid_re = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
     # Recursive: some libraries nest the album folder inside a folder of the
     # same name, so scan subdirectories too. Album tags are uniform across
@@ -193,7 +214,9 @@ def album_mbdetect(path: str = Query(...)):
     # scan instant even on huge folders.
     scanned = 0
     MAX_SCAN = 12
+    skip = _skip_names()
     for root, dirs, files in os.walk(p):
+        dirs[:] = [d for d in dirs if d.lower() not in skip]
         for f in sorted(files):
             if not is_audio_file(f):
                 continue
@@ -227,6 +250,8 @@ def get_album(path: str = Query(...)):
     p = os.path.normpath(path)
     if not os.path.isdir(p):
         raise HTTPException(404, "album not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "album outside music folder")
     res = lib_mod.build_album(p, load_config())
     if res is None:
         raise HTTPException(404, "no audio files")
@@ -238,6 +263,8 @@ def get_artist(path: str = Query(...)):
     p = os.path.normpath(path)
     if not os.path.isdir(p):
         raise HTTPException(404, "artist not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "artist outside music folder")
     cfg = load_config()
     albums = lib_mod._find_albums(p)
     albums_data = []
@@ -273,6 +300,8 @@ def stream(path: str = Query(...)):
     p = os.path.normpath(path)
     if not os.path.isfile(p):
         raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
     ctype = _CTYPES.get(os.path.splitext(p)[1].lower(), "application/octet-stream")
     return FileResponse(p, media_type=ctype, headers={"Accept-Ranges": "bytes"})
 
@@ -283,6 +312,8 @@ def get_tags(path: str = Query(...)):
     p = os.path.normpath(path)
     if not os.path.isfile(p):
         raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
     af = AudioFile(p)
     if af.audio is None:
         raise HTTPException(500, af.error or "unreadable")
@@ -294,7 +325,7 @@ def get_tags(path: str = Query(...)):
     cover = None
     try:
         alb = os.path.dirname(p)
-        for cand in ("cover.jpg", "cover.jpeg", "cover.png", "cover.jxl"):
+        for cand in ("cover.jpg", "cover.jpeg", "cover.png", "cover.jxl", "cover.webp", "cover.bmp"):
             if os.path.isfile(os.path.join(alb, cand)):
                 cover = os.path.join(alb, cand).replace("\\", "/")
                 break
@@ -309,6 +340,8 @@ def set_tags(req: TagsRequest):
     p = os.path.normpath(req.path)
     if not os.path.isfile(p):
         raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
     af = AudioFile(p)
     if af.audio is None:
         raise HTTPException(500, af.error or "unreadable")
@@ -319,12 +352,14 @@ def set_tags(req: TagsRequest):
                 errors.append(f"{k}: {af.error}")
         else:
             if v is None or str(v) == "":
-                af.delete_tag(k)
+                if not af.delete_tag(k):
+                    errors.append(f"{k}: {af.error or 'delete failed'}")
             else:
                 if not af.set_tag(k, str(v)):
-                    errors.append(f"{k}: {af.error}")
+                    errors.append(f"{k}: {af.error or 'write failed'}")
     if errors:
         raise HTTPException(500, "; ".join(errors))
+    tagcache.invalidate_path(p)
     return {"ok": True}
 
 
@@ -339,6 +374,9 @@ def set_tags_batch(req: TagsRequest):
         if not os.path.isfile(fp):
             errors.append(f"{p}: not found")
             continue
+        if not _in_music_folder(fp, _music_folder()):
+            errors.append(f"{p}: outside music folder")
+            continue
         af = AudioFile(fp)
         if af.audio is None:
             errors.append(f"{p}: {af.error or 'unreadable'}")
@@ -346,39 +384,45 @@ def set_tags_batch(req: TagsRequest):
         for k, v in tag_map.items():
             try:
                 if v is None or str(v) == "":
-                    af.delete_tag(k)
+                    if not af.delete_tag(k):
+                        errors.append(f"{p} {k}: {af.error or 'delete failed'}")
                 elif not af.set_tag(k, str(v)):
-                    errors.append(f"{p} {k}: {af.error}")
+                    errors.append(f"{p} {k}: {af.error or 'write failed'}")
             except Exception as e:
                 errors.append(f"{p} {k}: {e}")
         changed += 1
+        tagcache.invalidate_path(fp)
     if errors:
         raise HTTPException(500, "; ".join(errors))
     return {"ok": True, "changed": changed}
 
 
 @app.get("/api/cover")
-def get_cover(album: str = Query(...), file: Optional[str] = Query(None)):
-    """Serve an album's cover art (cover.jpg/jpeg/png/jxl or named file)."""
+def get_cover(request: Request, album: str = Query(...), file: Optional[str] = Query(None),
+              color: int = Query(0)):
+    """Serve an album's cover art, cached with ETag; ?color=1 returns the
+    dominant color instead of the image bytes (UI tinting)."""
     alb = os.path.normpath(album)
     if not os.path.isdir(alb):
         raise HTTPException(404, "album not found")
-    if file:
-        p = os.path.normpath(os.path.join(alb, os.path.basename(file)))
-        if not os.path.isfile(p):
-            raise HTTPException(404, "cover not found")
-    else:
-        p = None
-        for cand in ("cover.jpg", "cover.jpeg", "cover.png", "cover.jxl"):
-            if os.path.isfile(os.path.join(alb, cand)):
-                p = os.path.join(alb, cand)
-                break
-        if p is None:
+    if not _in_music_folder(alb, _music_folder()):
+        raise HTTPException(400, "album outside music folder")
+    if color:
+        c = tagcache.cover_color(alb, file)
+        if c is None:
             raise HTTPException(404, "no cover")
-    ctype = _CTYPES.get(os.path.splitext(p)[1].lower(), "image/jpeg")
-    if ctype.startswith("audio"):
-        ctype = "image/jpeg"
-    return FileResponse(p, media_type=ctype, headers={"Cache-Control": "public, max-age=3600"})
+        return {"color": c, "album": alb.replace("\\", "/")}
+    data, ctype, etag = tagcache.cover_bytes(alb, file)
+    if data is None:
+        raise HTTPException(404, "no cover")
+    from fastapi.responses import Response
+    headers = {"Cache-Control": "public, max-age=3600", "Accept-Ranges": "bytes"}
+    if etag:
+        headers["ETag"] = f'"{etag}"'
+        inm = request.headers.get("if-none-match")
+        if inm and inm.strip('"') == etag:
+            return Response(content=b"", status_code=304, headers=headers)
+    return Response(content=data, media_type=ctype, headers=headers)
 
 
 @app.post("/api/cover")
@@ -386,6 +430,8 @@ async def upload_cover(album: str = Query(...), file: UploadFile = File(...)):
     alb = os.path.normpath(album)
     if not os.path.isdir(alb):
         raise HTTPException(404, "album not found")
+    if not _in_music_folder(alb, _music_folder()):
+        raise HTTPException(400, "album outside music folder")
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in (".jpg", ".jpeg", ".png", ".jxl", ".webp", ".bmp"):
         ext = ".jpg"
@@ -408,6 +454,7 @@ async def upload_cover(album: str = Query(...), file: UploadFile = File(...)):
         except Exception:
             pass
         raise HTTPException(500, str(e))
+    tagcache.invalidate_all()
     return {"ok": True, "path": dest.replace("\\", "/")}
 
 
@@ -471,6 +518,7 @@ def run_scripts(req: RunRequest):
             import traceback
             traceback.print_exc()
             results.append({"id": i, "error": str(e)})
+    tagcache.invalidate_all()
     return {"results": results}
 
 
@@ -656,32 +704,16 @@ def mb_search_artists(q: str = Query(..., min_length=1), limit: int = 5):
 
 def _scan_album_tracks(album_dir):
     """Recursively list audio files in an album folder with tags + tech info."""
-    from mlo.audio import AudioFile
     tracks = []
+    skip = _skip_names()
     for root, dirs, files in os.walk(album_dir):
+        dirs[:] = [d for d in dirs if d.lower() not in skip]
         for f in sorted(files):
             if not is_audio_file(f):
                 continue
             path = os.path.join(root, f)
-            af = AudioFile(path)
-            tags = {}
-            tech = {}
-            duration = None
-            if af.audio is not None:
-                for t in ("TITLE", "ARTIST", "ALBUM", "ALBUMARTIST", "GENRE", "DATE",
-                          "TRACKNUMBER", "DISCNUMBER", "MEDIA", "MUSICBRAINZ_ALBUMID",
-                          "MUSICBRAINZ_ALBUMARTISTID", "RELEASETYPE", "ORIGINALDATE",
-                          "RELEASECOUNTRY", "CATALOGNUMBER"):
-                    tags[t] = af.get_tag(t)
-                info = af.audio.info
-                if info is not None:
-                    duration = float(getattr(info, "length", 0) or 0)
-                    tech = {
-                        "length": round(duration, 3),
-                        "bitrate": getattr(info, "bitrate", None),
-                        "sample_rate": getattr(info, "sample_rate", None),
-                        "bits_per_sample": getattr(info, "bits_per_sample", None),
-                    }
+            tags, tech = tagcache.read_track(path, None)
+            duration = float(tech.get("length") or 0) or None
             tn = tags.get("TRACKNUMBER")
             dn = tags.get("DISCNUMBER")
             try:
@@ -734,10 +766,14 @@ def mb_assign(req: AssignTagsRequest):
     from mlo.audio import AudioFile
     errors = []
     changed = 0
+    folder = _music_folder()
     for p, tag_map in req.tracks.items():
         fp = os.path.normpath(p)
         if not os.path.isfile(fp):
             errors.append(f"{p}: not found")
+            continue
+        if not _in_music_folder(fp, folder):
+            errors.append(f"{p}: outside music folder")
             continue
         af = AudioFile(fp)
         if af.audio is None:
@@ -746,12 +782,14 @@ def mb_assign(req: AssignTagsRequest):
         for k, v in tag_map.items():
             try:
                 if v is None or str(v) == "":
-                    af.delete_tag(k)
+                    if not af.delete_tag(k):
+                        errors.append(f"{p} {k}: {af.error or 'delete failed'}")
                 elif not af.set_tag(k, str(v)):
-                    errors.append(f"{p} {k}: {af.error}")
+                    errors.append(f"{p} {k}: {af.error or 'write failed'}")
             except Exception as e:
                 errors.append(f"{p} {k}: {e}")
         changed += 1
+        tagcache.invalidate_path(fp)
     if errors:
         raise HTTPException(500, "; ".join(errors))
     return {"ok": True, "changed": changed}
@@ -784,19 +822,27 @@ async def lyrics_get(
         raise HTTPException(502, str(e))
 
 
+class LyricsWriteRequest(BaseModel):
+    path: str
+    lrc: str = ""
+    source: str = "lrclib"
+
+
 @app.post("/api/lyrics/write")
-def lyrics_write(path: str = Query(...), lrc: str = "", source: str = "lrclib"):
+def lyrics_write(req: LyricsWriteRequest):
     """Write .lrc sidecar atomically, canonicalized via mlo.lyrics."""
     from mlo.lyrics import _format_for_storage
-    p = os.path.normpath(path)
+    p = os.path.normpath(req.path)
     if not os.path.isfile(p):
         raise HTTPException(404, "audio file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
     lrc_path = os.path.splitext(p)[0] + ".lrc"
     cfg = load_config()
     try:
-        final = _format_for_storage(lrc, cfg, optimize=True, is_for_lrc=True)
+        final = _format_for_storage(req.lrc, cfg, optimize=True, is_for_lrc=True)
     except Exception:
-        final = lrc
+        final = req.lrc
     fd, tmp = tempfile.mkstemp(prefix=".lrc_tmp_", suffix=".lrc", dir=os.path.dirname(p) or ".")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
@@ -813,6 +859,7 @@ def lyrics_write(path: str = Query(...), lrc: str = "", source: str = "lrclib"):
         except Exception:
             pass
         raise HTTPException(500, str(e))
+    tagcache.invalidate_path(lrc_path)
     return {"ok": True, "lrc": lrc_path.replace("\\", "/")}
 
 
@@ -853,6 +900,7 @@ def album_remove(req: AlbumRemove):
         dest = os.path.normpath(os.path.join(trash, f"{name} ({n})"))
         n += 1
     shutil.move(p, dest)
+    tagcache.invalidate_all()
     return {"ok": True, "trash": dest.replace("\\", "/")}
 
 
@@ -862,6 +910,8 @@ def album_scan_tracks(path: str = Query(...)):
     p = os.path.normpath(path)
     if not os.path.isdir(p):
         raise HTTPException(404, "folder not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "folder outside music folder")
     return {"path": p.replace("\\", "/"), "tracks": _scan_album_tracks(p)}
 
 
@@ -1022,6 +1072,7 @@ def organize(req: OrganizeRequest):
             "pruned": pruned,
             "errors": errors,
         })
+    tagcache.invalidate_all()
     return {"results": results}
 
 
@@ -1068,6 +1119,8 @@ def import_scan(path: str = Query(...)):
     p = os.path.normpath(path)
     if not os.path.isdir(p):
         raise HTTPException(404, "folder not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "folder outside music folder")
     out = []
     for root, dirs, files in os.walk(p):
         for f in files:
@@ -1109,7 +1162,10 @@ def import_ingest(source: str = Query(...), target: str = Query(...)):
     try:
         shutil.move(src, dest)
     except OSError:
+        # cross-device: copy then remove the source so the import is a move
         shutil.copytree(src, dest)
+        shutil.rmtree(src, ignore_errors=True)
+    tagcache.invalidate_all()
     return {"ok": True, "path": dest.replace("\\", "/")}
 
 
@@ -1151,6 +1207,7 @@ def import_commit(req: ImportCommit):
         for k, v in tag_map.items():
             if not af.set_tag(k, v):
                 errors.append(f"{p} {k}: {af.error}")
+        tagcache.invalidate_path(os.path.normpath(p))
     if errors:
         raise HTTPException(500, "; ".join(errors))
     return {"ok": True, "changed": len(changes)}

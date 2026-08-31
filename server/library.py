@@ -10,6 +10,7 @@ import os
 from mlo.stats import _find_albums
 from mlo.grader import _grade_album
 from mlo.audio import AudioFile
+from server import tagcache
 
 # Tags surfaced per track for sorting/filtering on the frontend.
 TRACK_TAGS = [
@@ -20,6 +21,8 @@ TRACK_TAGS = [
     "MUSICBRAINZ_ARTISTID", "MUSICBRAINZ_TRACKID",
     "MUSICBRAINZ_RELEASEGROUPID",
     "RATEYOURMUSIC_ALBUM", "RATEYOURMUSIC_TRACK", "RATEYOURMUSIC_ARTIST",
+    "ALBUMARTISTSORT", "ORIGINALDATE", "RELEASETYPE", "RELEASECOUNTRY",
+    "CATALOGNUMBER", "TRACKTOTAL", "DISCTOTAL",
 ]
 
 # Tags read from the first track to represent album-level metadata.
@@ -32,42 +35,19 @@ ALBUM_LEVEL_TAGS = [
 TECH_ATTRS = ("length", "bitrate", "sample_rate", "bits_per_sample", "channels")
 
 
-def _tech_info(af):
-    """Best-effort audio tech info from mutagen StreamInfo."""
-    info = af.audio.info if af.audio is not None else None
-    if info is None:
-        return {}
-    out = {}
-    for attr in TECH_ATTRS:
-        try:
-            v = getattr(info, attr, None)
-            if v is not None:
-                out[attr] = round(float(v), 3) if isinstance(v, (int, float)) else str(v)
-        except Exception:
-            pass
-    return out
-
-
 def _read_tags(path):
     """Read TRACK_TAGS for a file path as a flat dict (None when missing)."""
-    af = AudioFile(path)
-    if af.audio is None:
-        return {}
-    return {t: af.get_tag(t) for t in TRACK_TAGS}
+    tags, _ = tagcache.read_track(path, TRACK_TAGS)
+    return tags
 
 
 def _enrich_track(tr, album_dir):
-    """Add path, tech info and tags to a grader track dict."""
+    """Add path, tech info and tags to a grader track dict (cached reads)."""
     p = os.path.join(album_dir, tr["file"])
     tr["path"] = p.replace("\\", "/")
-    tr["tags"] = {}
-    af = AudioFile(p)
-    if af.audio is not None:
-        tr["tech"] = _tech_info(af)
-        for t in TRACK_TAGS:
-            tr["tags"][t] = af.get_tag(t)
-    else:
-        tr["tech"] = {}
+    tags, tech = tagcache.read_track(p, TRACK_TAGS)
+    tr["tags"] = tags
+    tr["tech"] = tech
     # Per-track audit/grade convenience fields for sorting.
     tr["grade_pass"] = not tr.get("issues")
     tr["lyrics_present"] = bool(tr.get("lyrics_embedded") or tr.get("lyrics_lrc"))
@@ -125,34 +105,44 @@ def build_album(album_dir, cfg):
 
 
 def build_library(cfg, progress=None):
-    """Full library tree with artist/album/track aggregates."""
+    """Full library tree with artist/album/track aggregates (TTL-cached)."""
     folder = cfg.get("music_folder") or ""
     if not folder or not os.path.isdir(folder):
         return {"folder": folder, "artists": [], "error": "music_folder not set or not found"}
 
-    albums = _find_albums(folder)
-    artists = {}
-    for alb in albums:
-        artists.setdefault(os.path.dirname(alb), []).append(alb)
+    cfg_key = (
+        folder,
+        cfg.get("lyrics_format"),
+        cfg.get("worker_limit"),
+        cfg.get("short_folder_names"),
+    )
 
-    result = []
-    total = len(artists)
-    for i, (artist_dir, alb_list) in enumerate(sorted(artists.items())):
-        if progress:
-            progress(i + 1, total, "Scanning library")
-        albums_data = []
-        for alb in sorted(alb_list):
-            try:
-                a = build_album(alb, cfg)
-                if a is not None:
-                    albums_data.append(a)
-            except Exception as e:
-                albums_data.append({"path": alb.replace("\\", "/"), "error": str(e), "tracks": []})
-        agg = _aggregate_albums(albums_data)
-        result.append({
-            "path": artist_dir.replace("\\", "/"),
-            "name": os.path.basename(artist_dir),
-            "albums": albums_data,
-            "aggregate": agg,
-        })
-    return {"folder": folder.replace("\\", "/"), "artists": result}
+    def _build():
+        albums = _find_albums(folder)
+        artists = {}
+        for alb in albums:
+            artists.setdefault(os.path.dirname(alb), []).append(alb)
+
+        result = []
+        total = len(artists)
+        for i, (artist_dir, alb_list) in enumerate(sorted(artists.items())):
+            if progress:
+                progress(i + 1, total, "Scanning library")
+            albums_data = []
+            for alb in sorted(alb_list):
+                try:
+                    a = build_album(alb, cfg)
+                    if a is not None:
+                        albums_data.append(a)
+                except Exception as e:
+                    albums_data.append({"path": alb.replace("\\", "/"), "error": str(e), "tracks": []})
+            agg = _aggregate_albums(albums_data)
+            result.append({
+                "path": artist_dir.replace("\\", "/"),
+                "name": os.path.basename(artist_dir),
+                "albums": albums_data,
+                "aggregate": agg,
+            })
+        return {"folder": folder.replace("\\", "/"), "artists": result}
+
+    return tagcache.get_library(cfg_key, _build)

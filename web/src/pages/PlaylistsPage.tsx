@@ -135,7 +135,7 @@ export default function PlaylistsPage() {
           <div className="bg-card border border-border rounded-xl p-5 w-[560px] max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-semibold mb-3">Smart playlist: {editing.name}</h3>
             <label className="flex items-center gap-2 text-sm text-zinc-400 mb-3">
-              <input type="checkbox" checked={matchAll} onChange={(e) => setMatchAll(e.target.checked)} className="accent-violet-500" />
+              <input type="checkbox" checked={matchAll} onChange={(e) => setMatchAll(e.target.checked)} className="" />
               Match all conditions (AND)
             </label>
             <div className="space-y-2">
@@ -219,7 +219,7 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
           <span className="font-semibold">{playlist.name}</span>
         )}
         {playlist.kind === "smart" && (
-          <span className="chip bg-violet-900/40 text-violet-300 border border-violet-900">SMART</span>
+          <span className="chip bg-accent/10 text-accent-soft border border-accent/25">SMART</span>
         )}
         <span className="text-xs text-zinc-500">{tracks.length} tracks</span>
         <div className="ml-auto flex gap-1.5">

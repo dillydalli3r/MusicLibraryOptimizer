@@ -850,9 +850,19 @@ export default function ImportWizard() {
   const saveAdvisory = async () => {
     setBusy(true);
     try {
+      // Only write tracks the user explicitly changed — untouched tracks keep
+      // their existing ITUNESADVISORY tags instead of being wiped.
       const writes: Record<string, Record<string, string | null>> = {};
       for (const t of stepTracks) {
-        writes[t.path] = { ITUNESADVISORY: advisory[t.path] ?? null };
+        const picked = advisory[t.path];
+        if (picked === undefined) continue;
+        const existing = t.tags?.ITUNESADVISORY ?? undefined;
+        if (picked !== existing) writes[t.path] = { ITUNESADVISORY: picked };
+      }
+      if (!Object.keys(writes).length) {
+        toast("No advisory changes — pick values or use Apply to all");
+        setStep(6);
+        return;
       }
       await api.mbAssign(writes);
       toast("Advisory ratings saved");
@@ -926,7 +936,7 @@ export default function ImportWizard() {
                 i === step
                   ? "bg-accent text-white"
                   : i < step
-                    ? "bg-violet-900/40 text-violet-300 hover:bg-violet-900/60"
+                    ? "bg-accent/10 text-accent-soft hover:bg-accent/20"
                     : "bg-raise text-zinc-500 border border-border"
               }`}
             >
@@ -1153,7 +1163,7 @@ export default function ImportWizard() {
               Detect from tags
             </button>
             {busy && fetchStatus && (
-              <span className="text-xs text-violet-300 animate-pulse flex items-center gap-1.5">
+              <span className="text-xs text-accent-soft animate-pulse flex items-center gap-1.5">
                 {fetchStatus}
               </span>
             )}
@@ -1221,7 +1231,7 @@ export default function ImportWizard() {
               <CloudDownloadIcon /> Import genres from MusicBrainz
             </button>
             {busy && fetchStatus && (
-              <span className="text-xs text-violet-300 animate-pulse">{fetchStatus}</span>
+              <span className="text-xs text-accent-soft animate-pulse">{fetchStatus}</span>
             )}
             <label className="flex items-center gap-1.5 text-xs text-zinc-400 ml-auto">
               Max genres / track
@@ -1281,7 +1291,7 @@ export default function ImportWizard() {
                   <span className="flex-1 truncate text-sm">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
                     {genreList(t.path).map((gen) => (
-                      <span key={gen} className="chip bg-violet-900/40 text-violet-200 border border-violet-800">
+                      <span key={gen} className="chip bg-accent/10 text-accent-soft border border-accent/25">
                         {gen}
                         <button
                           className="hover:text-white transition-colors"
@@ -1342,7 +1352,7 @@ export default function ImportWizard() {
                       type="checkbox"
                       checked={inst === "1"}
                       onChange={(e) => setInstrumental((m) => ({ ...m, [t.path]: e.target.checked ? "1" : "0" }))}
-                      className="accent-violet-500"
+                      className=""
                     />
                     INSTRUMENTAL
                   </label>

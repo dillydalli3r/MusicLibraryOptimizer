@@ -168,15 +168,22 @@ export const api = {
       `${API}/lyrics/get?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}${album ? `&album=${encodeURIComponent(album)}` : ""}${duration ? `&duration=${duration}` : ""}`
     ),
   lyricsWrite: (path: string, lrc: string) =>
-    json<{ ok: boolean; lrc: string }>(
-      `${API}/lyrics/write?path=${encodeURIComponent(path)}&lrc=${encodeURIComponent(lrc)}`,
-      { method: "POST" }
-    ),
+    json<{ ok: boolean; lrc: string }>(`${API}/lyrics/write`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, lrc }),
+    }),
 
   rymValidate: (url: string) => json<{ valid: boolean }>(`${API}/rym/validate?url=${encodeURIComponent(url)}`),
 
   coverUrl: (albumPath: string, coverFile?: string | null) =>
     `${API}/cover?album=${encodeURIComponent(albumPath)}${coverFile ? `&file=${encodeURIComponent(coverFile)}` : ""}`,
+  coverColor: (albumPath: string) =>
+    json<{ color: string; album: string }>(
+      `${API}/cover?album=${encodeURIComponent(albumPath)}&color=1`,
+      undefined,
+      8000
+    ),
 
   importUpload: (targetDir: string, files: { file: File; relPath: string }[]) => {
     const fd = new FormData();

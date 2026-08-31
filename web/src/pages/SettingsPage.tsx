@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Save, RotateCcw } from "lucide-react";
+import { FolderOpen, Save, RotateCcw, Check } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
+import { applyAccent } from "../App";
 
 const DEFAULT_NAMING_SCRIPT =
   "%albumartist% [%musicbrainz_albumartistid%]/$if(%releasetype%,[%releasetype%] ,)$if(%originaldate%,%originaldate% - ,)$if(%date%,%date% - ,)%album% {$if(%releasecountry%,%releasecountry% - )%media%$if(%catalognumber%, - %catalognumber%)}/%discnumber%-$num(%tracknumber%,2) %title%";
+
+const ACCENT_OPTIONS: { id: string; name: string; color: string }[] = [
+  { id: "violet", name: "Violet", color: "#8b5cf6" },
+  { id: "pink", name: "Pink", color: "#ec4899" },
+  { id: "emerald", name: "Emerald", color: "#10b981" },
+  { id: "sky", name: "Sky", color: "#0ea5e9" },
+  { id: "amber", name: "Amber", color: "#f59e0b" },
+  { id: "red", name: "Red", color: "#ef4444" },
+];
 
 export default function SettingsPage() {
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
@@ -15,6 +25,8 @@ export default function SettingsPage() {
   const [workerLimit, setWorkerLimit] = useState(0);
   const [namingScript, setNamingScript] = useState(DEFAULT_NAMING_SCRIPT);
   const [shortFolderNames, setShortFolderNames] = useState(false);
+  const [accent, setAccent] = useState<string>(() => localStorage.getItem("mlo.accent") ?? "violet");
+  const [defaultView, setDefaultView] = useState<string>(() => localStorage.getItem("mlo.defaultView") ?? "albums");
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -26,6 +38,17 @@ export default function SettingsPage() {
     setShortFolderNames(!!config.short_folder_names);
     setLoaded(true);
   }, [config, loaded]);
+
+  const pickAccent = (id: string) => {
+    setAccent(id);
+    localStorage.setItem("mlo.accent", id);
+    applyAccent(id);
+  };
+
+  const pickDefaultView = (v: string) => {
+    setDefaultView(v);
+    localStorage.setItem("mlo.defaultView", v);
+  };
 
   const pickNative = async () => {
     if (!(window as any).__TAURI_INTERNALS__) {
@@ -62,6 +85,37 @@ export default function SettingsPage() {
   return (
     <div className="p-6 max-w-3xl space-y-5">
       <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+
+      <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Appearance</div>
+        <div>
+          <span className="text-xs text-zinc-500 uppercase">Accent color</span>
+          <div className="flex gap-2 mt-1.5">
+            {ACCENT_OPTIONS.map((a) => (
+              <button
+                key={a.id}
+                title={a.name}
+                onClick={() => pickAccent(a.id)}
+                className="h-8 w-8 rounded-full border-2 flex items-center justify-center transition-transform hover:scale-110"
+                style={{
+                  backgroundColor: a.color,
+                  borderColor: accent === a.id ? "#fff" : "transparent",
+                }}
+              >
+                {accent === a.id && <Check className="h-4 w-4 text-black" />}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="block">
+          <span className="text-xs text-zinc-500 uppercase">Default library view</span>
+          <select className="input mt-1" value={defaultView} onChange={(e) => pickDefaultView(e.target.value)}>
+            <option value="albums">Albums</option>
+            <option value="artists">Artists</option>
+            <option value="tracks">Tracks</option>
+          </select>
+        </label>
+      </div>
 
       <div className="bg-card rounded-lg border border-border p-4 space-y-3">
         <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Library</div>
@@ -107,7 +161,7 @@ export default function SettingsPage() {
               type="checkbox"
               checked={shortFolderNames}
               onChange={(e) => setShortFolderNames(e.target.checked)}
-              className="accent-violet-500"
+              className=""
             />
             Shorter folder names (truncate MusicBrainz IDs to 8 chars)
           </label>

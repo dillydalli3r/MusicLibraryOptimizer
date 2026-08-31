@@ -5,7 +5,7 @@ export function ProgressBar({ progress }: { progress: { done: number; total: num
     <div className="shrink-0 border-b border-border bg-panel px-4 py-1.5 flex items-center gap-3">
       <div className="h-1.5 flex-1 rounded-full bg-raise overflow-hidden">
         <div
-          className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-300"
+          className="h-full bg-gradient-to-r from-accent to-indigo-500 transition-all duration-300"
           style={{ width: `${pct}%` }}
         />
       </div>

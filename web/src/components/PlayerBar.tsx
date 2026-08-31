@@ -5,7 +5,7 @@ import { useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
 
 export default function PlayerBar() {
-  const { queue, index, setIndex, playing, setPlaying } = useStore();
+  const { queue, index, setIndex, playing, setPlaying, queueId } = useStore();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -16,17 +16,19 @@ export default function PlayerBar() {
 
   const current = queue[index] ?? null;
 
-  // Reload + play whenever the queue index changes (keyed on index, not the
-  // path — duplicate paths in the queue must still skip).
+  // Reload + play whenever the queue identity or index changes (keyed on
+  // queueId so a fresh queue at the same index still reloads).
   useEffect(() => {
     const audio = audioRef.current;
     const track = queue[index];
     if (!audio || !track) return;
+    setTime(0);
+    setDuration(0);
     audio.src = api.streamUrl(track.path);
     audio.playbackRate = speed; // fresh <src> resets the rate
     audio.play().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index]);
+  }, [index, queueId]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -186,7 +188,7 @@ export default function PlayerBar() {
             a.currentTime = Number(e.target.value);
             setTime(Number(e.target.value));
           }}
-          className="flex-1 accent-violet-500"
+          className="flex-1 "
           title="Seek — ← / → nudge 5s"
         />
         <span className="w-10 shrink-0">{fmtDuration(duration)}</span>
@@ -202,7 +204,7 @@ export default function PlayerBar() {
             setVol(v);
             if (audioRef.current) audioRef.current.volume = v;
           }}
-          className="w-20 accent-violet-500"
+          className="w-20 "
         />
       </div>
     </div>

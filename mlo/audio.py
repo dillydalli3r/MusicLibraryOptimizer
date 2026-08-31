@@ -22,6 +22,15 @@ TAG_MAP = {
     "ALBUMARTIST": {
         "flac": "ALBUMARTIST", "mp3": ("TPE2", None), "mp4": "aART",
     },
+    "ALBUMARTISTSORT": {
+        "flac": "ALBUMARTISTSORT", "mp3": ("TSO2", None), "mp4": "soaa",
+    },
+    "ARTISTSORT": {
+        "flac": "ARTISTSORT", "mp3": ("TSOP", None), "mp4": "soar",
+    },
+    "TITLESORT": {
+        "flac": "TITLESORT", "mp3": ("TSOT", None), "mp4": "sonm",
+    },
     "TRACKNUMBER": {
         "flac": "TRACKNUMBER", "mp3": ("TRCK", None), "mp4": "trkn",
     },
@@ -30,6 +39,46 @@ TAG_MAP = {
     },
     "DATE": {
         "flac": "DATE", "mp3": ("TDRC", None), "mp4": "\xa9day",
+    },
+    "ORIGINALDATE": {
+        "flac": "ORIGINALDATE", "mp3": ("TDRL", None),
+        "mp4": ("freeform", "com.apple.iTunes", "originaldate"),
+    },
+    "ORIGINALYEAR": {
+        "flac": "ORIGINALYEAR", "mp3": ("TXXX", "ORIGINALYEAR"),
+        "mp4": ("freeform", "com.apple.iTunes", "ORIGINALYEAR"),
+    },
+    "RELEASETYPE": {
+        "flac": "RELEASETYPE", "mp3": ("TXXX", "RELEASETYPE"),
+        "mp4": ("freeform", "com.apple.iTunes", "RELEASETYPE"),
+    },
+    "RELEASECOUNTRY": {
+        "flac": "RELEASECOUNTRY", "mp3": ("TXXX", "RELEASECOUNTRY"),
+        "mp4": ("freeform", "com.apple.iTunes", "RELEASECOUNTRY"),
+    },
+    "CATALOGNUMBER": {
+        "flac": "CATALOGNUMBER", "mp3": ("TXXX", "CATALOGNUMBER"),
+        "mp4": ("freeform", "com.apple.iTunes", "CATALOGNUMBER"),
+    },
+    "TRACKTOTAL": {
+        "flac": "TRACKTOTAL", "mp3": ("TXXX", "TRACKTOTAL"),
+        "mp4": ("freeform", "com.apple.iTunes", "TRACKTOTAL"),
+    },
+    "DISCTOTAL": {
+        "flac": "DISCTOTAL", "mp3": ("TXXX", "DISCTOTAL"),
+        "mp4": ("freeform", "com.apple.iTunes", "DISCTOTAL"),
+    },
+    "ISRC": {
+        "flac": "ISRC", "mp3": "TSRC",
+        "mp4": ("freeform", "com.apple.iTunes", "ISRC"),
+    },
+    "LICENSE": {
+        "flac": "LICENSE", "mp3": ("TXXX", "LICENSE"),
+        "mp4": ("freeform", "com.apple.iTunes", "LICENSE"),
+    },
+    "UNSYNCEDLYRICS": {
+        "flac": "UNSYNCEDLYRICS", "mp3": ("TXXX", "UNSYNCEDLYRICS"),
+        "mp4": ("freeform", "com.apple.iTunes", "UNSYNCEDLYRICS"),
     },
     "COMPOSER": {
         "flac": "COMPOSER", "mp3": ("TCOM", None), "mp4": "\xa9wrt",
@@ -161,6 +210,11 @@ TAG_MAP = {
         "mp3": ("TXXX", "MusicBrainz Track Id"),
         "mp4": ("freeform", "com.apple.iTunes", "MusicBrainz Track Id"),
     },
+    "MUSICBRAINZ_RELEASEID": {
+        "flac": "MUSICBRAINZ_RELEASEID",
+        "mp3": ("TXXX", "MusicBrainz Release Id"),
+        "mp4": ("freeform", "com.apple.iTunes", "MusicBrainz Release Id"),
+    },
     "MUSICBRAINZ_RELEASEGROUPID": {
         "flac": "MUSICBRAINZ_RELEASEGROUPID",
         "mp3": ("TXXX", "MusicBrainz Release Group Id"),
@@ -290,8 +344,16 @@ class AudioFile:
                 if self.audio.tags is None:
                     return None
                 if self._tag_cache is None:
+                    def _pick(v):
+                        if isinstance(v, list) and v:
+                            # multiple values (e.g. several GENREs) read like
+                            # ID3 lists: "; "-joined, consistent across formats
+                            if len(v) > 1:
+                                return "; ".join(str(x) for x in v)
+                            return v[0]
+                        return v
                     self._tag_cache = {
-                        str(k).lower(): (v[0] if isinstance(v, list) and v else v)
+                        str(k).lower(): _pick(v)
                         for k, v in self.audio.tags.items()
                     }
                 return self._tag_cache.get(spec["flac"].lower())
@@ -448,7 +510,7 @@ class AudioFile:
                         self.audio.add_tags()
                     else:
                         return False
-                self.audio.tags[spec["flac"]] = [value]
+                self.audio.tags[str(key)] = [value]
                 self.audio.save()
                 return True
 
@@ -574,7 +636,9 @@ class AudioFile:
             pass
         spec = TAG_MAP.get(name)
         if spec is None:
-            return False
+            # raw / unknown key: fall back to the arbitrary-key writer so
+            # custom tags (TXXX:..., freeform atoms, vorbis comments) work
+            return self.set_any_tag(name, value)
 
         kind = self.kind
 
@@ -683,7 +747,7 @@ class AudioFile:
             return self.delete_lyrics()
         spec = TAG_MAP.get(name)
         if spec is None:
-            return False
+            return self.delete_any_tag(name)
 
         kind = self.kind
 

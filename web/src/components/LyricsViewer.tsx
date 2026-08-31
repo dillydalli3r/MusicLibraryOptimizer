@@ -145,34 +145,30 @@ export default function LyricsViewer({
   const emit = (ls: LrcLine[]) => onChange(serializeLrc(ls, decimals));
 
   const updateLine = (i: number, patch: Partial<LrcLine>) => {
-    setLines((ls) => {
-      const next = [...ls];
+    const next = lines.map((l, j) => {
+      if (j !== i) return l;
       // manual text edits take over from ELRC word timestamps
-      if ("text" in patch) next[i] = { ...next[i], ...patch, words: undefined };
-      else next[i] = { ...next[i], ...patch };
-      emit(next);
-      return next;
+      if ("text" in patch) return { ...l, ...patch, words: undefined };
+      return { ...l, ...patch };
     });
+    setLines(next);
+    emit(next);
   };
 
   const addLine = (i: number) => {
     const base = lines[i]?.time ?? lines[lines.length - 1]?.time ?? 0;
-    setLines((ls) => {
-      const next = [...ls];
-      next.splice(i + 1, 0, { ts: "[00:00.00]", time: base, text: "" });
-      emit(next);
-      return next;
-    });
+    const next = [...lines];
+    next.splice(i + 1, 0, { ts: "[00:00.00]", time: base, text: "" });
+    setLines(next);
+    emit(next);
     setSelIdx(i + 1);
   };
 
   const removeLine = (i: number) => {
-    setLines((ls) => {
-      const next = ls.filter((_, j) => j !== i);
-      emit(next);
-      return next;
-    });
-    setSelIdx((s) => Math.max(0, Math.min(s, lines.length - 2)));
+    const next = lines.filter((_, j) => j !== i);
+    setLines(next);
+    emit(next);
+    setSelIdx((s) => Math.max(0, Math.min(s, next.length - 1)));
   };
 
   const togglePlay = () => {
@@ -222,13 +218,10 @@ export default function LyricsViewer({
       }
       const t = Math.max(0, audio.currentTime - 0.05);
       const target = activeLine >= 0 ? activeLine : selIdx;
-      setLines((ls) => {
-        const next = [...ls];
-        const idx = Math.min(target, Math.max(0, next.length - 1));
-        if (next[idx]) next[idx] = { ...next[idx], time: t, ts: fmtTs(t, decimals) };
-        emit(next);
-        return next;
-      });
+      const idx = Math.min(target, Math.max(0, lines.length - 1));
+      const next = lines.map((l, j) => (j === idx ? { ...l, time: t, ts: fmtTs(t, decimals) } : l));
+      setLines(next);
+      emit(next);
       setSelIdx((s) => Math.min(s + 1, Math.max(0, lines.length - 1)));
       setPlayTime(t);
     };
@@ -331,7 +324,7 @@ export default function LyricsViewer({
               }}
               className={`group flex items-center gap-2 rounded-md border px-2 py-1.5 transition-colors ${
                 i === activeLine && playing
-                  ? "border-accent/60 bg-violet-950/40"
+                  ? "border-accent/60 bg-accent/20"
                   : i === selIdx
                     ? "border-accent/30 bg-panel"
                     : "border-transparent hover:border-border hover:bg-panel"
@@ -404,7 +397,7 @@ export default function LyricsViewer({
           step={0.05}
           value={Math.min(playTime, dur || 0)}
           onChange={(e) => seekTo(Number(e.target.value))}
-          className="flex-1 accent-violet-500"
+          className="flex-1 "
           title="Seek within the track"
         />
         <span className="text-[10px] font-mono text-zinc-500 w-10 shrink-0">{fmtDur(dur || 0)}</span>

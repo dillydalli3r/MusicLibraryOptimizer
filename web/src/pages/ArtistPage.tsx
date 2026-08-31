@@ -24,7 +24,7 @@ export default function ArtistPage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl">
       <div className="flex items-start gap-5">
-        <div className="h-24 w-24 rounded-xl bg-gradient-to-br from-violet-600/40 to-indigo-700/40 border border-border flex items-center justify-center shrink-0">
+        <div className="h-24 w-24 rounded-xl bg-gradient-to-br from-accent/40 to-indigo-700/40 border border-border flex items-center justify-center shrink-0">
           <Music2 className="h-10 w-10 text-zinc-400" />
         </div>
         <div className="flex-1 min-w-0">
@@ -36,13 +36,9 @@ export default function ArtistPage() {
             <AuditBadge audit={data.aggregate.audit_summary} />
             <GradeBadge pass={(data.aggregate.grade_pct ?? 0) >= 100} score={data.aggregate.grade_pct} />
           </div>
-          <Link
-            to="https://musicbrainz.org/artist/"
-            className="mt-2 inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-accent-soft"
-            onClick={(e) => e.preventDefault()}
-          >
-            <ExternalLink className="h-3 w-3" /> MusicBrainz · RateYourMusic (add via track tagging)
-          </Link>
+          <div className="mt-2 inline-flex items-center gap-1 text-xs text-zinc-500">
+            <ExternalLink className="h-3 w-3" /> MusicBrainz / RYM links live in the track tags — set them from Import & tag
+          </div>
         </div>
         <button className="btn-primary" onClick={() => playNow(allTracks)}>
           Play all

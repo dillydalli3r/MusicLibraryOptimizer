@@ -133,7 +133,8 @@ def is_sidecar_cover_file(album_dir, filename, all_track_basenames=None):
     return base.lower() in {b.lower() for b in all_track_basenames}
 
 
-SKIP_DIRS = {".dependencies", ".mlo_trash"}
+SKIP_DIRS = {".dependencies", ".mlo_trash", "__pycache__", "$RECYCLE.BIN",
+             "System Volume Information", ".git", ".thumbnails", ".tmp"}
 
 
 JPEG_QUALITY_MARKER = 1

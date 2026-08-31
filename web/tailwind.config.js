@@ -9,8 +9,8 @@ export default {
         card: "#16161a",
         raise: "#1c1c21",
         border: "#26262c",
-        accent: "#8b5cf6",
-        "accent-soft": "#a78bfa",
+        accent: "var(--accent)",
+        "accent-soft": "var(--accent-soft)",
       },
       fontFamily: {
         sans: ["Inter", "Segoe UI", "system-ui", "sans-serif"],

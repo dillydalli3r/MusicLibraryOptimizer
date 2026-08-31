@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Search, FolderOpen, ListPlus, Play, Disc3, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync,
+  Search, FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync,
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { sortRows, SortHeader, type SortState } from "../lib/sort.tsx";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "../components/Badges";
+import CoverImg from "../components/CoverImg";
 import type { Album, Artist, Track } from "../types";
 
 type View = "albums" | "artists" | "tracks";
@@ -115,7 +116,7 @@ export default function LibraryPage() {
   const {
     selection, setSelection, toggleTrack, toggleAlbum, toggleArtist, clearSelection, playNow,
   } = useStore();
-  const [view, setView] = useState<View>("albums");
+  const [view, setView] = useState<View>(() => (localStorage.getItem("mlo.defaultView") as View) ?? "albums");
   const [preset, setPreset] = useState<Preset>("all");
   const [albumSort, setAlbumSort] = useLocalSort("album");
   const [artistSort, setArtistSort] = useLocalSort("artist");
@@ -297,7 +298,7 @@ export default function LibraryPage() {
     }
   };
 
-  const toggleExpand = (path: string) =>
+const toggleExpand = (path: string) =>
     setExpanded((s) => {
       const next = new Set(s);
       if (next.has(path)) next.delete(path);
@@ -305,12 +306,14 @@ export default function LibraryPage() {
       return next;
     });
 
+  // Sorting is memoized so typing in the search box / toggling selection
+  // doesn't re-sort the whole library on every keystroke.
+  const sortedAlbums = useMemo(() => sortRows(filtered.albums, albumSort), [filtered.albums, albumSort]);
+  const sortedArtists = useMemo(() => sortRows(filtered.artists, artistSort), [filtered.artists, artistSort]);
+  const sortedTracks = useMemo(() => sortRows(filtered.tracks, trackSort), [filtered.tracks, trackSort]);
+
   if (error) return <EmptyState title="Backend unreachable" hint={String(error)} />;
   if (isLoading || !lib) return <div className="p-8 text-zinc-500">Scanning library…</div>;
-
-  const sortedAlbums = sortRows(filtered.albums, albumSort);
-  const sortedArtists = sortRows(filtered.artists, artistSort);
-  const sortedTracks = sortRows(filtered.tracks, trackSort);
 
   const albumRows: ({ kind: "header"; artist: string } | { kind: "album"; album: FlatAlbum })[] = [];
   if (groupByArtist) {
@@ -373,7 +376,7 @@ export default function LibraryPage() {
               ))}
             </select>
             <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none" title="Group albums under artist headers">
-              <input type="checkbox" checked={groupByArtist} onChange={(e) => setGroupByArtist(e.target.checked)} className="accent-violet-500" />
+              <input type="checkbox" checked={groupByArtist} onChange={(e) => setGroupByArtist(e.target.checked)} className="" />
               Group by artist
             </label>
           </>
@@ -408,7 +411,7 @@ export default function LibraryPage() {
                   : p.id === "cd"
                     ? "bg-sky-900/60 text-sky-200 border-sky-800"
                     : p.id === "digital"
-                      ? "bg-violet-900/60 text-violet-200 border-violet-800"
+                      ? "bg-accent/15 text-accent-soft border-accent/40"
                       : "bg-accent text-white border-accent"
                 : "bg-raise text-zinc-400 border-border hover:text-white"
             }`}
@@ -435,8 +438,8 @@ export default function LibraryPage() {
 
       {/* selection toolbar */}
       {selectionCount > 0 && (
-        <div className="flex items-center gap-2 bg-violet-950/30 border border-accent/40 rounded-lg px-3 py-2 flex-wrap">
-          <span className="text-xs font-medium text-violet-200">
+        <div className="flex items-center gap-2 bg-accent/15 border border-accent/40 rounded-lg px-3 py-2 flex-wrap">
+          <span className="text-xs font-medium text-accent-soft">
             {selection.albums.length} album{selection.albums.length === 1 ? "" : "s"} · {selection.artists.length} artist{selection.artists.length === 1 ? "" : "s"} · {selection.tracks.length} track{selection.tracks.length === 1 ? "" : "s"} · {selTracks.size} total tracks
           </span>
           <div className="ml-auto flex gap-1.5 flex-wrap">
@@ -481,16 +484,16 @@ export default function LibraryPage() {
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
-                  <th className="th w-8">
-                    <input type="checkbox" className="accent-violet-500" checked={allAlbumsSelected}
+                  <th className="th-sticky w-8">
+                    <input type="checkbox" className="" checked={allAlbumsSelected}
                       onChange={() => setSelection({ albums: allAlbumsSelected ? [] : sortedAlbums.map((a) => a.path) })} />
                   </th>
-                  <th className="th w-8"></th>
-                  <th className="th w-12"></th>
+                  <th className="th-sticky w-8"></th>
+                  <th className="th-sticky w-12"></th>
                   {ALBUM_COLS.filter((c) => albumCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={albumSort} sortKey={c.sortKey} onSort={setAlbumSort} />
                   ))}
-                  <th className="th text-right">Actions</th>
+                  <th className="th-sticky text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -530,17 +533,16 @@ export default function LibraryPage() {
         <div className="bg-card rounded-lg border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-panel/60">
+<thead className="bg-panel/60">
                 <tr>
-                  <th className="th w-8">
-                    <input type="checkbox" className="accent-violet-500" checked={allArtistsSelected}
+                  <th className="th-sticky w-8">
+                    <input type="checkbox" className="" checked={allArtistsSelected}
                       onChange={() => setSelection({ artists: allArtistsSelected ? [] : sortedArtists.map((a) => a.path) })} />
                   </th>
-                  <SortHeader label="Artist" sort={artistSort} sortKey="name" onSort={setArtistSort} />
                   {ARTIST_COLS.filter((c) => artistCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort} />
                   ))}
-                  <th className="th text-right">Actions</th>
+                  <th className="th-sticky text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -550,9 +552,9 @@ export default function LibraryPage() {
                   );
                   const sel = selection.artists.includes(a.path);
                   return (
-                    <tr key={a.path} className={`table-row group ${sel ? "bg-violet-950/30" : ""}`}>
+                    <tr key={a.path} className={`table-row group ${sel ? "bg-accent/15" : ""}`}>
                       <td className="td pr-0">
-                        <input type="checkbox" className="accent-violet-500" checked={sel} onChange={() => toggleArtist(a.path)} />
+                        <input type="checkbox" className="" checked={sel} onChange={() => toggleArtist(a.path)} />
                       </td>
                       <td className="td">
                         <Link to={`/artist/${encodeURIComponent(a.path)}`} className="font-medium hover:text-accent-soft">
@@ -591,23 +593,23 @@ export default function LibraryPage() {
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
-                  <th className="th w-8">
-                    <input type="checkbox" className="accent-violet-500" checked={allTracksSelected}
+                  <th className="th-sticky w-8">
+                    <input type="checkbox" className="" checked={allTracksSelected}
                       onChange={() => setSelection({ tracks: allTracksSelected ? [] : sortedTracks.map((t) => t.path) })} />
                   </th>
                   {TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort} />
                   ))}
-                  <th className="th text-right">Play</th>
+                  <th className="th-sticky text-right">Play</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedTracks.map((tr) => {
                   const sel = selection.tracks.includes(tr.path);
                   return (
-                    <tr key={tr.path} className={`table-row group ${sel ? "bg-violet-950/30" : ""}`}>
+                    <tr key={tr.path} className={`table-row group ${sel ? "bg-accent/15" : ""}`}>
                       <td className="td pr-0">
-                        <input type="checkbox" className="accent-violet-500" checked={sel} onChange={() => toggleTrack(tr.path)} />
+                        <input type="checkbox" className="" checked={sel} onChange={() => toggleTrack(tr.path)} />
                       </td>
                       {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tags.TRACKNUMBER ?? "—"}</td>}
                       {trackCols.includes("title") && (
@@ -697,9 +699,9 @@ function AlbumRowGroup({
 
   return (
     <>
-      <tr className={`table-row group ${selected ? "bg-violet-950/30" : ""}`} onClick={onToggle}>
+      <tr className={`table-row group ${selected ? "bg-accent/15" : ""}`} onClick={onToggle}>
         <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
-          <input type="checkbox" className="accent-violet-500" checked={selected} onChange={onToggleSel} />
+          <input type="checkbox" className="" checked={selected} onChange={onToggleSel} />
         </td>
         <td className="td pr-0">
           <button className="p-1 text-zinc-500 hover:text-white" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
@@ -707,15 +709,7 @@ function AlbumRowGroup({
           </button>
         </td>
         <td className="td">
-          <div className="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0">
-            {album.cover_file ? (
-              <img src={api.coverUrl(album.path, album.cover_file)} alt="" loading="lazy" className="h-full w-full object-cover" />
-            ) : (
-              <div className="h-full w-full flex items-center justify-center text-zinc-700">
-                <Disc3 className="h-4 w-4" />
-              </div>
-            )}
-          </div>
+          <CoverImg albumPath={album.path} coverFile={album.cover_file} />
         </td>
         {visibleCols.includes("album") && (
           <td className="td max-w-[280px]">
@@ -761,24 +755,24 @@ function AlbumRowGroup({
         <tr className="bg-panel/30">
           <td colSpan={colSpan} className="p-0">
             <table className="w-full">
-              <thead className="bg-panel/40">
+              <thead className="bg-panel/60">
                 <tr>
-                  <th className="th w-8"></th>
-                  <th className="th w-10">#</th>
-                  <th className="th">Title</th>
-                  <th className="th">Genre</th>
-                  <th className="th">Grade</th>
-                  <th className="th">Audit</th>
-                  <th className="th">Advisory</th>
-                  <th className="th">Dur</th>
-                  <th className="th text-right">Play</th>
+                  <th className="th-sticky w-8"></th>
+                  <th className="th-sticky w-10">#</th>
+                  <th className="th-sticky">Title</th>
+                  <th className="th-sticky">Genre</th>
+                  <th className="th-sticky">Grade</th>
+                  <th className="th-sticky">Audit</th>
+                  <th className="th-sticky">Advisory</th>
+                  <th className="th-sticky">Dur</th>
+                  <th className="th-sticky text-right">Play</th>
                 </tr>
               </thead>
               <tbody>
                 {tracks.map((t) => (
-                  <tr key={t.path} className={`table-row ${selTracks.has(t.path) ? "bg-violet-950/30" : ""}`}>
+                  <tr key={t.path} className={`table-row ${selTracks.has(t.path) ? "bg-accent/15" : ""}`}>
                     <td className="td pr-0">
-                      <input type="checkbox" className="accent-violet-500" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
+                      <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
                     </td>
                     <td className="td text-zinc-600">{t.tags.TRACKNUMBER ?? "—"}</td>
                     <td className="td max-w-[300px]">
@@ -870,7 +864,7 @@ function ColumnsMenu({
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1.5">Visible columns</div>
             {cols.map((c) => (
               <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-panel rounded">
-                <input type="checkbox" checked={visible.includes(c.id)} onChange={() => onToggle(c.id)} className="accent-violet-500" />
+                <input type="checkbox" checked={visible.includes(c.id)} onChange={() => onToggle(c.id)} className="" />
                 {c.label}
               </label>
             ))}

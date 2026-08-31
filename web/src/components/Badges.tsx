@@ -42,7 +42,7 @@ export function MediaChip({ media }: { media: string | null | undefined }) {
   return (
     <span
       className={`chip ${
-        cd ? "bg-sky-900/50 text-sky-300 border border-sky-900" : "bg-violet-900/40 text-violet-300 border border-violet-900"
+        cd ? "bg-sky-900/50 text-sky-300 border border-sky-900" : "bg-accent/10 text-accent-soft border border-accent/25"
       }`}
     >
       {media}

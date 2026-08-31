@@ -55,7 +55,7 @@ export function SortHeader({
 }) {
   const active = sort?.key === sortKey;
   return (
-    <th className={`th cursor-pointer select-none hover:text-zinc-300 ${className ?? ""}`} onClick={() => onSort(sortKey)}>
+    <th className={`th-sticky cursor-pointer hover:text-zinc-300 ${className ?? ""}`} onClick={() => onSort(sortKey)}>
       <span className="inline-flex items-center gap-1">
         {label}
         {active ? (

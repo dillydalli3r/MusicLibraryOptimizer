@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ExternalLink, Play, Wand2, Trash2, FolderSync } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
+import CoverImg from "../components/CoverImg";
 import { SortHeader, sortRows, toggleSort, type SortState } from "../lib/sort.tsx";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "./LibraryPage";
@@ -15,12 +16,15 @@ export default function AlbumPage() {
     queryKey: ["album", decoded],
     queryFn: () => api.album(decoded),
   });
+  const { data: coverColor } = useQuery({
+    queryKey: ["coverColor", decoded],
+    queryFn: () => api.coverColor(decoded),
+    retry: false,
+  });
   const { playNow } = useStore();
   const navigate = useNavigate();
   const [sort, setSort] = useState<SortState | null>(null);
   const qc = useQueryClient();
-
-  const coverUrl = data?.cover_file && data.path ? api.coverUrl(data.path, data.cover_file) : null;
 
   if (error) return <EmptyState title="Album not found" hint={String(error)} />;
   if (isLoading || !data) return <div className="p-8 text-zinc-500">Loading album…</div>;
@@ -65,14 +69,20 @@ export default function AlbumPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-5xl">
-      <div className="flex items-start gap-5">
-        <div className="h-40 w-40 rounded-lg border border-border bg-raise overflow-hidden shrink-0">
-          {coverUrl ? (
-            <img src={coverUrl} alt="cover" className="h-full w-full object-cover" />
-          ) : (
-            <div className="h-full w-full flex items-center justify-center text-zinc-600 text-xs">no cover</div>
-          )}
-        </div>
+      <div
+        className="rounded-xl p-5 border border-border relative overflow-hidden"
+        style={
+          coverColor
+            ? { background: `linear-gradient(135deg, ${coverColor}33 0%, transparent 60%)` }
+            : undefined
+        }
+      >
+        <div className="flex items-start gap-5">
+          <CoverImg
+            albumPath={data.path}
+            coverFile={data.cover_file}
+            wrapperClass="h-40 w-40 rounded-lg border border-border bg-raise overflow-hidden shrink-0"
+          />
         <div className="flex-1 min-w-0">
           <div className="text-xs text-zinc-500 uppercase tracking-wider">{data.meta?.DATE ?? "—"}</div>
           <h1 className="text-3xl font-bold tracking-tight">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
@@ -94,7 +104,7 @@ export default function AlbumPage() {
           <div className="mt-3 flex flex-wrap gap-1.5 text-xs">
             {mbid && (
               <a href={`https://musicbrainz.org/release/${mbid}`} target="_blank" rel="noreferrer"
-                 className="chip bg-violet-900/40 text-violet-300 border border-violet-900 hover:bg-violet-900/60">
+                 className="chip bg-accent/10 text-accent-soft border border-accent/25 hover:bg-accent/20">
                 <ExternalLink className="h-3 w-3" /> MusicBrainz release
               </a>
             )}
@@ -119,6 +129,7 @@ export default function AlbumPage() {
           <button className="btn-danger" onClick={removeAlbum}>
             <Trash2 className="h-4 w-4" /> Remove
           </button>
+        </div>
         </div>
       </div>
 
@@ -150,7 +161,7 @@ export default function AlbumPage() {
               <SortHeader label="Genre" sort={sort} sortKey="tags.GENRE" onSort={(k) => setSort(toggleSort(sort, k))} />
               <SortHeader label="Dur" sort={sort} sortKey="tech.length" onSort={(k) => setSort(toggleSort(sort, k))} />
               <SortHeader label="Bitrate" sort={sort} sortKey="tech.bitrate" onSort={(k) => setSort(toggleSort(sort, k))} />
-              <th className="th text-right">Play</th>
+              <th className="th-sticky text-right">Play</th>
             </tr>
           </thead>
           <tbody>

@@ -20,6 +20,8 @@ interface Store {
   setQueue: (q: QueueTrack[]) => void;
   index: number;
   setIndex: (i: number) => void;
+  queueId: number; // bumped on every queue replacement — player reloads even
+  // when the new queue starts at the same index
   playNow: (q: QueueTrack[], i?: number) => void;
   selected: string[];
   setSelected: (s: string[]) => void;
@@ -51,11 +53,12 @@ export const useStore = create<Store>((set) => ({
   playing: null,
   setPlaying: (playing) => set({ playing }),
   queue: [],
-  setQueue: (queue) => set({ queue }),
+  setQueue: (queue) => set((st) => ({ queue, queueId: st.queueId + 1 })),
   index: 0,
   setIndex: (index) => set({ index }),
+  queueId: 0,
   playNow: (queue, index = 0) =>
-    set({ queue, index, playing: queue[index]?.path ?? null }),
+    set((st) => ({ queue, index, queueId: st.queueId + 1, playing: queue[index]?.path ?? null })),
   selected: [],
   setSelected: (selected) => set({ selected }),
   selectionAlbum: null,

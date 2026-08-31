@@ -21,11 +21,30 @@ const NAV = [
   { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
 ];
 
+const ACCENTS: Record<string, [string, string]> = {
+  violet: ["#8b5cf6", "#a78bfa"],
+  pink: ["#ec4899", "#f9a8d4"],
+  emerald: ["#10b981", "#6ee7b7"],
+  sky: ["#0ea5e9", "#7dd3fc"],
+  amber: ["#f59e0b", "#fcd34d"],
+  red: ["#ef4444", "#fca5a5"],
+};
+
+export function applyAccent(name: string | null) {
+  const [accent, soft] = ACCENTS[name ?? "violet"] ?? ACCENTS.violet;
+  document.documentElement.style.setProperty("--accent", accent);
+  document.documentElement.style.setProperty("--accent-soft", soft);
+}
+
 export default function App() {
-  const { progress, setProgress, toast: toastMsg } = useStore();
+  const { progress, setProgress, toast: toastMsg, setToast } = useStore();
   const qc = useQueryClient();
 
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
+
+  useEffect(() => {
+    applyAccent(localStorage.getItem("mlo.accent"));
+  }, []);
 
   useEffect(() => {
     const inTauri = !!(window as any).__TAURI_INTERNALS__;
@@ -43,15 +62,27 @@ export default function App() {
   }, []);
 
   const runAll = async () => {
-    await api.run([1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
-    qc.invalidateQueries({ queryKey: ["library"] });
+    setToast("Running all scripts…");
+    try {
+      const res = await api.run([1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
+      const failed = (res.results ?? []).filter((r) => r.error);
+      setToast(
+        failed.length
+          ? `${failed.length} script(s) failed — see console`
+          : "Run All finished"
+      );
+    } catch (e) {
+      setToast(String(e));
+    } finally {
+      qc.invalidateQueries({ queryKey: ["library"] });
+    }
   };
 
   return (
     <div className="min-h-screen bg-bg text-zinc-100 flex flex-col">
       <header className="h-14 shrink-0 border-b border-border bg-panel flex items-center gap-3 px-4 sticky top-0 z-30">
         <div className="flex items-center gap-2">
-          <span className="h-7 w-7 rounded-md bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
+          <span className="h-7 w-7 rounded-md bg-gradient-to-br from-accent to-indigo-600 flex items-center justify-center">
             <Play className="h-3.5 w-3.5 text-white fill-white" />
           </span>
           <span className="font-bold tracking-wide">MusicLibraryOptimizer</span>
@@ -80,10 +111,10 @@ export default function App() {
               to={to}
               end={end}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
+                `flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors border ${
                   isActive
-                    ? "bg-raise text-white border border-border"
-                    : "text-zinc-400 hover:text-white hover:bg-panel"
+                    ? "bg-raise text-white border-accent/40"
+                    : "text-zinc-400 hover:text-white hover:bg-panel border-transparent"
                 }`
               }
             >
@@ -107,6 +138,17 @@ export default function App() {
             <Route path="/playlists" element={<PlaylistsPage />} />
             <Route path="/import" element={<ImportWizard />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route
+              path="*"
+              element={
+                <div className="p-10 text-center text-sm text-zinc-500">
+                  Page not found —{" "}
+                  <NavLink to="/" className="text-accent-soft hover:underline">
+                    back to the library
+                  </NavLink>
+                </div>
+              }
+            />
           </Routes>
         </main>
       </div>

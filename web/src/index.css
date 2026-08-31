@@ -4,11 +4,35 @@
 
 :root {
   color-scheme: dark;
+  --accent: #8b5cf6;
+  --accent-soft: #a78bfa;
+}
+
+/* Native controls (checkbox/range tints) follow the accent token. */
+input[type="checkbox"],
+input[type="range"] {
+  accent-color: var(--accent);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #333 #0a0a0c;
+  scrollbar-color: #3a3a42 #0a0a0c;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0a0c;
+}
+::-webkit-scrollbar-thumb {
+  background: #2c2c33;
+  border-radius: 5px;
+  border: 2px solid #0a0a0c;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a42;
 }
 
 body {
@@ -43,6 +67,9 @@ body {
   }
   .th {
     @apply px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-zinc-500 select-none;
+  }
+  .th-sticky {
+    @apply th sticky top-14 z-10 bg-panel;
   }
   .td {
     @apply px-3 py-1.5 text-sm text-zinc-300;

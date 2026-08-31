@@ -1,0 +1,160 @@
+"""Small LRU caches for the v2 server.
+
+* Tag/tech cache: keyed on (path, mtime_ns, size) so re-scans of untouched
+  files hit memory instead of re-parsing audio containers (mutagen open +
+  vorbis-comment copy + Pillow decode are the expensive parts of a library
+  scan).
+* Library payload cache: TTL cache of the assembled /api/library tree.
+* Cover cache: file bytes + dominant color, invalidated on mtime change.
+"""
+import os
+import threading
+import time
+from collections import OrderedDict
+
+from mlo.audio import AudioFile
+
+_TAG_MAX = 16384
+_LIB_TTL = 5.0  # seconds
+_COVER_MAX = 512
+
+_lock = threading.Lock()
+_tag_cache = OrderedDict()
+_lib_cache = {}  # key -> (built_at, payload)
+_cover_cache = OrderedDict()
+
+
+def _stat_key(path):
+    try:
+        st = os.stat(path)
+        return (os.path.normcase(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (os.path.normcase(path), 0, 0)
+
+
+def read_track(path, tag_list=None):
+    """Return (tags dict, tech dict) for an audio file, cached.
+
+    tag_list: subset of semantic tag names; None reads all_tags() (raw +
+    semantic) — used by scan endpoints.
+    """
+    key = _stat_key(path)
+    with _lock:
+        hit = _tag_cache.get(key)
+        if hit is not None:
+            _tag_cache.move_to_end(key)
+            return dict(hit[0]), dict(hit[1])
+    af = AudioFile(path)
+    if af.audio is None:
+        tags, tech = {}, {}
+    else:
+        if tag_list is None:
+            tags = af.all_tags() or {}
+        else:
+            tags = {t: af.get_tag(t) for t in tag_list}
+        tech = {}
+        info = af.audio.info
+        if info is not None:
+            for attr in ("length", "bitrate", "sample_rate", "bits_per_sample", "channels"):
+                try:
+                    v = getattr(info, attr, None)
+                    if v is not None:
+                        tech[attr] = round(float(v), 3) if isinstance(v, (int, float)) else str(v)
+                except Exception:
+                    pass
+    with _lock:
+        _tag_cache[key] = (tags, tech)
+        _tag_cache.move_to_end(key)
+        while len(_tag_cache) > _TAG_MAX:
+            _tag_cache.popitem(last=False)
+    return dict(tags), dict(tech)
+
+
+def invalidate_path(path):
+    """Drop cached entries for a path (after tag writes / renames)."""
+    with _lock:
+        norm = os.path.normcase(path)
+        keys = [k for k in _tag_cache if k[0] == norm]
+        for k in keys:
+            del _tag_cache[k]
+        for key in list(_lib_cache):
+            del _lib_cache[key]
+
+
+def invalidate_all():
+    with _lock:
+        _tag_cache.clear()
+        _cover_cache.clear()
+        _lib_cache.clear()
+
+
+def get_library(key, builder):
+    """TTL-cached library payload. key = (music_folder, relevant config)."""
+    now = time.time()
+    with _lock:
+        hit = _lib_cache.get(key)
+        if hit and now - hit[0] < _LIB_TTL:
+            return hit[1]
+    payload = builder()
+    with _lock:
+        _lib_cache[key] = (now, payload)
+    return payload
+
+
+def cover_bytes(album, file=None):
+    """Return (bytes, ctype, etag) for an album cover file, cached."""
+    import hashlib
+
+    p = None
+    if file:
+        cand = os.path.normpath(os.path.join(album, os.path.basename(file)))
+        if os.path.isfile(cand):
+            p = cand
+    else:
+        for cand in ("cover.jpg", "cover.jpeg", "cover.png", "cover.jxl", "cover.webp", "cover.bmp"):
+            full = os.path.join(album, cand)
+            if os.path.isfile(full):
+                p = full
+                break
+    if p is None:
+        return None, None, None
+    key = _stat_key(p)
+    with _lock:
+        hit = _cover_cache.get(key)
+        if hit is not None:
+            _cover_cache.move_to_end(key)
+            return hit
+    try:
+        with open(p, "rb") as f:
+            data = f.read()
+        etag = hashlib.md5(data).hexdigest()
+        ext = os.path.splitext(p)[1].lower()
+        ctype = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".jxl": "image/jxl", ".webp": "image/webp", ".bmp": "image/bmp",
+        }.get(ext, "image/jpeg")
+        hit = (data, ctype, etag)
+    except OSError:
+        return None, None, None
+    with _lock:
+        _cover_cache[key] = hit
+        _cover_cache.move_to_end(key)
+        while len(_cover_cache) > _COVER_MAX:
+            _cover_cache.popitem(last=False)
+    return hit
+
+
+def cover_color(album, file=None):
+    """Dominant cover color as '#rrggbb' (used for UI tinting), cached."""
+    data, _, _ = cover_bytes(album, file)
+    if not data:
+        return None
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img = img.resize((1, 1))
+        r, g, b = img.getpixel((0, 0))
+        return "#%02x%02x%02x" % (r, g, b)
+    except Exception:
+        return None
