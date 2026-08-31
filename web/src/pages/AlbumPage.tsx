@@ -1,14 +1,16 @@
 ﻿import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3 } from "lucide-react";
+import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, Info as InfoIcon } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
 import StatsPanel from "../components/StatsPanel";
+import TrackDetails from "../components/TrackDetails";
 import { SortHeader, sortRows, toggleSort, type SortState } from "../lib/sort.tsx";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "./LibraryPage";
+import type { Track } from "../types";
 
 export default function AlbumPage() {
   const { path = "" } = useParams();
@@ -26,6 +28,7 @@ export default function AlbumPage() {
   const navigate = useNavigate();
   const [sort, setSort] = useState<SortState | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [detailTrack, setDetailTrack] = useState<Track | null>(null);
   const qc = useQueryClient();
 
   if (error) return <EmptyState title="Album not found" hint={String(error)} />;
@@ -167,6 +170,10 @@ export default function AlbumPage() {
         />
       )}
 
+      {detailTrack && (
+        <TrackDetails track={detailTrack} albumPath={data.path} onClose={() => setDetailTrack(null)} />
+      )}
+
       <div className="bg-card rounded-lg border border-border overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-panel/60">
@@ -200,6 +207,13 @@ export default function AlbumPage() {
                     <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
                       {tr.tags.TITLE ?? tr.file}
                     </Link>
+                    <button
+                      className="text-zinc-500 hover:text-accent-soft shrink-0"
+                      title="Grading & audit details"
+                      onClick={() => setDetailTrack(tr)}
+                    >
+                      <InfoIcon className="h-3.5 w-3.5" />
+                    </button>
                     {!!tr.issues?.length && (
                       <span className="text-[9px] text-red-400 shrink-0" title={tr.issues.join("\n")}>
                         {tr.issues.length}✗
@@ -207,7 +221,7 @@ export default function AlbumPage() {
                     )}
                   </div>
                 </td>
-                <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : null} size="sm" /></td>
+                <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : 0} size="sm" /></td>
                 <td className="td"><AuditBadge audit={tr.audit} size="sm" /></td>
                 <td className="td text-zinc-500 max-w-[180px] truncate">{tr.tags.GENRE ?? "—"}</td>
                 <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>

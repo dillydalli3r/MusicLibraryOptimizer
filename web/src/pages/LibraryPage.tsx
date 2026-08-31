@@ -2,7 +2,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Search, FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Tags as TagsIcon,
+  Search, FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Tags as TagsIcon, Info as InfoIcon,
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
@@ -11,6 +11,7 @@ import { AuditBadge, EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "..
 import CoverImg from "../components/CoverImg";
 import StatsPanel from "../components/StatsPanel";
 import BatchTagEditor from "../components/BatchTagEditor";
+import TrackDetails from "../components/TrackDetails";
 import type { Album, Artist, Track } from "../types";
 
 type View = "albums" | "artists" | "tracks";
@@ -128,6 +129,7 @@ export default function LibraryPage() {
   const [groupByArtist, setGroupByArtist] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const [detailTrack, setDetailTrack] = useState<{ track: Track; albumPath: string } | null>(null);
 
   const [albumCols, toggleAlbumCol] = useColumnPrefs("albums", ALBUM_COLS);
   const [artistCols, toggleArtistCol] = useColumnPrefs("artists", ARTIST_COLS);
@@ -232,20 +234,6 @@ export default function LibraryPage() {
       for (const d of paths) await api.removeAlbum(d);
       setToast(`Moved ${paths.length} album(s) to trash`);
       clearSelection();
-      qc.invalidateQueries({ queryKey: ["library"] });
-    } catch (e) {
-      toast(String(e));
-    } finally {
-      setRemoving(null);
-    }
-  };
-
-  const removeAlbum = async (al: FlatAlbum) => {
-    if (!window.confirm(`Remove "${al.meta?.ALBUM ?? al.path.split("/").pop()}" from the library?\nIt moves to .mlo_trash in your music folder (recoverable).`)) return;
-    setRemoving(al.path);
-    try {
-      const r = await api.removeAlbum(al.path);
-      setToast(`Moved to trash: ${r.trash.split("/").pop()}`);
       qc.invalidateQueries({ queryKey: ["library"] });
     } catch (e) {
       toast(String(e));
@@ -512,6 +500,10 @@ const toggleExpand = (path: string) =>
         />
       )}
 
+      {detailTrack && (
+        <TrackDetails track={detailTrack.track} albumPath={detailTrack.albumPath} onClose={() => setDetailTrack(null)} />
+      )}
+
       {/* ---------------- Albums table ---------------- */}
       {view === "albums" && (
         <div className="bg-card rounded-lg border border-border overflow-hidden">
@@ -540,7 +532,7 @@ const toggleExpand = (path: string) =>
                       </td>
                     </tr>
                   ) : (
-                    <AlbumRowGroup
+<AlbumRowGroup
                       key={row.album.path}
                       album={row.album}
                       expanded={expanded.has(row.album.path)}
@@ -550,9 +542,10 @@ const toggleExpand = (path: string) =>
                       onToggleSel={() => toggleAlbum(row.album.path)}
                       selTracks={selTracks}
                       onToggleTrack={toggleTrack}
-                      removing={removing === row.album.path}
-                      onRemove={() => removeAlbum(row.album)}
+                      removing={removing !== null}
+                      onRemove={() => removeAlbums([row.album.path])}
                       onPlaylist={() => addToPlaylist(row.album.tracks.map((t) => t.path))}
+                      onTrackDetails={(t) => setDetailTrack({ track: t, albumPath: row.album.path })}
                       colSpan={albumColSpan}
                     />
                   )
@@ -649,12 +642,21 @@ const toggleExpand = (path: string) =>
                       {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tags.TRACKNUMBER ?? "—"}</td>}
                       {trackCols.includes("title") && (
                         <td className="td max-w-[260px]">
-                          <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
-                            {tr.tags.TITLE ?? tr.file}
-                          </Link>
-                          {tr.tags.INSTRUMENTAL === "1" && (
-                            <span className="ml-2 chip bg-zinc-800 text-zinc-400 border border-border text-[10px]">INST</span>
-                          )}
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
+                              {tr.tags.TITLE ?? tr.file}
+                            </Link>
+                            <button
+                              className="text-zinc-500 hover:text-accent-soft shrink-0"
+                              title="Grading & audit details"
+                              onClick={() => setDetailTrack({ track: tr, albumPath: tr.path.split("/").slice(0, -1).join("/") })}
+                            >
+                              <InfoIcon className="h-3.5 w-3.5" />
+                            </button>
+                            {tr.tags.INSTRUMENTAL === "1" && (
+                              <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[10px] shrink-0">INST</span>
+                            )}
+                          </div>
                         </td>
                       )}
                       {trackCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[160px]">{tr.artist}</td>}
@@ -711,6 +713,7 @@ function AlbumRowGroup({
   removing,
   onRemove,
   onPlaylist,
+  onTrackDetails,
   colSpan,
 }: {
   album: FlatAlbum;
@@ -724,6 +727,7 @@ function AlbumRowGroup({
   removing: boolean;
   onRemove: () => void;
   onPlaylist: () => void;
+  onTrackDetails: (t: Track) => void;
   colSpan: number;
 }) {
   const tracks = [...(album.tracks ?? [])].sort((a, b) => {
@@ -825,18 +829,29 @@ function AlbumRowGroup({
                         <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
                           {t.tags.TITLE ?? t.file}
                         </Link>
+                        <button
+                          className="text-zinc-500 hover:text-accent-soft shrink-0"
+                          title="Grading & audit details"
+                          onClick={() => onTrackDetails(t)}
+                        >
+                          <InfoIcon className="h-3.5 w-3.5" />
+                        </button>
                         {t.tags.INSTRUMENTAL === "1" && (
                           <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[10px] shrink-0">INST</span>
                         )}
                         {!!t.issues?.length && (
-                          <span className="text-[9px] text-red-400 shrink-0" title={t.issues.join("\n")}>
+                          <button
+                            className="text-[9px] text-red-400 shrink-0 hover:underline"
+                            title={t.issues.join("\n")}
+                            onClick={() => onTrackDetails(t)}
+                          >
                             {t.issues.length}✗
-                          </span>
+                          </button>
                         )}
                       </div>
                     </td>
                     <td className="td text-zinc-500 truncate max-w-[150px]">{t.tags.GENRE ?? "—"}</td>
-                    <td className="td"><GradeBadge pass={t.grade_pass} score={t.grade_pass ? 100 : null} size="sm" /></td>
+                    <td className="td"><GradeBadge pass={t.grade_pass} score={t.grade_pass ? 100 : 0} size="sm" /></td>
                     <td className="td"><AuditBadge audit={t.audit} size="sm" /></td>
                     <td className="td"><AdvisoryBadge value={t.tags.ITUNESADVISORY} /></td>
                     <td className="td text-zinc-500">{fmtDuration(t.tech.length)}</td>

@@ -57,7 +57,7 @@ export interface Track {
   file: string;
   path: string;
   issues: string[];
-  values: Record<string, string>;
+  values: Record<string, string | null>;
   audit: string | null;
   log_grade: string | null;
   accuraterip_status?: string;
@@ -70,6 +70,8 @@ export interface Track {
   grade_pass: boolean;
   lyrics_present: boolean;
   cover_file?: string | null;
+  sidecar_cover?: boolean;
+  sidecar_cover_file?: string | null;
 }
 
 export interface Album {
