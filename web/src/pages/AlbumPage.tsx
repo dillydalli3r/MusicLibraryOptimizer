@@ -191,19 +191,19 @@ export default function AlbumPage() {
                     <CoverImg
                       albumPath={data.path}
                       coverFile={tr.cover_file}
-                      wrapperClass="h-8 w-8 rounded bg-raise border border-border overflow-hidden shrink-0"
+                      wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
                     />
                   )}
                 </td>
                 <td className="td">
-                  <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
                       {tr.tags.TITLE ?? tr.file}
                     </Link>
                     {!!tr.issues?.length && (
-                      <div className="text-[9px] text-red-400" title={tr.issues.join("\n")}>
-                        {tr.issues.length} check{tr.issues.length === 1 ? "" : "s"} failed
-                      </div>
+                      <span className="text-[9px] text-red-400 shrink-0" title={tr.issues.join("\n")}>
+                        {tr.issues.length}✗
+                      </span>
                     )}
                   </div>
                 </td>

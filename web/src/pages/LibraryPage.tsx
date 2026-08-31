@@ -816,34 +816,24 @@ function AlbumRowGroup({
                         <CoverImg
                           albumPath={album.path}
                           coverFile={t.cover_file}
-                          wrapperClass="h-8 w-8 rounded bg-raise border border-border overflow-hidden shrink-0"
+                          wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
                         />
                       )}
                     </td>
                     <td className="td max-w-[300px]">
-                      <div className="min-w-0">
-                          <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
-                            {t.tags.TITLE ?? t.file}
-                          </Link>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            {t.audit && (
-                              <span className={`text-[9px] font-bold ${t.audit === "REAL" ? "text-emerald-400" : t.audit === "FAKE" ? "text-red-400" : "text-amber-400"}`}>
-                                {t.audit}
-                              </span>
-                            )}
-                            {t.log_grade != null && t.log_grade !== "" && (
-                              <span className="text-[9px] text-zinc-500">log {t.log_grade}/100</span>
-                            )}
-                            {!!t.issues?.length && (
-                              <span className="text-[9px] text-red-400" title={t.issues.join("\n")}>
-                                {t.issues.length} check{t.issues.length === 1 ? "" : "s"} failed
-                              </span>
-                            )}
-                            {t.tags.INSTRUMENTAL === "1" && (
-                              <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[10px]">INST</span>
-                            )}
-                          </div>
-                        </div>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
+                          {t.tags.TITLE ?? t.file}
+                        </Link>
+                        {t.tags.INSTRUMENTAL === "1" && (
+                          <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[10px] shrink-0">INST</span>
+                        )}
+                        {!!t.issues?.length && (
+                          <span className="text-[9px] text-red-400 shrink-0" title={t.issues.join("\n")}>
+                            {t.issues.length}✗
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="td text-zinc-500 truncate max-w-[150px]">{t.tags.GENRE ?? "—"}</td>
                     <td className="td"><GradeBadge pass={t.grade_pass} score={t.grade_pass ? 100 : null} size="sm" /></td>
