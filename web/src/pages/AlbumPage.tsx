@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ExternalLink, Play, Wand2, Trash2, FolderSync } from "lucide-react";
@@ -161,7 +161,7 @@ export default function AlbumPage() {
               <SortHeader label="Genre" sort={sort} sortKey="tags.GENRE" onSort={(k) => setSort(toggleSort(sort, k))} />
               <SortHeader label="Dur" sort={sort} sortKey="tech.length" onSort={(k) => setSort(toggleSort(sort, k))} />
               <SortHeader label="Bitrate" sort={sort} sortKey="tech.bitrate" onSort={(k) => setSort(toggleSort(sort, k))} />
-              <th className="th-sticky text-right">Play</th>
+              <th className="th text-right">Play</th>
             </tr>
           </thead>
           <tbody>

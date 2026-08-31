@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+﻿import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -484,16 +484,16 @@ const toggleExpand = (path: string) =>
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
-                  <th className="th-sticky w-8">
+                  <th className="th w-8">
                     <input type="checkbox" className="" checked={allAlbumsSelected}
                       onChange={() => setSelection({ albums: allAlbumsSelected ? [] : sortedAlbums.map((a) => a.path) })} />
                   </th>
-                  <th className="th-sticky w-8"></th>
-                  <th className="th-sticky w-12"></th>
+                  <th className="th w-8"></th>
+                  <th className="th w-12"></th>
                   {ALBUM_COLS.filter((c) => albumCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={albumSort} sortKey={c.sortKey} onSort={setAlbumSort} />
                   ))}
-                  <th className="th-sticky text-right">Actions</th>
+                  <th className="th text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -535,14 +535,14 @@ const toggleExpand = (path: string) =>
             <table className="w-full text-sm">
 <thead className="bg-panel/60">
                 <tr>
-                  <th className="th-sticky w-8">
+                  <th className="th w-8">
                     <input type="checkbox" className="" checked={allArtistsSelected}
                       onChange={() => setSelection({ artists: allArtistsSelected ? [] : sortedArtists.map((a) => a.path) })} />
                   </th>
                   {ARTIST_COLS.filter((c) => artistCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort} />
                   ))}
-                  <th className="th-sticky text-right">Actions</th>
+                  <th className="th text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -593,14 +593,14 @@ const toggleExpand = (path: string) =>
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
-                  <th className="th-sticky w-8">
+                  <th className="th w-8">
                     <input type="checkbox" className="" checked={allTracksSelected}
                       onChange={() => setSelection({ tracks: allTracksSelected ? [] : sortedTracks.map((t) => t.path) })} />
                   </th>
                   {TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort} />
                   ))}
-                  <th className="th-sticky text-right">Play</th>
+                  <th className="th text-right">Play</th>
                 </tr>
               </thead>
               <tbody>
@@ -757,15 +757,15 @@ function AlbumRowGroup({
             <table className="w-full">
               <thead className="bg-panel/60">
                 <tr>
-                  <th className="th-sticky w-8"></th>
-                  <th className="th-sticky w-10">#</th>
-                  <th className="th-sticky">Title</th>
-                  <th className="th-sticky">Genre</th>
-                  <th className="th-sticky">Grade</th>
-                  <th className="th-sticky">Audit</th>
-                  <th className="th-sticky">Advisory</th>
-                  <th className="th-sticky">Dur</th>
-                  <th className="th-sticky text-right">Play</th>
+                  <th className="th w-8"></th>
+                  <th className="th w-10">#</th>
+                  <th className="th">Title</th>
+                  <th className="th">Genre</th>
+                  <th className="th">Grade</th>
+                  <th className="th">Audit</th>
+                  <th className="th">Advisory</th>
+                  <th className="th">Dur</th>
+                  <th className="th text-right">Play</th>
                 </tr>
               </thead>
               <tbody>
