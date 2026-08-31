@@ -1207,12 +1207,23 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             if not clean:
                 failed_checks += 1
                 add_issue(f"Missing album tag {t}", "album-wide")
+                for tr in tracks:
+                    tr["issues"].append(t)
             elif "" in vals:
                 failed_checks += 1
                 add_issue(f"Album tag {t} missing on some tracks", "album-wide")
+                for tr in tracks:
+                    tr["issues"].append(t)
             elif len(clean) > 1:
                 failed_checks += 1
                 add_issue(f"Album tag {t} inconsistent", "album-wide")
+                for tr in tracks:
+                    tr["issues"].append(t)
+            # surface the album tag value per track so detail views can
+            # render it (e.g. ALBUM DYNAMIC RANGE as its own row)
+            album_val = next(iter(clean)) if len(clean) == 1 else ("" if clean else None)
+            for tr in tracks:
+                tr["values"][t] = album_val
 
     # Media-specific file requirements.
     if media_summary == "CD":
@@ -1253,8 +1264,9 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             except Exception:
                 pass
 
-        # CD releases must carry the rip-log score on every track (skipped if LOG_GRADE disabled for this filetype).
-        if cfg.get("grade_check_log_grade", True):
+        # CD releases must carry the rip-log score on every track (skipped if
+        # LOG_GRADE disabled for this filetype). Digital Media has no log.
+        if media_summary == "CD" and cfg.get("grade_check_log_grade", True):
             for tr in tracks:
                 if tr.get("unreadable"):
                     continue

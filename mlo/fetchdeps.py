@@ -505,13 +505,43 @@ def _install_php(log=print, progress=None):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _patch_simple_dr_meter(root_dir):
+    """Apply known compatibility fixes to the installed simple-dr-meter:
+    empty-peaks (silent/very short tracks) crash the batch otherwise.
+    Idempotent — safe to run after every install/update."""
+    main_py = os.path.join(root_dir, "main.py")
+    metrics_py = os.path.join(root_dir, "audio_metrics", "audio_metrics.py")
+    for path, old, new in (
+        (metrics_py,
+         "    peak_index = block_count - 2\n    rms_percentile = 0.2",
+         "    if block_count < 2:\n        return None  # too few blocks (silent/very short track): no DR\n\n    peak_index = block_count - 2\n    rms_percentile = 0.2"),
+        (main_py,
+         "        for track_info, dr_metrics in analyzed_tracks:\n            dr = dr_metrics.dr",
+         "        for track_info, dr_metrics in analyzed_tracks:\n            if dr_metrics is None:\n                # silent/very short track produced no blocks - skip\n                continue\n            dr = dr_metrics.dr"),
+        (main_py,
+         "    if keep_precision:\n        dr_mean_rounded = numpy.mean(dr_items)\n    else:\n        dr_mean_rounded = int(numpy.round(numpy.mean(dr_items)))  # official\n    dr_median = numpy.median(dr_items)",
+         "    valid = [d for d in dr_items if d is not None and d == d]\n    if not valid:\n        valid = [0]\n    if keep_precision:\n        dr_mean_rounded = numpy.mean(valid)\n    else:\n        dr_mean_rounded = int(numpy.round(numpy.mean(valid)))  # official\n    dr_median = numpy.median(valid)"),
+    ):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+            if old not in text:
+                continue
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text.replace(old, new))
+        except OSError:
+            pass
+
+
 def install_dependency(key, log=print, progress=None):
     """Download and install the latest release of a tool.
 
     Returns the installed version string. Raises on any failure.
     """
     if key == "simpledrmeter":
-        return _install_simple_dr_meter(log=log, progress=progress)
+        version = _install_simple_dr_meter(log=log, progress=progress)
+        _patch_simple_dr_meter(os.path.join(DEPS_DIR, f"simple-dr-meter v{version}"))
+        return version
     if key == "php":
         return _install_php(log=log, progress=progress)
 
