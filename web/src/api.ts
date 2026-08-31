@@ -225,6 +225,21 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
 
+  dependencies: () =>
+    json<{ deps_dir: string; tools: { key: string; name: string; installed_version?: string; latest_version?: string; detected_version?: string; path?: string | null; state: string }[] }>(
+      `${API}/dependencies`
+    ),
+  installDependencies: (keys?: string[]) =>
+    json<{ results: { key: string; name: string; ok: boolean; error?: string }[] }>(
+      `${API}/dependencies/install`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keys: keys ?? null }),
+      },
+      900000
+    ),
+
   cover: (albumPath: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);

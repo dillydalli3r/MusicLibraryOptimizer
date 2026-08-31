@@ -253,6 +253,70 @@ def open_folder(req: AlbumRemove):
     return {"ok": True}
 
 
+@app.get("/api/dependencies")
+def dependencies():
+    """Installed external tools (.dependencies + PATH) vs. the pinned
+    versions the scripts expect, with optional GitHub 'latest' check."""
+    from mlo.tools import detect_all_tools, DEPS_DIR
+    from mlo.fetchdeps import DISPLAY_NAMES, installed_versions, latest_versions
+    tools = detect_all_tools()
+    installed = installed_versions()
+    latest = {}
+    try:
+        latest = latest_versions()
+    except Exception:
+        pass
+    out = []
+    for key, name in DISPLAY_NAMES.items():
+        info = tools.get(key) or {}
+        exe = next((v for k, v in info.items() if k.endswith("_exe") and v), None)
+        ver = info.get("version")
+        iv = installed.get(key)
+        lv = latest.get(key)
+        present = bool(iv or info)
+        if not present:
+            state = "missing"
+        elif lv and (iv or ver) and lv != (iv or ver):
+            state = "update"
+        else:
+            state = "ok"
+        out.append({
+            "key": key,
+            "name": name,
+            "installed_version": iv,
+            "latest_version": lv,
+            "detected_version": ver,
+            "path": exe,
+            "state": state,
+        })
+    return {"deps_dir": str(DEPS_DIR), "tools": out}
+
+
+class DepsInstallRequest(BaseModel):
+    keys: Optional[List[str]] = None
+
+
+@app.post("/api/dependencies/install")
+def dependencies_install(req: DepsInstallRequest):
+    """Install/update external tools from their pinned GitHub releases."""
+    from mlo import fetchdeps
+    wanted = set(req.keys or [])
+    results = []
+    for key, name in fetchdeps.DISPLAY_NAMES.items():
+        if wanted and key not in wanted:
+            continue
+        try:
+            fetchdeps.install_dependency(key, log=lambda m: None)
+            results.append({"key": key, "name": name, "ok": True})
+        except Exception as e:
+            results.append({"key": key, "name": name, "ok": False, "error": str(e)})
+    try:
+        fetchdeps.refresh_tool_cache()
+    except Exception:
+        pass
+    return {"results": results}
+
+
 @app.get("/api/album/mbdetect")
 def album_mbdetect(path: str = Query(...)):
     """Live scan: find a MusicBrainz release ID in ANY track tag.

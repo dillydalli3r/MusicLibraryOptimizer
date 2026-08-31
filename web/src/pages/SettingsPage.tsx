@@ -229,6 +229,37 @@ export default function SettingsPage() {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [tab, setTab] = useState("general");
+  const [runAll, setRunAll] = useState<number[]>([1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
+
+  const RUN_ALL_SCRIPTS: { id: number; label: string }[] = [
+    { id: 1, label: "Lyrics" },
+    { id: 2, label: "CUEs" },
+    { id: 8, label: "AutoTag" },
+    { id: 3, label: "FLACs" },
+    { id: 5, label: "Images" },
+    { id: 9, label: "AccurateRip" },
+    { id: 6, label: "Audit" },
+    { id: 4, label: "Grade" },
+    { id: 7, label: "DR / ReplayGain" },
+    { id: 10, label: "Format All" },
+  ];
+
+  const NAV: { id: string; label: string; section?: string }[] = [
+    { id: "general", label: "General" },
+    { id: "appearance", label: "Appearance" },
+    { id: "naming", label: "File naming" },
+    { id: "deps", label: "Dependencies" },
+    { id: "flac", label: "FLACs", section: "Scripts" },
+    { id: "images", label: "Images", section: "Scripts" },
+    { id: "lyrics", label: "Lyrics & CUEs", section: "Scripts" },
+    { id: "dr", label: "DR / ReplayGain", section: "Scripts" },
+    { id: "audit", label: "Audit", section: "Scripts" },
+    { id: "autotag", label: "AutoTag", section: "Scripts" },
+    { id: "accurip", label: "AccurateRip", section: "Scripts" },
+    { id: "tagwrites", label: "Tag writes", section: "Scripts" },
+    { id: "grading", label: "Grading", section: "Scripts" },
+  ];
 
   const runPreview = async () => {
     setPreviewing(true);
@@ -257,6 +288,7 @@ export default function SettingsPage() {
     setNamingScript(String(config.naming_script ?? "") || DEFAULT_NAMING_SCRIPT);
     setShortFolderNames(!!config.short_folder_names);
     setScriptCfg(Object.fromEntries(ALL_CFG_KEYS.map((k) => [k, config[k]])));
+    setRunAll(Array.isArray(config.run_all_order) ? config.run_all_order.map(Number).filter((n) => n >= 1 && n <= 10) : [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
     setLoaded(true);
   }, [config, loaded]);
 
@@ -295,6 +327,7 @@ export default function SettingsPage() {
         worker_limit: workerLimit,
         naming_script: namingScript,
         short_folder_names: shortFolderNames,
+        run_all_order: runAll,
       });
       toast("Config saved");
       qc.invalidateQueries({ queryKey: ["config"] });
@@ -304,189 +337,306 @@ export default function SettingsPage() {
     }
   };
 
+  const GROUP_BY_TAB: Record<string, CfgGroup> = {
+    flac: CFG_GROUPS[0], images: CFG_GROUPS[1], lyrics: CFG_GROUPS[2],
+    dr: CFG_GROUPS[3], audit: CFG_GROUPS[4], autotag: CFG_GROUPS[5],
+    accurip: CFG_GROUPS[6], tagwrites: CFG_GROUPS[7], grading: CFG_GROUPS[8],
+  };
+
+  const { data: deps, refetch: refetchDeps } = useQuery({
+    queryKey: ["dependencies"],
+    queryFn: api.dependencies,
+    retry: false,
+  });
+  const [depsBusy, setDepsBusy] = useState(false);
+
+  const installDeps = async (keys?: string[]) => {
+    setDepsBusy(true);
+    try {
+      const r = await api.installDependencies(keys);
+      const failed = r.results.filter((x) => !x.ok);
+      toast(failed.length ? "Install finished with " + failed.length + " failure(s)" : "Dependencies installed / updated");
+      refetchDeps();
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setDepsBusy(false);
+    }
+  };
+
+  const renderFields = (fields: CfgField[]) => (
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-1.5">
+      {fields.map((f) => (
+        <label key={f.k} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+          {f.type === "bool" ? (
+            <>
+              <input type="checkbox" checked={!!scriptCfg[f.k]} onChange={(e) => setCfg(f.k, e.target.checked)} />
+              {f.label}
+            </>
+          ) : f.type === "select" ? (
+            <div className="flex items-center gap-2 w-full">
+              <span className="flex-1 min-w-0 truncate">{f.label}</span>
+              <select
+                className="input !w-32 !py-0.5 text-[11px] shrink-0"
+                value={String(scriptCfg[f.k] ?? "")}
+                onChange={(e) => setCfg(f.k, e.target.value)}
+              >
+                {f.options.map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </select>
+            </div>
+          ) : f.type === "text" ? (
+            <div className="flex items-center gap-2 w-full">
+              <span className="flex-1 min-w-0 truncate">{f.label}</span>
+              <input
+                className="input !w-32 !py-0.5 text-[11px] shrink-0"
+                value={String(scriptCfg[f.k] ?? "")}
+                onChange={(e) => setCfg(f.k, e.target.value)}
+              />
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 w-full">
+              <span className="flex-1 min-w-0 truncate">{f.label}</span>
+              <input
+                className="input !w-20 !py-0.5 text-[11px] shrink-0 text-right"
+                type="number"
+                min={f.min}
+                max={f.max}
+                step={f.step ?? 1}
+                value={String(scriptCfg[f.k] ?? "")}
+                onChange={(e) => setCfg(f.k, Number(e.target.value))}
+              />
+            </div>
+          )}
+        </label>
+      ))}
+    </div>
+  );
+
   return (
-    <div className="p-6 max-w-3xl space-y-5">
+    <div className="p-6 max-w-5xl">
       <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
 
-      <div className="bg-card rounded-lg border border-border p-4 space-y-3">
-        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Appearance</div>
-        <div>
-          <span className="text-xs text-zinc-500 uppercase">Accent color</span>
-          <div className="flex gap-2 mt-1.5">
-            {ACCENT_OPTIONS.map((a) => (
-              <button
-                key={a.id}
-                title={a.name}
-                onClick={() => pickAccent(a.id)}
-                className="h-8 w-8 rounded-full border-2 flex items-center justify-center transition-transform hover:scale-110"
-                style={{
-                  backgroundColor: a.color,
-                  borderColor: accent === a.id ? "#fff" : "#3f3f46",
-                }}
-              >
-                {accent === a.id && <Check className="h-4 w-4 text-black" />}
-              </button>
-            ))}
-          </div>
-        </div>
-        <label className="block">
-          <span className="text-xs text-zinc-500 uppercase">Default library view</span>
-          <select className="input mt-1" value={defaultView} onChange={(e) => pickDefaultView(e.target.value)}>
-            <option value="albums">Albums</option>
-            <option value="artists">Artists</option>
-            <option value="tracks">Tracks</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="bg-card rounded-lg border border-border p-4 space-y-3">
-        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Library</div>
-        <label className="block">
-          <span className="text-xs text-zinc-500 uppercase">Music folder</span>
-          <div className="flex gap-2 mt-1">
-            <input className="input" value={musicFolder} onChange={(e) => setMusicFolder(e.target.value)} placeholder="F:\Music" />
-            <button className="btn-ghost" onClick={pickNative} title="Native folder picker (desktop)">
-              <FolderOpen className="h-4 w-4" />
+      <div className="flex gap-6 mt-4">
+        <nav className="w-44 shrink-0 space-y-0.5 sticky top-20 self-start max-h-[calc(100vh-120px)] overflow-auto pr-1">
+          {NAV.map((n) => (
+            <button
+              key={n.id}
+              onClick={() => setTab(n.id)}
+              className={`w-full text-left px-3 py-1.5 rounded-md text-xs transition-colors ${
+                tab === n.id ? "bg-raise text-white border border-accent/40" : "text-zinc-400 hover:text-white hover:bg-panel border border-transparent"
+              }`}
+            >
+              {n.label}
             </button>
-          </div>
-        </label>
-        <label className="block">
-          <span className="text-xs text-zinc-500 uppercase">Lyrics format</span>
-          <select className="input mt-1" value={lyricsFormat} onChange={(e) => setLyricsFormat(e.target.value)}>
-            <option value="EMBEDDED">Embedded</option>
-            <option value="LRC">LRC sidecar</option>
-            <option value="BOTH">Both</option>
-          </select>
-        </label>
-        <label className="block">
-          <span className="text-xs text-zinc-500 uppercase">Worker limit (0 = auto)</span>
-          <input className="input mt-1" type="number" min={0} value={workerLimit} onChange={(e) => setWorkerLimit(Number(e.target.value))} />
-        </label>
-      </div>
+          ))}
+        </nav>
 
-      <div className="bg-card rounded-lg border border-border p-4 space-y-3">
-        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">File naming (Picard-style script)</div>
-        <textarea
-          className="input font-mono text-xs min-h-[110px]"
-          value={namingScript}
-          onChange={(e) => setNamingScript(e.target.value)}
-          spellCheck={false}
-        />
-        <div className="text-[11px] text-zinc-600 leading-relaxed">
-          Variables: <code>%albumartist% %musicbrainz_albumartistid% %releasetype% %originaldate% %date% %album% %releasecountry% %media% %catalognumber% %discnumber% %tracknumber% %title%</code> ·
-          Functions: <code>$if(a,b,c) $left(s,n) $num(s,n) $lower $upper $replace</code> · <code>/</code> creates folders.
-          Applied from the album page or the bulk selection toolbar.
-        </div>
-        <div className="flex items-center gap-4 flex-wrap">
-          <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={shortFolderNames}
-              onChange={(e) => setShortFolderNames(e.target.checked)}
-              className=""
-            />
-            Shorter folder names (truncate MusicBrainz IDs to 8 chars)
-          </label>
-          <button className="btn-ghost !py-1 text-xs" onClick={() => setNamingScript(DEFAULT_NAMING_SCRIPT)}>
-            <RotateCcw className="h-3.5 w-3.5" /> Reset to default
-          </button>
-          <button className="btn-ghost !py-1 text-xs" onClick={runPreview} disabled={previewing}>
-            Preview
-          </button>
-        </div>
-        {previewPath && (
-          <div className="rounded-md border border-border bg-panel px-3 py-2 font-mono text-xs text-accent-soft break-all">
-            <span className="text-zinc-500">sample album → </span>
-            {previewPath}
-          </div>
-        )}
-        {previewError && (
-          <div className="rounded-md border border-red-900 bg-red-950/40 px-3 py-2 font-mono text-xs text-red-300 break-all">
-            {previewError}
-          </div>
-        )}
-      </div>
-
-      <div className="bg-card rounded-lg border border-border p-4 space-y-5">
-        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Scripts — in-depth configuration</div>
-
-        {CFG_GROUPS.map((g) => (
-          <div key={g.title}>
-            <div className="text-xs font-bold text-zinc-300">{g.title}</div>
-            {g.blurb && <div className="text-[10px] text-zinc-600 mb-1">{g.blurb}</div>}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-1.5">
-              {g.fields.map((f) => (
-                <label key={f.k} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
-                  {f.type === "bool" ? (
-                    <>
-                      <input type="checkbox" checked={!!scriptCfg[f.k]} onChange={(e) => setCfg(f.k, e.target.checked)} />
-                      {f.label}
-                    </>
-                  ) : f.type === "select" ? (
-                    <div className="flex items-center gap-2 w-full">
-                      <span className="flex-1 min-w-0 truncate">{f.label}</span>
-                      <select
-                        className="input !w-32 !py-0.5 text-[11px] shrink-0"
-                        value={String(scriptCfg[f.k] ?? "")}
-                        onChange={(e) => setCfg(f.k, e.target.value)}
-                      >
-                        {f.options.map(([v, l]) => (
-                          <option key={v} value={v}>{l}</option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : f.type === "text" ? (
-                    <div className="flex items-center gap-2 w-full">
-                      <span className="flex-1 min-w-0 truncate">{f.label}</span>
-                      <input
-                        className="input !w-32 !py-0.5 text-[11px] shrink-0"
-                        value={String(scriptCfg[f.k] ?? "")}
-                        onChange={(e) => setCfg(f.k, e.target.value)}
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 w-full">
-                      <span className="flex-1 min-w-0 truncate">{f.label}</span>
-                      <input
-                        className="input !w-20 !py-0.5 text-[11px] shrink-0 text-right"
-                        type="number"
-                        min={f.min}
-                        max={f.max}
-                        step={f.step ?? 1}
-                        value={String(scriptCfg[f.k] ?? "")}
-                        onChange={(e) => setCfg(f.k, Number(e.target.value))}
-                      />
-                    </div>
-                  )}
-                </label>
-              ))}
-            </div>
-          </div>
-        ))}
-
-        <details className="rounded-md border border-border bg-panel/40 p-3">
-          <summary className="text-xs font-semibold text-zinc-400 cursor-pointer select-none">
-            Grading — individual checks ({GRADE_CHECK_KEYS.length})
-          </summary>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-2">
-            {GRADE_CHECK_KEYS.map((f) => (
-              <label key={f.k} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
-                <input type="checkbox" checked={!!scriptCfg[f.k]} onChange={(e) => setCfg(f.k, e.target.checked)} />
-                {f.label}
+        <div className="flex-1 min-w-0 space-y-5 pb-10">
+          {tab === "general" && (
+            <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+              <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Library</div>
+              <label className="block">
+                <span className="text-xs text-zinc-500 uppercase">Music folder</span>
+                <div className="flex gap-2 mt-1">
+                  <input className="input" value={musicFolder} onChange={(e) => setMusicFolder(e.target.value)} placeholder="F:\Music" />
+                  <button className="btn-ghost" onClick={pickNative} title="Native folder picker (desktop)">
+                    <FolderOpen className="h-4 w-4" />
+                  </button>
+                </div>
               </label>
-            ))}
-          </div>
-        </details>
+              <label className="block">
+                <span className="text-xs text-zinc-500 uppercase">Lyrics format</span>
+                <select className="input mt-1" value={lyricsFormat} onChange={(e) => setLyricsFormat(e.target.value)}>
+                  <option value="EMBEDDED">Embedded</option>
+                  <option value="LRC">LRC sidecar</option>
+                  <option value="BOTH">Both</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs text-zinc-500 uppercase">Worker limit (0 = auto)</span>
+                <input className="input mt-1" type="number" min={0} value={workerLimit} onChange={(e) => setWorkerLimit(Number(e.target.value))} />
+              </label>
+              <div>
+                <span className="text-xs text-zinc-500 uppercase">Run All — scripts in order</span>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-1.5">
+                  {RUN_ALL_SCRIPTS.map((s) => (
+                    <label key={s.id} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={runAll.includes(s.id)}
+                        onChange={(e) =>
+                          setRunAll((ids) => (e.target.checked ? [...ids, s.id] : ids.filter((i) => i !== s.id)))
+                        }
+                      />
+                      <span className="text-zinc-600 w-4">{s.id}</span>
+                      {s.label}
+                    </label>
+                  ))}
+                </div>
+                <div className="text-[10px] text-zinc-600 mt-1">The Run All button executes them in this order.</div>
+              </div>
+            </div>
+          )}
+
+          {tab === "appearance" && (
+            <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+              <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Appearance</div>
+              <div>
+                <span className="text-xs text-zinc-500 uppercase">Accent color</span>
+                <div className="flex gap-2 mt-1.5">
+                  {ACCENT_OPTIONS.map((a) => (
+                    <button
+                      key={a.id}
+                      title={a.name}
+                      onClick={() => pickAccent(a.id)}
+                      className="h-8 w-8 rounded-full border-2 flex items-center justify-center transition-transform hover:scale-110"
+                      style={{
+                        backgroundColor: a.color,
+                        borderColor: accent === a.id ? "#fff" : "#3f3f46",
+                      }}
+                    >
+                      {accent === a.id && <Check className="h-4 w-4 text-black" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="block">
+                <span className="text-xs text-zinc-500 uppercase">Default library view</span>
+                <select className="input mt-1" value={defaultView} onChange={(e) => pickDefaultView(e.target.value)}>
+                  <option value="albums">Albums</option>
+                  <option value="artists">Artists</option>
+                  <option value="tracks">Tracks</option>
+                </select>
+              </label>
+            </div>
+          )}
+
+          {tab === "naming" && (
+            <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+              <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">File naming (Picard-style script)</div>
+              <textarea
+                className="input font-mono text-xs min-h-[110px]"
+                value={namingScript}
+                onChange={(e) => setNamingScript(e.target.value)}
+                spellCheck={false}
+              />
+              <div className="text-[11px] text-zinc-600 leading-relaxed">
+                Variables: <code>%albumartist% %musicbrainz_albumartistid% %releasetype% %originaldate% %date% %album% %releasecountry% %media% %catalognumber% %discnumber% %tracknumber% %title%</code> ·
+                Functions: <code>$if(a,b,c) $left(s,n) $num(s,n) $lower $upper $replace $ne $right</code> · <code>/</code> creates folders.
+                Applied from the album page or the bulk selection toolbar.
+              </div>
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer select-none">
+                  <input type="checkbox" checked={shortFolderNames} onChange={(e) => setShortFolderNames(e.target.checked)} />
+                  Shorter folder names (truncate MusicBrainz IDs to 8 chars)
+                </label>
+                <button className="btn-ghost !py-1 text-xs" onClick={() => setNamingScript(DEFAULT_NAMING_SCRIPT)}>
+                  <RotateCcw className="h-3.5 w-3.5" /> Reset to default
+                </button>
+                <button className="btn-ghost !py-1 text-xs" onClick={runPreview} disabled={previewing}>
+                  Preview
+                </button>
+              </div>
+              {previewPath && (
+                <div className="rounded-md border border-border bg-panel px-3 py-2 font-mono text-xs text-accent-soft break-all">
+                  <span className="text-zinc-500">sample album → </span>
+                  {previewPath}
+                </div>
+              )}
+              {previewError && (
+                <div className="rounded-md border border-red-900 bg-red-950/40 px-3 py-2 font-mono text-xs text-red-300 break-all">
+                  {previewError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "deps" && (
+            <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Dependencies</div>
+                  <div className="text-[11px] text-zinc-600 mt-0.5">
+                    Tools the scripts need. Installed from <code className="font-mono">{deps?.deps_dir ?? ".dependencies"}</code> or found on PATH.
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button className="btn-ghost !py-1 text-xs" onClick={() => refetchDeps()} disabled={depsBusy}>
+                    Refresh
+                  </button>
+                  <button
+                    className="btn-ghost !py-1 text-xs"
+                    onClick={() => installDeps(deps?.tools.filter((t) => t.state === "missing").map((t) => t.key))}
+                    disabled={depsBusy}
+                  >
+                    Install missing
+                  </button>
+                  <button className="btn-primary !py-1 text-xs" onClick={() => installDeps()} disabled={depsBusy}>
+                    {depsBusy ? "Installing…" : "Install / update all"}
+                  </button>
+                </div>
+              </div>
+              <div className="rounded-md border border-border overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-panel/60">
+                    <tr>
+                      <th className="th">Tool</th>
+                      <th className="th">Status</th>
+                      <th className="th">Installed</th>
+                      <th className="th">Latest</th>
+                      <th className="th">Path</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(deps?.tools ?? []).map((t) => (
+                      <tr key={t.key} className="table-row cursor-default">
+                        <td className="td font-medium">{t.name}</td>
+                        <td className="td">
+                          {t.state === "ok" && <span className="chip bg-emerald-900/50 text-emerald-300 border border-emerald-800">ready</span>}
+                          {t.state === "update" && <span className="chip bg-amber-900/50 text-amber-300 border border-amber-900">update</span>}
+                          {t.state === "missing" && <span className="chip bg-red-900/50 text-red-300 border border-red-900">missing</span>}
+                        </td>
+                        <td className="td text-zinc-500">{t.installed_version ?? t.detected_version ?? "—"}</td>
+                        <td className="td text-zinc-500">{t.latest_version ?? "—"}</td>
+                        <td className="td text-zinc-500 truncate max-w-[280px]">{t.path ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="text-[10px] text-zinc-600">
+                Install downloads the pinned release from GitHub into the dependencies folder; PATH-installed tools (scoop etc.) are shown as ready.
+              </div>
+            </div>
+          )}
+
+          {GROUP_BY_TAB[tab] && (
+            <div className="bg-card rounded-lg border border-border p-4 space-y-3">
+              <div className="text-xs font-bold text-zinc-300">{GROUP_BY_TAB[tab].title}</div>
+              {GROUP_BY_TAB[tab].blurb && <div className="text-[10px] text-zinc-600">{GROUP_BY_TAB[tab].blurb}</div>}
+              {renderFields(GROUP_BY_TAB[tab].fields)}
+            </div>
+          )}
+
+          {tab === "grading" && (
+            <details className="bg-card rounded-lg border border-border p-4" open>
+              <summary className="text-sm font-semibold cursor-pointer">Individual grading checks ({GRADE_CHECK_KEYS.length})</summary>
+              <div className="mt-2">{renderFields(GRADE_CHECK_KEYS)}</div>
+            </details>
+          )}
+
+          <button className="btn-primary" onClick={save}>
+            <Save className="h-4 w-4" /> Save all settings
+          </button>
+
+          <details className="bg-card rounded-lg border border-border p-4">
+            <summary className="text-sm font-semibold cursor-pointer">Raw config (advanced)</summary>
+            <pre className="mt-2 text-xs text-zinc-400 overflow-auto max-h-80">{JSON.stringify(config, null, 2)}</pre>
+          </details>
+        </div>
       </div>
-
-      <button className="btn-primary" onClick={save}>
-        <Save className="h-4 w-4" /> Save all settings
-      </button>
-
-      <details className="bg-card rounded-lg border border-border p-4">
-        <summary className="text-sm font-semibold cursor-pointer">Raw config (advanced)</summary>
-        <pre className="mt-2 text-xs text-zinc-400 overflow-auto max-h-80">{JSON.stringify(config, null, 2)}</pre>
-      </details>
     </div>
   );
 }
