@@ -144,7 +144,7 @@ export default function PlayerBar() {
           <SkipBack className="h-4 w-4" />
         </button>
         <button
-          className="p-2.5 rounded-full bg-accent text-white hover:bg-accent-soft"
+          className="p-2.5 rounded-full bg-accent on-accent hover:bg-accent-soft"
           onClick={() => {
             const a = audioRef.current;
             if (!a) return;

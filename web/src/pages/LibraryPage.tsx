@@ -352,7 +352,7 @@ const toggleExpand = (path: string) =>
               key={v.id}
               onClick={() => setView(v.id)}
               className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                view === v.id ? "bg-accent text-white" : "bg-panel text-zinc-400 hover:text-white"
+                view === v.id ? "bg-accent on-accent" : "bg-panel text-zinc-400 hover:text-white"
               }`}
             >
               {v.label}
@@ -412,7 +412,7 @@ const toggleExpand = (path: string) =>
                     ? "bg-sky-900/60 text-sky-200 border-sky-800"
                     : p.id === "digital"
                       ? "bg-accent/15 text-accent-soft border-accent/40"
-                      : "bg-accent text-white border-accent"
+                      : "bg-accent on-accent border-accent"
                 : "bg-raise text-zinc-400 border-border hover:text-white"
             }`}
           >

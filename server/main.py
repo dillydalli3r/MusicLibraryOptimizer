@@ -12,6 +12,7 @@ import json
 import asyncio
 import pathlib
 import tempfile
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -34,7 +35,20 @@ from server import integrations as intg
 from server import tagcache
 from mlo.paths import SKIP_DIRS
 
-app = FastAPI(title="MusicLibraryOptimizer API", version="2.0.0")
+# Captured at startup — worker threads use run_coroutine_threadsafe against
+# this loop to relay script progress over the WebSocket (get_event_loop()
+# from a worker thread is unreliable and deprecated).
+_MAIN_LOOP = None
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
+    yield
+
+
+app = FastAPI(title="MusicLibraryOptimizer API", version="2.0.0", lifespan=_lifespan)
 
 # Docker/bootstrap: MLO_MUSIC_FOLDER env seeds music_folder when unset.
 _MLO_ENV_FOLDER = os.environ.get("MLO_MUSIC_FOLDER")
@@ -70,11 +84,9 @@ def _relay(done, total, desc):
             orig_hook(done, total, desc)
     except Exception:
         pass
-    loop = None
-    try:
-        loop = asyncio.get_event_loop()
-    except Exception:
-        pass
+    loop = _MAIN_LOOP
+    if loop is None or loop.is_closed():
+        return
     for ws in list(progress_clients):
         try:
             asyncio.run_coroutine_threadsafe(
@@ -188,6 +200,57 @@ def library():
     """Tag-rich library tree: artists -> albums -> tracks (grade/audit + tags)."""
     cfg = load_config()
     return lib_mod.build_library(cfg)
+
+
+@app.post("/api/naming/preview")
+def naming_preview(req: dict):
+    """Evaluate a naming script against a sample track so Settings can show
+    what the folder structure would look like before running Organize."""
+    from server.naming import DEFAULT_NAMING_SCRIPT, eval_script, track_variables
+    script = str(req.get("script") or "").strip() or DEFAULT_NAMING_SCRIPT
+    shorter = bool(req.get("short_folder_names"))
+    sample = req.get("sample") or {}
+    tags = {
+        "ALBUMARTIST": str(sample.get("albumartist") or "System of a Down"),
+        "ARTIST": str(sample.get("artist") or "System of a Down"),
+        "ALBUM": str(sample.get("album") or "Toxicity"),
+        "DATE": str(sample.get("date") or "2001-09-04"),
+        "ORIGINALDATE": str(sample.get("originaldate") or "2001-08-27"),
+        "RELEASETYPE": str(sample.get("releasetype") or "album"),
+        "RELEASECOUNTRY": str(sample.get("releasecountry") or "US"),
+        "MEDIA": str(sample.get("media") or "CD"),
+        "CATALOGNUMBER": str(sample.get("catalognumber") or "CK 62240"),
+        "DISCNUMBER": "1", "TRACKNUMBER": "4", "TITLE": str(sample.get("title") or "Psycho"),
+        "MUSICBRAINZ_ALBUMID": "f8a44d0f-8241-3bdd-9988-413f28606650",
+        "MUSICBRAINZ_ALBUMARTISTID": "cc0b7089-5d5c-4c2e-a48f-7b9c3e5d1a2b",
+    }
+    try:
+        path = eval_script(script, track_variables(tags, tags["RELEASETYPE"]), shorter_ids=shorter)
+        return {"path": path, "ok": True}
+    except Exception as e:
+        return {"path": None, "ok": False, "error": str(e)}
+
+
+@app.post("/api/open-folder")
+def open_folder(req: AlbumRemove):
+    """Reveal a folder in the OS file manager (Windows/macOS/Linux)."""
+    import subprocess
+    import sys as _sys
+    p = os.path.normpath(req.path)
+    if not os.path.isdir(p):
+        raise HTTPException(404, "folder not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "folder outside music folder")
+    try:
+        if _sys.platform == "win32":
+            os.startfile(p)  # type: ignore[attr-defined]
+        elif _sys.platform == "darwin":
+            subprocess.Popen(["open", p])
+        else:
+            subprocess.Popen(["xdg-open", p])
+    except Exception as e:
+        raise HTTPException(500, f"could not open folder: {e}")
+    return {"ok": True}
 
 
 @app.get("/api/album/mbdetect")

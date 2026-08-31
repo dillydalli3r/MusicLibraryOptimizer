@@ -15,6 +15,7 @@ const ACCENT_OPTIONS: { id: string; name: string; color: string }[] = [
   { id: "sky", name: "Sky", color: "#0ea5e9" },
   { id: "amber", name: "Amber", color: "#f59e0b" },
   { id: "red", name: "Red", color: "#ef4444" },
+  { id: "mono", name: "Black & white", color: "#ffffff" },
 ];
 
 export default function SettingsPage() {
@@ -48,6 +49,28 @@ export default function SettingsPage() {
   const [coverJpegQuality, setCoverJpegQuality] = useState(95);
   const [jpegxlEffort, setJpegxlEffort] = useState(10);
   const [pngLevel, setPngLevel] = useState(6);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  const runPreview = async () => {
+    setPreviewing(true);
+    setPreviewError(null);
+    try {
+      const r = await api.namingPreview(namingScript, shortFolderNames);
+      if (r.ok && r.path) {
+        setPreviewPath(r.path);
+      } else {
+        setPreviewError(r.error || "Script produced an empty path");
+        setPreviewPath(null);
+      }
+    } catch (e) {
+      setPreviewError(String(e));
+      setPreviewPath(null);
+    } finally {
+      setPreviewing(false);
+    }
+  };
 
   useEffect(() => {
     if (!config || loaded) return;
@@ -155,7 +178,7 @@ export default function SettingsPage() {
                 className="h-8 w-8 rounded-full border-2 flex items-center justify-center transition-transform hover:scale-110"
                 style={{
                   backgroundColor: a.color,
-                  borderColor: accent === a.id ? "#fff" : "transparent",
+                  borderColor: accent === a.id ? "#fff" : "#3f3f46",
                 }}
               >
                 {accent === a.id && <Check className="h-4 w-4 text-black" />}
@@ -224,7 +247,21 @@ export default function SettingsPage() {
           <button className="btn-ghost !py-1 text-xs" onClick={() => setNamingScript(DEFAULT_NAMING_SCRIPT)}>
             <RotateCcw className="h-3.5 w-3.5" /> Reset to default
           </button>
+          <button className="btn-ghost !py-1 text-xs" onClick={runPreview} disabled={previewing}>
+            Preview
+          </button>
         </div>
+        {previewPath && (
+          <div className="rounded-md border border-border bg-panel px-3 py-2 font-mono text-xs text-accent-soft break-all">
+            <span className="text-zinc-500">sample album → </span>
+            {previewPath}
+          </div>
+        )}
+        {previewError && (
+          <div className="rounded-md border border-red-900 bg-red-950/40 px-3 py-2 font-mono text-xs text-red-300 break-all">
+            {previewError}
+          </div>
+        )}
       </div>
 
       <button className="btn-primary" onClick={save}>

@@ -211,6 +211,20 @@ export const api = {
       body: JSON.stringify({ target_dir: targetDir, mb_link: mbLink || null, rym_link: rymLink || null }),
     }),
 
+  namingPreview: (script: string, shortFolderNames: boolean, sample?: Record<string, string>) =>
+    json<{ path: string | null; ok: boolean; error?: string }>(`${API}/naming/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ script, short_folder_names: shortFolderNames, sample }),
+    }),
+
+  openFolder: (path: string) =>
+    json<{ ok: boolean }>(`${API}/open-folder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }),
+
   cover: (albumPath: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);

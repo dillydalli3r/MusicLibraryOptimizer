@@ -1,7 +1,7 @@
 ﻿import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ExternalLink, Play, Wand2, Trash2, FolderSync } from "lucide-react";
+import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
@@ -125,6 +125,9 @@ export default function AlbumPage() {
           </button>
           <button className="btn-ghost" onClick={organizeAlbum} title="Apply the naming script from Settings">
             <FolderSync className="h-4 w-4" /> Organize
+          </button>
+          <button className="btn-ghost" onClick={async () => { try { await api.openFolder(data.path); } catch (e) { toast(String(e)); } }} title="Reveal this album in the file manager">
+            <FolderOpen className="h-4 w-4" /> Open folder
           </button>
           <button className="btn-danger" onClick={removeAlbum}>
             <Trash2 className="h-4 w-4" /> Remove

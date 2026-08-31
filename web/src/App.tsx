@@ -21,19 +21,21 @@ const NAV = [
   { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
 ];
 
-const ACCENTS: Record<string, [string, string]> = {
-  violet: ["139 92 246", "167 139 250"],
-  pink: ["236 72 153", "249 168 212"],
-  emerald: ["16 185 129", "110 231 183"],
-  sky: ["14 165 233", "125 211 252"],
-  amber: ["245 158 11", "252 211 77"],
-  red: ["239 68 68", "252 165 165"],
+const ACCENTS: Record<string, [string, string, string]> = {
+  violet: ["139 92 246", "167 139 250", "255 255 255"],
+  pink: ["236 72 153", "249 168 212", "255 255 255"],
+  emerald: ["16 185 129", "110 231 183", "255 255 255"],
+  sky: ["14 165 233", "125 211 252", "255 255 255"],
+  amber: ["245 158 11", "252 211 77", "24 24 27"],
+  red: ["239 68 68", "252 165 165", "255 255 255"],
+  mono: ["255 255 255", "212 212 216", "9 9 11"],
 };
 
 export function applyAccent(name: string | null) {
-  const [accent, soft] = ACCENTS[name ?? "violet"] ?? ACCENTS.violet;
+  const [accent, soft, fg] = ACCENTS[name ?? "violet"] ?? ACCENTS.violet;
   document.documentElement.style.setProperty("--accent", accent);
   document.documentElement.style.setProperty("--accent-soft", soft);
+  document.documentElement.style.setProperty("--accent-fg", fg);
 }
 
 export default function App() {

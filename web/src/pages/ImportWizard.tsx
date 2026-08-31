@@ -937,6 +937,10 @@ const finish = async () => {
     setMbLink("");
     setRymLink("");
     setSearchHits([]);
+    // reset per-track drafts so album B never inherits album A's data
+    setLyricsDrafts({});
+    setInstrumental({});
+    setAdvisory({});
   };
 
   const totalFiles = albums.reduce((n, g) => n + g.files.length, 0);
@@ -977,7 +981,7 @@ const finish = async () => {
               onClick={() => i < step && setStep(i)}
               className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors ${
                 i === step
-                  ? "bg-accent text-white"
+                  ? "bg-accent on-accent"
                   : i < step
                     ? "bg-accent/10 text-accent-soft hover:bg-accent/20"
                     : "bg-raise text-zinc-500 border border-border"
@@ -1180,11 +1184,17 @@ const finish = async () => {
                 {searchHits.map((h) => (
                   <button key={h.id} className="w-full text-left px-3 py-2 rounded bg-panel hover:bg-raise text-sm flex items-center gap-2"
                     onClick={() => { setMbLink(`https://musicbrainz.org/release/${h.id}`); setReleaseId(h.id); }}>
-                    <span className="flex-1 truncate">
+                    <span className="flex-1 truncate min-w-0">
                       <span className="text-zinc-200">{h.title}</span>
                       <span className="text-zinc-500"> — {h.artist} ({h.date})</span>
                     </span>
-                    {releaseId === h.id && <Check className="h-4 w-4 text-accent" />}
+                    {h.catalog_number && (
+                      <span className="chip bg-raise border border-border text-zinc-400 shrink-0">catno {h.catalog_number}</span>
+                    )}
+                    {h.barcode && (
+                      <span className="chip bg-raise border border-border text-zinc-500 font-mono shrink-0">{h.barcode}</span>
+                    )}
+                    {releaseId === h.id && <Check className="h-4 w-4 text-accent shrink-0" />}
                   </button>
                 ))}
               </div>
@@ -1465,7 +1475,7 @@ const finish = async () => {
                     onClick={() => setAdvisory((a) => ({ ...a, [t.path]: v }))}
                     className={`px-3 py-1 rounded text-xs border ${
                       (advisory[t.path] ?? t.tags.ITUNESADVISORY) === v
-                        ? "bg-accent text-white border-accent"
+                        ? "bg-accent on-accent border-accent"
                         : "bg-panel text-zinc-400 border-border hover:border-accent/50"
                     }`}
                   >

@@ -8,12 +8,20 @@
      both solid and opacity-modified accent utilities compile correctly. */
   --accent: 139 92 246;
   --accent-soft: 167 139 250;
+  /* foreground drawn ON TOP of accent fills (white for dark accents,
+     near-black for light accents like the black & white theme) */
+  --accent-fg: 255 255 255;
 }
 
 /* Native controls (checkbox/range tints) follow the accent token. */
 input[type="checkbox"],
 input[type="range"] {
   accent-color: rgb(var(--accent));
+}
+
+/* Text on top of solid accent fills (buttons, tabs, badges). */
+.on-accent {
+  color: rgb(var(--accent-fg));
 }
 
 * {
@@ -53,7 +61,7 @@ body {
     @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none;
   }
   .btn-primary {
-    @apply btn bg-accent text-white hover:bg-accent-soft;
+    @apply btn bg-accent on-accent hover:bg-accent-soft;
   }
   .btn-ghost {
     @apply btn bg-raise border border-border text-zinc-300 hover:bg-panel hover:text-white;
