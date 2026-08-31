@@ -779,6 +779,15 @@ export default function ImportWizard() {
   };
 
   // ---------------- Step 4: lyrics ----------------
+  // Display name for a track ANYWHERE in the wizard: MusicBrainz release
+  // title > existing tag > filename-derived fallback.
+  const displayTitle = (p: string) => {
+    const rt = suggByPath.get(p)?.release_track;
+    if (rt?.title) return rt.title;
+    const t = trackList.find((x) => x.path === p) ?? stepTracks.find((x) => x.path === p);
+    return t?.tags?.TITLE ?? defaultTrackName(p);
+  };
+
   const trackArtist = (p: string) => {
     const rt = suggByPath.get(p)?.release_track;
     if (rt?.artist_credit) return rt.artist_credit;
@@ -1258,7 +1267,7 @@ const finish = async () => {
                 return (
                   <div key={s.local} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
                     <span className="text-xs text-zinc-600 w-8">{local?.tags.TRACKNUMBER ?? s.file.split("/").pop()?.slice(0, 2)}</span>
-                    <span className="flex-1 truncate text-sm">{local?.tags.TITLE ?? s.file.split("/").pop()}</span>
+                    <span className="flex-1 truncate text-sm">{displayTitle(s.local)}</span>
                     <span className="text-xs text-zinc-500">
                       {s.matched ? `${s.release_track!.disc}.${s.release_track!.position} ${s.release_track!.title}` : "no match"}
                     </span>
@@ -1355,7 +1364,7 @@ const finish = async () => {
               {g.rows.map((t) => (
                 <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
                   <span className="text-xs text-zinc-600 w-8">{t.tags.TRACKNUMBER ?? "—"}</span>
-                  <span className="flex-1 truncate text-sm">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
+                  <span className="flex-1 truncate text-sm">{displayTitle(t.path)}</span>
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
                     {genreList(t.path).map((gen) => (
                       <span key={gen} className="chip bg-accent/10 text-accent-soft border border-accent/25">
@@ -1408,7 +1417,7 @@ const finish = async () => {
               <details key={t.path} className="bg-card rounded-lg border border-border open:pb-3">
                 <summary className="px-3 py-2 text-sm font-medium cursor-pointer flex items-center gap-2">
                   <span className="text-xs text-zinc-600 w-8">{t.tags.TRACKNUMBER ?? "—"}</span>
-                  <span className="flex-1 truncate">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
+                  <span className="flex-1 truncate">{displayTitle(t.path)}</span>
                   {hasDraft && (
                     <span className="chip bg-emerald-900/60 text-emerald-300 border border-emerald-800">
                       <Check className="h-3 w-3" /> lyrics
@@ -1467,7 +1476,7 @@ const finish = async () => {
           </div>
           {stepTracks.map((t) => (
             <div key={t.path} className="flex items-center gap-3 bg-card rounded-lg border border-border px-3 py-2">
-              <span className="flex-1 truncate text-sm">{t.tags.TITLE ?? defaultTrackName(t.path)}</span>
+              <span className="flex-1 truncate text-sm">{displayTitle(t.path)}</span>
               <div className="flex gap-1">
                 {["0", "1", "2"].map((v) => (
                   <button

@@ -1,0 +1,178 @@
+import { BarChart3, X } from "lucide-react";
+import { useMemo } from "react";
+import type { TrackTags } from "../types";
+
+interface StatTrack {
+  grade_pass?: boolean;
+  audit?: string | null;
+  log_grade?: string | number | null;
+  lyrics_present?: boolean;
+  tags?: TrackTags;
+}
+
+interface StatAlbum {
+  pass?: boolean;
+  grade_pct?: number | null;
+  pass_count?: number;
+  total_checks?: number;
+  audit_summary?: string | null;
+  media?: string | null;
+  track_count?: number;
+}
+
+/** Aggregated grading + audit statistics for any scope (library, selection,
+ * artist or album). Rendered as a modal panel. */
+export default function StatsPanel({
+  title,
+  albums,
+  tracks,
+  onClose,
+}: {
+  title: string;
+  albums?: StatAlbum[];
+  tracks: StatTrack[];
+  onClose: () => void;
+}) {
+  const s = useMemo(() => {
+    const albumsArr = albums ?? [];
+    const checks = albumsArr.reduce((n, a) => n + (a.total_checks ?? 0), 0);
+    const checksPassed = albumsArr.reduce((n, a) => n + (a.pass_count ?? 0), 0);
+    const trackTotal = tracks.length || albumsArr.reduce((n, a) => n + (a.track_count ?? 0), 0);
+    const trackPass = tracks.filter((t) => t.grade_pass).length;
+    const audit = { REAL: 0, FAKE: 0, MIX: 0, none: 0 };
+    for (const t of tracks) {
+      const a = t.audit ?? "none";
+      if (a === "REAL" || a === "FAKE" || a === "MIX") audit[a]++;
+      else audit.none++;
+    }
+    const media: Record<string, number> = {};
+    for (const a of albumsArr) {
+      const m = (a.media ?? "").toUpperCase();
+      if (m) media[m.includes("CD") ? "CD" : m.includes("DIGITAL") ? "Digital" : a.media ?? "?"] = (media[a.media ?? "?"] ?? 0) + 1;
+    }
+    const advisory = { 0: 0, 1: 0, 2: 0, none: 0 };
+    const genres = new Map<string, number>();
+    let instrumental = 0;
+    let withLyrics = 0;
+    for (const t of tracks) {
+      const tags = t.tags ?? {};
+      const adv = tags.ITUNESADVISORY;
+      if (adv === "0" || adv === "1" || adv === "2") advisory[adv]++;
+      else advisory.none++;
+      if (tags.INSTRUMENTAL === "1") instrumental++;
+      if (t.lyrics_present) withLyrics++;
+      for (const g of String(tags.GENRE ?? "").split(";")) {
+        const gg = g.trim();
+        if (gg) genres.set(gg, (genres.get(gg) ?? 0) + 1);
+      }
+    }
+    const lyricsCoverage = trackTotal ? Math.round((100 * withLyrics) / trackTotal) : 0;
+    const logGrades = tracks
+      .map((t) => Number(t.log_grade))
+      .filter((v) => Number.isFinite(v));
+    const avgLogGrade = logGrades.length ? Math.round(logGrades.reduce((a, b) => a + b, 0) / logGrades.length) : null;
+    return {
+      trackTotal,
+      trackPass,
+      checks, checksPassed,
+      audit, media, advisory,
+      instrumental, lyricsCoverage,
+      genres: [...genres.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10),
+      avgLogGrade, logGradeCount: logGrades.length,
+    };
+  }, [albums, tracks]);
+
+  const gradePct =
+    s.checks > 0
+      ? Math.round((100 * s.checksPassed) / s.checks)
+      : s.trackTotal > 0
+        ? Math.round((100 * s.trackPass) / s.trackTotal)
+        : null;
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-card border border-border rounded-xl w-full max-w-xl max-h-[85vh] overflow-auto shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 px-5 py-3 border-b border-border sticky top-0 bg-card z-10">
+          <BarChart3 className="h-4 w-4 text-accent" />
+          <span className="font-semibold text-sm truncate">Statistics — {title}</span>
+          <button className="ml-auto p-1 text-zinc-500 hover:text-white" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="rounded-lg bg-panel border border-border px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">Tracks</div>
+              <div className="text-lg font-bold">{s.trackTotal}</div>
+              <div className="text-[11px] text-zinc-500">{s.trackPass} passing</div>
+            </div>
+            <div className="rounded-lg bg-panel border border-border px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">Grade</div>
+              <div className="text-lg font-bold">{gradePct === null ? "—" : `${gradePct}%`}</div>
+              <div className="text-[11px] text-zinc-500">
+                {s.checksPassed}/{s.checks} checks
+              </div>
+            </div>
+            <div className="rounded-lg bg-panel border border-border px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">Albums</div>
+              <div className="text-lg font-bold">{albums?.length ?? "—"}</div>
+              <div className="text-[11px] text-zinc-500">{(albums ?? []).filter((a) => a.pass).length} passing</div>
+            </div>
+            <div className="rounded-lg bg-panel border border-border px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">Lyrics</div>
+              <div className="text-lg font-bold">{s.lyricsCoverage}%</div>
+              <div className="text-[11px] text-zinc-500">{s.instrumental} instrumental</div>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">AUDIT</div>
+            <div className="flex flex-wrap gap-1.5">
+              <span className="chip bg-emerald-900/50 text-emerald-300 border border-emerald-800">{s.audit.REAL} real</span>
+              <span className="chip bg-red-900/50 text-red-300 border border-red-900">{s.audit.FAKE} fake</span>
+              <span className="chip bg-amber-900/50 text-amber-300 border border-amber-900">{s.audit.MIX} mixed</span>
+              <span className="chip bg-raise border border-border text-zinc-400">{s.audit.none} not audited</span>
+              {s.avgLogGrade !== null && (
+                <span className="chip bg-raise border border-border text-zinc-400">log score avg {s.avgLogGrade}/100 ({s.logGradeCount})</span>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Media</div>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(s.media).map(([m, n]) => (
+                <span key={m} className="chip bg-raise border border-border text-zinc-300">{m}: {n}</span>
+              ))}
+              {!Object.keys(s.media).length && <span className="text-xs text-zinc-600">no album media info</span>}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Advisory</div>
+            <div className="flex flex-wrap gap-1.5">
+              <span className="chip bg-raise border border-border text-zinc-300">0 clean: {s.advisory["0"]}</span>
+              <span className="chip bg-raise border border-border text-zinc-300">1 explicit: {s.advisory["1"]}</span>
+              <span className="chip bg-raise border border-border text-zinc-300">2 safe: {s.advisory["2"]}</span>
+              <span className="chip bg-raise border border-border text-zinc-500">unset: {s.advisory.none}</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Top genres</div>
+            <div className="flex flex-wrap gap-1.5">
+              {s.genres.map(([g, n]) => (
+                <span key={g} className="chip bg-accent/10 text-accent-soft border border-accent/25">{g} × {n}</span>
+              ))}
+              {!s.genres.length && <span className="text-xs text-zinc-600">no genre tags</span>}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -2,13 +2,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Search, FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync,
+  Search, FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Tags as TagsIcon,
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { sortRows, SortHeader, type SortState } from "../lib/sort.tsx";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
+import StatsPanel from "../components/StatsPanel";
+import BatchTagEditor from "../components/BatchTagEditor";
 import type { Album, Artist, Track } from "../types";
 
 type View = "albums" | "artists" | "tracks";
@@ -124,6 +126,8 @@ export default function LibraryPage() {
   const [removing, setRemoving] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [groupByArtist, setGroupByArtist] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
 
   const [albumCols, toggleAlbumCol] = useColumnPrefs("albums", ALBUM_COLS);
   const [artistCols, toggleArtistCol] = useColumnPrefs("artists", ARTIST_COLS);
@@ -387,6 +391,13 @@ const toggleExpand = (path: string) =>
           visible={view === "albums" ? albumCols : view === "artists" ? artistCols : trackCols}
           onToggle={view === "albums" ? toggleAlbumCol : view === "artists" ? toggleArtistCol : toggleTrackCol}
         />
+        <button
+          className="btn-ghost !py-1 text-xs"
+          onClick={() => setStatsOpen(true)}
+          title={selectionCount ? "Statistics for the current selection" : "Library-wide statistics"}
+        >
+          <BarChart3 className="h-3.5 w-3.5" /> Stats
+        </button>
 
         <span className="text-xs text-zinc-500 whitespace-nowrap">
           {sortedAlbums.length} albums · {sortedTracks.length} tracks
@@ -449,6 +460,9 @@ const toggleExpand = (path: string) =>
             <button className="btn-ghost !py-1 text-xs" onClick={() => addToPlaylist([...selTracks])}>
               <ListPlus className="h-3.5 w-3.5" /> Playlist
             </button>
+            <button className="btn-ghost !py-1 text-xs" onClick={() => setTagEditorOpen(true)} disabled={!selTracks.size}>
+              <TagsIcon className="h-3.5 w-3.5" /> Edit tags
+            </button>
             <button
               className="btn-danger !py-1 text-xs"
               onClick={() => removeAlbums(selectionAlbumDirs)}
@@ -475,6 +489,27 @@ const toggleExpand = (path: string) =>
 
       {sortedAlbums.length === 0 && (
         <EmptyState title="Nothing matches" hint="Set the music folder in Settings, import an album, or clear the search/filters." />
+      )}
+
+      {statsOpen && (
+        <StatsPanel
+          title={
+            selectionCount
+              ? `${selTracks.size} selected track${selTracks.size === 1 ? "" : "s"}`
+              : "whole library"
+          }
+          albums={selectionCount ? flat.albums.filter((a) => selectionAlbumDirs.includes(a.path)) : flat.albums}
+          tracks={selectionCount ? flat.tracks.filter((t) => selTracks.has(t.path)) : flat.tracks}
+          onClose={() => setStatsOpen(false)}
+        />
+      )}
+
+      {tagEditorOpen && selTracks.size > 0 && (
+        <BatchTagEditor
+          paths={[...selTracks]}
+          onClose={() => setTagEditorOpen(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ["library"] })}
+        />
       )}
 
       {/* ---------------- Albums table ---------------- */}

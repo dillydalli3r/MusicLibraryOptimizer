@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { Music2, ExternalLink } from "lucide-react";
+import { useState } from "react";
+import { Music2, ExternalLink, BarChart3 } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, ScoreRing } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
+import StatsPanel from "../components/StatsPanel";
 import { useStore } from "../store";
 
 export default function ArtistPage() {
@@ -14,6 +16,7 @@ export default function ArtistPage() {
     queryFn: () => api.artist(decoded),
   });
   const { playNow } = useStore();
+  const [statsOpen, setStatsOpen] = useState(false);
 
   if (error) return <EmptyState title="Artist not found" hint={String(error)} />;
   if (isLoading || !data) return <div className="p-8 text-zinc-500">Loading artist…</div>;
@@ -44,7 +47,23 @@ export default function ArtistPage() {
         <button className="btn-primary" onClick={() => playNow(allTracks)}>
           Play all
         </button>
+        <button className="btn-ghost" onClick={() => setStatsOpen(true)}>
+          <BarChart3 className="h-4 w-4" /> Stats
+        </button>
       </div>
+
+      {statsOpen && (
+        <StatsPanel
+          title={data.name}
+          albums={data.albums}
+          tracks={allTracks.map((t) => {
+            const al = data.albums.find((a) => a.tracks.some((x) => x.path === t.path));
+            const tr = al?.tracks.find((x) => x.path === t.path);
+            return { ...tr, tags: tr?.tags ?? {} } as any;
+          })}
+          onClose={() => setStatsOpen(false)}
+        />
+      )}
 
       <div className="space-y-3">
         {data.albums.map((al) => (

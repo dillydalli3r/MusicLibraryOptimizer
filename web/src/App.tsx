@@ -32,7 +32,7 @@ const ACCENTS: Record<string, [string, string, string]> = {
 };
 
 export function applyAccent(name: string | null) {
-  const [accent, soft, fg] = ACCENTS[name ?? "violet"] ?? ACCENTS.violet;
+  const [accent, soft, fg] = ACCENTS[name ?? "mono"] ?? ACCENTS.mono;
   document.documentElement.style.setProperty("--accent", accent);
   document.documentElement.style.setProperty("--accent-soft", soft);
   document.documentElement.style.setProperty("--accent-fg", fg);

@@ -5,12 +5,13 @@
 :root {
   color-scheme: dark;
   /* RGB triplets — Tailwind wraps them as rgb(var(--accent) / <alpha>) so
-     both solid and opacity-modified accent utilities compile correctly. */
-  --accent: 139 92 246;
-  --accent-soft: 167 139 250;
+     both solid and opacity-modified accent utilities compile correctly.
+     Defaults are the black & white theme. */
+  --accent: 255 255 255;
+  --accent-soft: 212 212 216;
   /* foreground drawn ON TOP of accent fills (white for dark accents,
      near-black for light accents like the black & white theme) */
-  --accent-fg: 255 255 255;
+  --accent-fg: 9 9 11;
 }
 
 /* Native controls (checkbox/range tints) follow the accent token. */

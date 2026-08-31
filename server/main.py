@@ -1300,7 +1300,16 @@ async def ws_progress(ws: WebSocket):
 
 WEB_DIST = ROOT / "web" / "dist"
 if WEB_DIST.is_dir():
-    app.mount("/", StaticFiles(directory=str(WEB_DIST), html=True), name="web")
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa(full_path: str):
+        """Serve the built SPA: real files as-is, everything else falls back
+        to index.html so client-side routes (/settings, /album/...) work."""
+        if full_path.startswith(("api/", "ws")):
+            raise HTTPException(404)
+        file = WEB_DIST / full_path
+        if file.is_file():
+            return FileResponse(file)
+        return FileResponse(WEB_DIST / "index.html")
 
 if __name__ == "__main__":
     import uvicorn

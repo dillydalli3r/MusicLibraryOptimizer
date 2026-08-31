@@ -1,10 +1,11 @@
 ﻿import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen } from "lucide-react";
+import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3 } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
+import StatsPanel from "../components/StatsPanel";
 import { SortHeader, sortRows, toggleSort, type SortState } from "../lib/sort.tsx";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "./LibraryPage";
@@ -24,6 +25,7 @@ export default function AlbumPage() {
   const { playNow } = useStore();
   const navigate = useNavigate();
   const [sort, setSort] = useState<SortState | null>(null);
+  const [statsOpen, setStatsOpen] = useState(false);
   const qc = useQueryClient();
 
   if (error) return <EmptyState title="Album not found" hint={String(error)} />;
@@ -129,6 +131,9 @@ export default function AlbumPage() {
           <button className="btn-ghost" onClick={async () => { try { await api.openFolder(data.path); } catch (e) { toast(String(e)); } }} title="Reveal this album in the file manager">
             <FolderOpen className="h-4 w-4" /> Open folder
           </button>
+          <button className="btn-ghost" onClick={() => setStatsOpen(true)}>
+            <BarChart3 className="h-4 w-4" /> Stats
+          </button>
           <button className="btn-danger" onClick={removeAlbum}>
             <Trash2 className="h-4 w-4" /> Remove
           </button>
@@ -152,6 +157,15 @@ export default function AlbumPage() {
           </button>
         ))}
       </div>
+
+      {statsOpen && (
+        <StatsPanel
+          title={data.meta?.ALBUM ?? data.path.split("/").pop() ?? "album"}
+          albums={[data]}
+          tracks={data.tracks}
+          onClose={() => setStatsOpen(false)}
+        />
+      )}
 
       <div className="bg-card rounded-lg border border-border overflow-hidden">
         <table className="w-full text-sm">
