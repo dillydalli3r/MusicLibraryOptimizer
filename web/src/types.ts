@@ -157,10 +157,15 @@ export interface MBRelease {
   title: string;
   date: string;
   release_group_id: string | null;
+  release_type?: string;
+  barcode?: string;
+  country?: string;
+  catalog_number?: string;
   artists: MBPerson[];
   genres: string[];
   media: MBTrack[];
   medium_count: number;
+  medium_formats?: string[];
 }
 
 export interface MatchSuggestion {

@@ -29,6 +29,26 @@ export default function SettingsPage() {
   const [defaultView, setDefaultView] = useState<string>(() => localStorage.getItem("mlo.defaultView") ?? "albums");
   const [loaded, setLoaded] = useState(false);
 
+  // ---- script options (persisted to config; /api/run uses them as defaults) ----
+  const [forceFlac, setForceFlac] = useState(false);
+  const [forceImages, setForceImages] = useState(false);
+  const [forceAudit, setForceAudit] = useState(false);
+  const [forceLyrics, setForceLyrics] = useState(false);
+  const [forceCue, setForceCue] = useState(false);
+  const [forceDr, setForceDr] = useState(false);
+  const [forceAutotag, setForceAutotag] = useState(false);
+  const [forceAccurip, setForceAccurip] = useState(false);
+  const [renameCovers, setRenameCovers] = useState(true);
+  const [reencodeToJxl, setReencodeToJxl] = useState(true);
+  const [removeAlpha, setRemoveAlpha] = useState(true);
+  const [jpegProgressive, setJpegProgressive] = useState(true);
+  const [coverResize, setCoverResize] = useState(false);
+  const [coverTargetSize, setCoverTargetSize] = useState(0);
+  const [coverCrop, setCoverCrop] = useState(false);
+  const [coverJpegQuality, setCoverJpegQuality] = useState(95);
+  const [jpegxlEffort, setJpegxlEffort] = useState(10);
+  const [pngLevel, setPngLevel] = useState(6);
+
   useEffect(() => {
     if (!config || loaded) return;
     setMusicFolder(String(config.music_folder ?? ""));
@@ -36,6 +56,24 @@ export default function SettingsPage() {
     setWorkerLimit(Number(config.worker_limit ?? 0));
     setNamingScript(String(config.naming_script ?? "") || DEFAULT_NAMING_SCRIPT);
     setShortFolderNames(!!config.short_folder_names);
+    setForceFlac(!!config.force_reencode_flac);
+    setForceImages(!!config.force_reencode_images);
+    setForceAudit(!!config.force_audit);
+    setForceLyrics(!!config.force_lyrics);
+    setForceCue(!!config.force_cue);
+    setForceDr(!!config.force_dr_replaygain);
+    setForceAutotag(!!config.force_auto_tag);
+    setForceAccurip(!!config.force_accurip);
+    setRenameCovers(config.rename_to_cover !== false);
+    setReencodeToJxl(config.reencode_to_jxl !== false);
+    setRemoveAlpha(config.remove_alpha !== false);
+    setJpegProgressive(config.jpeg_progressive !== false);
+    setCoverResize(!!config.cover_resize_enabled);
+    setCoverTargetSize(Number(config.cover_target_size ?? 0));
+    setCoverCrop(!!config.cover_crop_enabled);
+    setCoverJpegQuality(Number(config.cover_jpeg_quality ?? 95));
+    setJpegxlEffort(Number(config.jpegxl_effort ?? 10));
+    setPngLevel(Number(config.png_optimization_level ?? 6));
     setLoaded(true);
   }, [config, loaded]);
 
@@ -73,6 +111,24 @@ export default function SettingsPage() {
         worker_limit: workerLimit,
         naming_script: namingScript,
         short_folder_names: shortFolderNames,
+        force_reencode_flac: forceFlac,
+        force_reencode_images: forceImages,
+        force_audit: forceAudit,
+        force_lyrics: forceLyrics,
+        force_cue: forceCue,
+        force_dr_replaygain: forceDr,
+        force_auto_tag: forceAutotag,
+        force_accurip: forceAccurip,
+        rename_to_cover: renameCovers,
+        reencode_to_jxl: reencodeToJxl,
+        remove_alpha: removeAlpha,
+        jpeg_progressive: jpegProgressive,
+        cover_resize_enabled: coverResize,
+        cover_target_size: coverTargetSize,
+        cover_crop_enabled: coverCrop,
+        cover_jpeg_quality: coverJpegQuality,
+        jpegxl_effort: jpegxlEffort,
+        png_optimization_level: pngLevel,
       });
       toast("Config saved");
       qc.invalidateQueries({ queryKey: ["config"] });
@@ -174,6 +230,79 @@ export default function SettingsPage() {
       <button className="btn-primary" onClick={save}>
         <Save className="h-4 w-4" /> Save
       </button>
+
+      <div className="bg-card rounded-lg border border-border p-4 space-y-4">
+        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Scripts</div>
+
+        <div>
+          <div className="text-xs text-zinc-500 uppercase mb-1.5">Force re-run (ignore existing results)</div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5">
+            {[
+              { label: "Lyrics (format + fetch)", v: forceLyrics, s: setForceLyrics },
+              { label: "CUEs", v: forceCue, s: setForceCue },
+              { label: "FLACs (re-encode)", v: forceFlac, s: setForceFlac },
+              { label: "Images", v: forceImages, s: setForceImages },
+              { label: "Audit", v: forceAudit, s: setForceAudit },
+              { label: "DR / ReplayGain", v: forceDr, s: setForceDr },
+              { label: "AutoTag", v: forceAutotag, s: setForceAutotag },
+              { label: "AccurateRip", v: forceAccurip, s: setForceAccurip },
+            ].map((o) => (
+              <label key={o.label} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+                <input type="checkbox" checked={o.v} onChange={(e) => o.s(e.target.checked)} />
+                {o.label}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-xs text-zinc-500 uppercase mb-1.5">Images</div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5">
+            <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+              <input type="checkbox" checked={renameCovers} onChange={(e) => setRenameCovers(e.target.checked)} />
+              Rename album art to cover.*
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+              <input type="checkbox" checked={reencodeToJxl} onChange={(e) => setReencodeToJxl(e.target.checked)} />
+              Convert images to JPEG XL
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+              <input type="checkbox" checked={removeAlpha} onChange={(e) => setRemoveAlpha(e.target.checked)} />
+              Remove PNG alpha
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+              <input type="checkbox" checked={jpegProgressive} onChange={(e) => setJpegProgressive(e.target.checked)} />
+              Progressive JPEG
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+              <input type="checkbox" checked={coverResize} onChange={(e) => setCoverResize(e.target.checked)} />
+              Resize covers
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+              <input type="checkbox" checked={coverCrop} onChange={(e) => setCoverCrop(e.target.checked)} />
+              Crop covers to square
+            </label>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            <label className="block">
+              <span className="text-[10px] text-zinc-500 uppercase">Cover target size (px, 0 = off)</span>
+              <input className="input mt-0.5" type="number" min={0} max={4000} value={coverTargetSize} onChange={(e) => setCoverTargetSize(Number(e.target.value))} />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-zinc-500 uppercase">Cover JPEG quality (70–100)</span>
+              <input className="input mt-0.5" type="number" min={70} max={100} value={coverJpegQuality} onChange={(e) => setCoverJpegQuality(Number(e.target.value))} />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-zinc-500 uppercase">JPEG XL effort (1–10)</span>
+              <input className="input mt-0.5" type="number" min={1} max={10} value={jpegxlEffort} onChange={(e) => setJpegxlEffort(Number(e.target.value))} />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-zinc-500 uppercase">PNG optimization level</span>
+              <input className="input mt-0.5" type="number" min={0} max={6} value={pngLevel} onChange={(e) => setPngLevel(Number(e.target.value))} />
+            </label>
+          </div>
+        </div>
+      </div>
 
       <details className="bg-card rounded-lg border border-border p-4">
         <summary className="text-sm font-semibold cursor-pointer">Raw config (advanced)</summary>

@@ -486,23 +486,24 @@ def run_scripts(req: RunRequest):
     cfg = load_config()
     if req.targets:
         cfg["targets"] = [os.path.normpath(t) for t in req.targets]
+    # Per-script options default from saved config; the request can override.
     f = req.force or {}
-    if f.get("flac"):
-        cfg["force_reencode_flac"] = True
-    if f.get("images"):
-        cfg["force_reencode_images"] = True
-    if f.get("audit"):
-        cfg["force_audit"] = True
-    if f.get("lyrics"):
-        cfg["force_lyrics"] = True
-    if f.get("cue"):
-        cfg["force_cue"] = True
-    if f.get("dr"):
-        cfg["force_dr_replaygain"] = True
-    if f.get("autotag"):
-        cfg["force_auto_tag"] = True
-    if f.get("accurip"):
-        cfg["force_accurip"] = True
+    cfg["force_reencode_flac"] = bool(f.get("flac", cfg.get("force_reencode_flac")))
+    cfg["force_reencode_images"] = bool(f.get("images", cfg.get("force_reencode_images")))
+    cfg["force_audit"] = bool(f.get("audit", cfg.get("force_audit")))
+    cfg["force_lyrics"] = bool(f.get("lyrics", cfg.get("force_lyrics")))
+    cfg["force_cue"] = bool(f.get("cue", cfg.get("force_cue")))
+    cfg["force_dr_replaygain"] = bool(f.get("dr", cfg.get("force_dr_replaygain")))
+    cfg["force_auto_tag"] = bool(f.get("autotag", cfg.get("force_auto_tag")))
+    cfg["force_accurip"] = bool(f.get("accurip", cfg.get("force_accurip")))
+    # image-option overrides (subset of run_process_images knobs)
+    for key in ("rename_to_cover", "reencode_to_jxl", "images_convert_to_jpeg",
+                "images_convert_lossless_to_png", "convert_jxl_back", "remove_alpha",
+                "jpeg_progressive", "cover_resize_enabled", "cover_crop_enabled",
+                "cover_target_size", "cover_jpeg_quality", "jpegxl_effort",
+                "jpegxl_distance", "png_optimization_level"):
+        if key in f:
+            cfg[key] = f[key]
 
     for i in req.ids:
         if i not in RUNNERS or RUNNERS[i] is None:
@@ -687,9 +688,13 @@ def mb_release_genres(mbid: str):
 
 
 @app.get("/api/mb/search/releases")
-def mb_search_releases(q: str = Query(..., min_length=1), limit: int = 10):
+def mb_search_releases(q: str = Query(..., min_length=1), limit: int = 10,
+                        mode: str = Query("release")):
+    """Search MusicBrainz releases: mode = release | track | catno | barcode."""
+    if mode not in ("release", "track", "catno", "barcode"):
+        raise HTTPException(400, "mode must be release, track, catno or barcode")
     try:
-        return intg.search_releases(q, limit)
+        return intg.search_releases(q, limit, mode)
     except Exception as e:
         raise HTTPException(502, f"MusicBrainz search failed: {e}")
 

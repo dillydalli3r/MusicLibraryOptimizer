@@ -579,11 +579,12 @@ export default function ImportWizard() {
   };
 
   // ---------------- Step 1: links ----------------
+  const [searchMode, setSearchMode] = useState<"release" | "track" | "catno" | "barcode">("release");
   const doSearch = async () => {
     if (!mbSearch.trim()) return;
     setBusy(true);
     try {
-      setSearchHits(await api.mbSearchReleases(mbSearch.trim()));
+      setSearchHits(await api.mbSearchReleases(mbSearch.trim(), searchMode));
     } catch (e) {
       toast(String(e));
     } finally {
@@ -674,24 +675,45 @@ export default function ImportWizard() {
 
   const confirmMatch = async () => {
     setBusy(true);
+    setFetchStatus("Writing MusicBrainz metadata to files…");
     try {
       const writes: Record<string, Record<string, string | null>> = {};
+      const albumArtist = (release?.artists ?? []).map((a) => a.name).join(", ") || null;
+      const mediumFormat = release?.medium_formats?.[0] || null;
       for (const s of suggestions) {
         const t = s.release_track;
         writes[s.local] = {
+          // links / IDs
           MUSICBRAINZ_TRACKID: t?.recording_mbid ?? null,
           MUSICBRAINZ_ARTISTID: t?.artist_mbids?.[0] ?? null,
+          MUSICBRAINZ_ALBUMID: release?.id ?? null,
+          MUSICBRAINZ_RELEASEGROUPID: release?.release_group_id ?? null,
+          MUSICBRAINZ_RELEASEID: release?.id ?? null,
+          MUSICBRAINZ_ALBUMARTISTID: release?.artists?.[0]?.mbid ?? null,
+          // metadata
+          TITLE: t?.title ?? null,
+          ARTIST: t?.artist_credit || (release?.artists ?? [])[0]?.name || null,
+          ALBUM: release?.title ?? null,
+          ALBUMARTIST: albumArtist,
+          DATE: release?.date || null,
           TRACKNUMBER: t ? String(t.position).padStart(2, "0") : null,
+          TRACKTOTAL: release?.media?.length ? String(release.media.length) : null,
           DISCNUMBER: t ? String(t.disc) : null,
+          DISCTOTAL: release?.medium_count ? String(release.medium_count) : null,
+          MEDIA: mediumFormat,
+          RELEASETYPE: release?.release_type || null,
+          RELEASECOUNTRY: release?.country || null,
+          CATALOGNUMBER: release?.catalog_number || null,
         };
       }
       await api.mbAssign(writes);
-      toast("Track matching saved (MBIDs + track/disc numbers)");
+      toast("MusicBrainz metadata written to files (titles, artists, album, dates, MBIDs)");
       setStep(3);
     } catch (e) {
       toast(String(e));
     } finally {
       setBusy(false);
+      setFetchStatus(null);
     }
   };
 
@@ -874,11 +896,32 @@ export default function ImportWizard() {
     }
   };
 
-  const finish = () => {
-    qc.invalidateQueries({ queryKey: ["library"] });
-    setParams({});
-    toast(uploaded.length > 1 ? `Imported ${uploaded.length} albums — enrich each from its album page` : "Import complete — album graded");
-  };
+  const POST_IMPORT_SCRIPTS = [
+  { id: 1, label: "Lyrics", defaultOn: true },
+  { id: 2, label: "CUEs", defaultOn: true },
+  { id: 3, label: "FLACs (re-encode)", defaultOn: false },
+  { id: 5, label: "Images", defaultOn: true },
+  { id: 7, label: "DR / ReplayGain", defaultOn: true },
+  { id: 6, label: "Audit", defaultOn: false },
+  { id: 8, label: "AutoTag", defaultOn: false },
+  { id: 4, label: "Grade", defaultOn: true },
+];
+const [runAfterImport, setRunAfterImport] = useState<number[]>(
+  POST_IMPORT_SCRIPTS.filter((s) => s.defaultOn).map((s) => s.id)
+);
+
+const finish = async () => {
+  try {
+    if (runAfterImport.length && uploaded.length) {
+      await api.run(runAfterImport, uploaded.map((a) => a.path));
+    }
+  } catch (e) {
+    toast(String(e));
+  }
+  qc.invalidateQueries({ queryKey: ["library"] });
+  setParams({});
+  toast(uploaded.length > 1 ? `Imported ${uploaded.length} albums — enrich each from its album page` : "Import complete — album graded");
+};
 
   const switchAlbum = (i: number) => {
     setAlbumIndex(i);
@@ -1115,7 +1158,21 @@ export default function ImportWizard() {
             )}
             <div className="text-xs text-zinc-600">or search:</div>
             <div className="flex gap-2">
-              <input className="input" placeholder="Search release (title + artist)…" value={mbSearch} onChange={(e) => setMbSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
+              <div className="flex gap-2">
+                <select
+                  className="input !w-auto text-xs shrink-0"
+                  value={searchMode}
+                  onChange={(e) => setSearchMode(e.target.value as any)}
+                  title="Search MusicBrainz by"
+                >
+                  <option value="release">Title / artist</option>
+                  <option value="track">Track title</option>
+                  <option value="catno">Catalog number</option>
+                  <option value="barcode">Barcode</option>
+                </select>
+                <input className="input" placeholder="Search MusicBrainz…" value={mbSearch} onChange={(e) => setMbSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
+                <button className="btn-ghost shrink-0" onClick={doSearch} disabled={busy}>Search</button>
+              </div>
               <button className="btn-ghost" onClick={doSearch} disabled={busy}><Search className="h-4 w-4" /></button>
             </div>
             {searchHits.length > 0 && (
@@ -1426,13 +1483,37 @@ export default function ImportWizard() {
 
       {/* ---------------- Step 6: finish ---------------- */}
       {step === 6 && (
-        <div className="bg-card rounded-lg border border-border p-6 text-center">
-          <Check className="h-10 w-10 text-emerald-400 mx-auto mb-3" />
-          <div className="font-semibold text-lg">Import complete</div>
-          <div className="text-sm text-zinc-500 mt-1">
-            {uploaded.length > 1
-              ? `${uploaded.length} albums were added to your library. Use the dropdown above to finish linking, matching and tagging each one.`
-              : "Links, MBIDs, genres, lyrics and advisory ratings are written to the files. Run grading on the album to verify a perfect score."}
+        <div className="bg-card rounded-lg border border-border p-6">
+          <div className="text-center">
+            <Check className="h-10 w-10 text-emerald-400 mx-auto mb-3" />
+            <div className="font-semibold text-lg">Import complete</div>
+            <div className="text-sm text-zinc-500 mt-1">
+              {uploaded.length > 1
+                ? `${uploaded.length} albums were added to your library. Use the dropdown above to finish linking, matching and tagging each one.`
+                : "Links, MBIDs, metadata, genres, lyrics and advisory ratings are written to the files."}
+            </div>
+          </div>
+          <div className="mt-5 bg-panel rounded-lg border border-border p-4">
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+              Run scripts after import (on the new album{uploaded.length > 1 ? "s" : ""})
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {POST_IMPORT_SCRIPTS.map((s) => (
+                <label key={s.id} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={runAfterImport.includes(s.id)}
+                    onChange={(e) =>
+                      setRunAfterImport((ids) => (e.target.checked ? [...ids, s.id] : ids.filter((i) => i !== s.id)))
+                    }
+                  />
+                  {s.label}
+                </label>
+              ))}
+            </div>
+            <div className="text-[10px] text-zinc-600 mt-2">
+              Progress shows at the top of the window. Scripts can also be run individually anytime from the album page.
+            </div>
           </div>
           <div className="flex justify-center gap-2 mt-5">
             {albumPath && (

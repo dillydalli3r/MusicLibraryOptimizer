@@ -73,19 +73,32 @@ def _genres(node):
     return [g["name"] for g in (node.get("genres") or [])]
 
 
+def _title_genres(node):
+    """Genres in Title Case ('nu metal' -> 'Nu Metal') for tag import."""
+    seen, out = set(), []
+    for g in _genres(node):
+        key = g.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(g.strip().title())
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Release lookups
 # --------------------------------------------------------------------------- #
 def release_lookup(mbid):
-    """Full release: media/discs, recordings, artist credits, genres."""
+    """Full release: media/discs, recordings, artist credits, genres and
+    labels (catalog numbers). Country comes from the release entity."""
     data = mb_get(
         f"release/{mbid}",
-        {"inc": "artists+recordings+media+release-groups+artist-credits+genres", "fmt": "json"},
+        {"inc": "artists+recordings+media+release-groups+artist-credits+genres+labels", "fmt": "json"},
     )
     # Normalize media into a flat list of {disc, position, title, length, recording mbid, artist mbids}
     tracks = []
     for medium in data.get("media", []):
         disc = medium.get("position", 1)
+        medium_format = medium.get("format") or ""
         for trk in medium.get("tracks", []):
             rec = trk.get("recording", {})
             artists = []
@@ -106,7 +119,7 @@ def release_lookup(mbid):
                     (ac.get("name", "") + (ac.get("joinphrase", "") or ""))
                     for ac in trk.get("artist-credit", [])
                 ),
-                "genres": _genres(rec),
+                "genres": _title_genres(rec),
             })
     release_artists = [
         {"name": ac.get("name", ""), "mbid": ac["artist"].get("id")}
@@ -117,16 +130,29 @@ def release_lookup(mbid):
     secondary = [s.lower() for s in (rg_obj.get("secondary-types") or [])]
     release_type = "+".join([primary] + secondary) if primary else ""
 
+    # labels -> first catalog number
+    catalog_number = ""
+    for lab in data.get("label-info", []) or []:
+        cn = (lab.get("catalog-number") or "").strip()
+        if cn:
+            catalog_number = cn
+            break
+    country = data.get("country") or ""
+
     return {
         "id": data.get("id"),
         "title": data.get("title"),
         "date": (data.get("date") or ""),
+        "barcode": (data.get("barcode") or ""),
+        "country": country,
+        "catalog_number": catalog_number,
         "release_group_id": (data.get("release-group") or {}).get("id"),
         "release_type": release_type,
         "artists": release_artists,
-        "genres": _genres(data),
+        "genres": _title_genres(data),
         "media": tracks,
         "medium_count": len(data.get("media", [])),
+        "medium_formats": [m.get("format") or "" for m in data.get("media", [])],
     }
 
 
@@ -149,9 +175,9 @@ def artist_genres(artist_mbid):
 def genre_cascade(release, limit=None):
     """Cascading genre import: track -> release -> release-group -> artist.
 
-    Genres are merged across levels (deduped, in popularity order) and capped
-    at `limit` per track. limit=None imports everything. Returns per-track
-    genres plus the fallback chain used for each track.
+    Genres are merged across levels (deduped, in popularity order, Title
+    Case) and capped at `limit` per track. limit=None imports everything.
+    Returns per-track genres plus the fallback chain used for each track.
     """
     rg = release.get("release_group_id")
     rg_genres = release_group_genres(rg) if rg else []
@@ -197,16 +223,37 @@ def genre_cascade(release, limit=None):
     }
 
 
-def search_releases(query, limit=10):
-    """Release search by title/artist (for the wizard's album picker)."""
+def search_releases(query, limit=10, mode="release"):
+    """Release search with multiple strategies.
+
+    mode:
+      * release  — free-text title/artist search
+      * track    — search by track title
+      * catno    — search by catalog number  (catno:"CK 62240")
+      * barcode  — search by barcode         (barcode:074643924526)
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    if mode == "catno":
+        q = f'catno:"{q}"'
+    elif mode == "barcode":
+        q = f"barcode:{q}"
+    elif mode == "track":
+        q = f'track:"{q}"'
     try:
-        data = mb_get("release", {"query": query, "limit": limit, "fmt": "json"})
+        data = mb_get("release", {"query": q, "limit": limit, "fmt": "json"})
         out = []
         for r in data.get("releases", []):
             credit = "".join(
                 (ac.get("name", "") + (ac.get("joinphrase", "") or ""))
                 for ac in r.get("artist-credit", [])
             )
+            label = ""
+            for li in r.get("label-info", []) or []:
+                if li.get("catalog-number"):
+                    label = li["catalog-number"]
+                    break
             out.append({
                 "id": r.get("id"),
                 "title": r.get("title"),
@@ -214,6 +261,8 @@ def search_releases(query, limit=10):
                 "artist": credit,
                 "country": r.get("country"),
                 "status": r.get("status"),
+                "catalog_number": label,
+                "barcode": r.get("barcode") or "",
             })
         return out
     except Exception as e:

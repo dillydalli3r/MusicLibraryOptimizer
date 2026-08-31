@@ -143,7 +143,8 @@ export const api = {
     json<import("./types").GenreCascade>(
       `${API}/mb/release-genres?mbid=${encodeURIComponent(id)}${limit ? `&limit=${limit}` : ""}`
     ),
-  mbSearchReleases: (q: string) => json<any[]>(`${API}/mb/search/releases?q=${encodeURIComponent(q)}`),
+  mbSearchReleases: (q: string, mode: "release" | "track" | "catno" | "barcode" = "release") =>
+    json<any[]>(`${API}/mb/search/releases?q=${encodeURIComponent(q)}&mode=${mode}`),
   mbSearchArtists: (q: string) => json<any[]>(`${API}/mb/search/artists?q=${encodeURIComponent(q)}`),
   mbMatch: (albumPath: string, releaseId: string) =>
     json<{ release: import("./types").MBRelease; suggestions: import("./types").MatchSuggestion[] }>(

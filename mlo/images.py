@@ -2141,17 +2141,24 @@ def run_process_images(config):
     jxl_tool = tools.get("libjxl")
 
     if not jxl_tool:
-        log(c("ERROR: Could not auto-detect libjxl in .dependencies folder.", Color.RED))
+        log(c("WARNING: Could not auto-detect libjxl in .dependencies folder.", Color.RED))
         log(f"Expected a folder like: {os.path.join(DEPS_DIR, 'libjxl v0.12.0')}")
-        return stats
+        log("JPEG XL conversion is disabled for this run — in-place lossless")
+        log("JPEG/PNG optimization and the cover rename pass still run.")
+        cjxl_path = None
+        djxl_path = None
+        jxl_version = None
+        reencode_to_jxl = False
+        convert_jxl_back = False
+    else:
+        cjxl_path = jxl_tool["cjxl_exe"]
+        djxl_path = jxl_tool["djxl_exe"]
+        jxl_version = jxl_tool["version"]
 
-    cjxl_path = jxl_tool["cjxl_exe"]
-    djxl_path = jxl_tool["djxl_exe"]
-    jxl_version = jxl_tool["version"]
-
-    if not djxl_path:
-        log(c("ERROR: djxl.exe not found in libjxl folder (required).", Color.RED))
-        return stats
+        if not djxl_path:
+            log(c("WARNING: djxl.exe not found in libjxl folder.", Color.RED))
+            log("JXL decode-dependent steps are disabled for this run.")
+            djxl_path = None
 
     ljt = tools.get("libjpeg_turbo")
     ox = tools.get("oxipng")
@@ -2227,8 +2234,10 @@ def run_process_images(config):
         for folder, group in groups.items():
             def _cover_key(f):
                 base = os.path.splitext(os.path.basename(f).lower())[0]
-                return (0 if base in ("cover", "front", "folder") else 1,
-                        os.path.basename(f).lower(), f)
+                priority = 3 if base in ("cover", "front", "folder") else (
+                    2 if ("front" in base or "cover" in base) else (
+                        1 if base.startswith(("01", "1", "scan")) else 0))
+                return (-priority, os.path.basename(f).lower(), f)
             cover_map[folder] = sorted(group, key=_cover_key)[0]
 
     def _renames(f):
@@ -2328,22 +2337,26 @@ def run_process_images(config):
                     stats["skipped_count"] += 1
 
             elif ext == ".jxl":
-                tasks.append((
-                    _process_jxl_in_place,
-                    (
-                        cjxl_path,
-                        djxl_path,
-                        jxl_version,
+                if cjxl_path is None:
+                    # JXL tools unavailable — keep the file for the rename pass
+                    stats["skipped_count"] += 1
+                else:
+                    tasks.append((
+                        _process_jxl_in_place,
+                        (
+                            cjxl_path,
+                            djxl_path,
+                            jxl_version,
+                            f,
+                            threads_per_file,
+                            effort,
+                            force,
+                            _renames(f),
+                            enc,
+                            config,
+                        ),
                         f,
-                        threads_per_file,
-                        effort,
-                        force,
-                        _renames(f),
-                        enc,
-                        config,
-                    ),
-                    f,
-                ))
+                    ))
 
             else:
                 # Other convertible types (BMP, GIF, TIFF, WEBP, AVIF, etc.)
@@ -2435,55 +2448,105 @@ def run_process_images(config):
                     stats["skipped_count"] += 1
 
     log(f"prepared {len(tasks)} task(s) from {len(files)} file(s) (mode: {mode})")
-    if not tasks:
-        log(f"No active image tasks after skips ({stats['skipped_count']} skipped).")
-        return stats
 
-    workers = worker_count(config, default=cpu_count, items=len(tasks))
-    counts = {"ok": 0, "skip": 0, "fail": 0}
+    if tasks:
+        workers = worker_count(config, default=cpu_count, items=len(tasks))
+        counts = {"ok": 0, "skip": 0, "fail": 0}
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_map = {
-            executor.submit(fn, args): src
-            for (fn, args, src) in tasks
-        }
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {
+                executor.submit(fn, args): src
+                for (fn, args, src) in tasks
+            }
 
-        pbar = _make_pbar(len(future_map), "Images")
+            pbar = _make_pbar(len(future_map), "Images")
 
-        for future in as_completed(future_map):
-            src = future_map[future]
+            for future in as_completed(future_map):
+                src = future_map[future]
 
-            try:
-                src_path, status, b_rem, b_add, info = future.result()
-            except Exception as e:
+                try:
+                    src_path, status, b_rem, b_add, info = future.result()
+                except Exception as e:
+                    stats["total_scanned"] += 1
+                    stats["error_count"] += 1
+                    stats["errors"].append((src, str(e)))
+                    _pbar_update(pbar, counts, kind="fail")
+                    continue
+
+                if status in ("unchanged", "skipped"):
+                    stats["skipped_count"] += 1
+                    log_file_result(src, "skip", info=info or "unchanged")
+                    _pbar_skip(pbar, counts)
+                    continue
+
                 stats["total_scanned"] += 1
-                stats["error_count"] += 1
-                stats["errors"].append((src, str(e)))
-                _pbar_update(pbar, counts, kind="fail")
+
+                if status == "modified":
+                    stats["modified_count"] += 1
+                    stats["total_bytes_removed"] += b_rem
+                    stats["total_bytes_added"] += b_add
+                    log_file_result(src_path, "ok", b_rem, b_add)
+                    _pbar_update(pbar, counts, kind="ok")
+                else:
+                    stats["error_count"] += 1
+                    stats["errors"].append((src_path, info))
+                    log_file_result(src_path, "fail", info=info)
+                    _pbar_update(pbar, counts, kind="fail")
+
+            if pbar:
+                pbar.close()
+
+    # ------------------------------------------------------------------ #
+    # Cover-rename pass: skipped/unchanged files never got renamed by the
+    # workers (they only rename when actually re-encoding). Ensure every
+    # folder has a cover.<ext> — one file per folder only.
+    # ------------------------------------------------------------------ #
+    renamed = 0
+    if rename_to_cover:
+        from collections import defaultdict
+        by_folder = defaultdict(list)
+        for f in files:
+            if os.path.exists(f):
+                by_folder[os.path.dirname(f)].append(f)
+        for folder, group in by_folder.items():
+            # Never overwrite an existing cover.* — it may be a different
+            # image the workers already renamed into place.
+            has_cover = any(
+                os.path.splitext(n.lower())[0] == "cover"
+                for n in os.listdir(folder)
+            )
+            if has_cover:
                 continue
 
-            if status in ("unchanged", "skipped"):
-                stats["skipped_count"] += 1
-                log_file_result(src, "skip", info=info or "unchanged")
-                _pbar_skip(pbar, counts)
+            def _pick(f):
+                base = os.path.splitext(os.path.basename(f).lower())[0]
+                score = 0
+                if base in ("cover", "front", "folder"):
+                    score = 3
+                elif "cover" in base or "front" in base:
+                    score = 2
+                elif base.startswith(("01", "1", "scan")):
+                    score = 1
+                return (score, -os.path.getsize(f), os.path.basename(f).lower())
+
+            candidate = max(group, key=_pick)
+            cand_ext = os.path.splitext(candidate)[1]
+            target = os.path.join(folder, "cover" + cand_ext)
+            if os.path.normcase(os.path.normpath(candidate)) == os.path.normcase(os.path.normpath(target)):
                 continue
-
-            stats["total_scanned"] += 1
-
-            if status == "modified":
+            try:
+                if os.path.exists(target):
+                    os.remove(target)
+                os.rename(candidate, target)
+                stats["total_scanned"] += 1
                 stats["modified_count"] += 1
-                stats["total_bytes_removed"] += b_rem
-                stats["total_bytes_added"] += b_add
-                log_file_result(src_path, "ok", b_rem, b_add)
-                _pbar_update(pbar, counts, kind="ok")
-            else:
+                renamed += 1
+                log_file_result(candidate, "ok", info=f"renamed to cover{cand_ext}")
+            except OSError as e:
                 stats["error_count"] += 1
-                stats["errors"].append((src_path, info))
-                log_file_result(src_path, "fail", info=info)
-                _pbar_update(pbar, counts, kind="fail")
-
-        if pbar:
-            pbar.close()
+                stats["errors"].append((candidate, f"cover rename failed: {e}"))
+    if renamed:
+        log(f"cover-rename pass: {renamed} image(s) renamed to cover.*")
 
     return stats
 
