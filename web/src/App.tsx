@@ -22,12 +22,12 @@ const NAV = [
 ];
 
 const ACCENTS: Record<string, [string, string]> = {
-  violet: ["#8b5cf6", "#a78bfa"],
-  pink: ["#ec4899", "#f9a8d4"],
-  emerald: ["#10b981", "#6ee7b7"],
-  sky: ["#0ea5e9", "#7dd3fc"],
-  amber: ["#f59e0b", "#fcd34d"],
-  red: ["#ef4444", "#fca5a5"],
+  violet: ["139 92 246", "167 139 250"],
+  pink: ["236 72 153", "249 168 212"],
+  emerald: ["16 185 129", "110 231 183"],
+  sky: ["14 165 233", "125 211 252"],
+  amber: ["245 158 11", "252 211 77"],
+  red: ["239 68 68", "252 165 165"],
 };
 
 export function applyAccent(name: string | null) {
@@ -82,8 +82,8 @@ export default function App() {
     <div className="min-h-screen bg-bg text-zinc-100 flex flex-col">
       <header className="h-14 shrink-0 border-b border-border bg-panel flex items-center gap-3 px-4 sticky top-0 z-30">
         <div className="flex items-center gap-2">
-          <span className="h-7 w-7 rounded-md bg-gradient-to-br from-accent to-indigo-600 flex items-center justify-center">
-            <Play className="h-3.5 w-3.5 text-white fill-white" />
+          <span className="h-7 w-7 rounded-md bg-white text-black flex items-center justify-center shadow-sm">
+            <Play className="h-3.5 w-3.5 fill-current" />
           </span>
           <span className="font-bold tracking-wide">MusicLibraryOptimizer</span>
           <span className="chip bg-raise border border-border text-zinc-400">v2</span>

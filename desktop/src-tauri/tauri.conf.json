@@ -4,7 +4,7 @@
   "version": "2.0.0",
   "identifier": "com.musiclibraryoptimizer.app",
   "build": {
-    "frontendDist": "../web/dist",
+    "frontendDist": "../../web/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev --prefix ../web",
     "beforeBuildCommand": "npm run build --prefix ../web"

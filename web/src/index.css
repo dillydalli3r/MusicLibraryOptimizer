@@ -4,14 +4,16 @@
 
 :root {
   color-scheme: dark;
-  --accent: #8b5cf6;
-  --accent-soft: #a78bfa;
+  /* RGB triplets — Tailwind wraps them as rgb(var(--accent) / <alpha>) so
+     both solid and opacity-modified accent utilities compile correctly. */
+  --accent: 139 92 246;
+  --accent-soft: 167 139 250;
 }
 
 /* Native controls (checkbox/range tints) follow the accent token. */
 input[type="checkbox"],
 input[type="range"] {
-  accent-color: var(--accent);
+  accent-color: rgb(var(--accent));
 }
 
 * {

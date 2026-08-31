@@ -169,20 +169,17 @@ def _menu():
 
 
 def make_icon():
+    """Monochrome tray icon: dark tile with a white play triangle."""
     size = 64
-    img = Image.new("RGBA", (size, size), (10, 10, 12, 255))
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    heights = (0.30, 0.36, 0.44, 0.58, 0.74, 0.88, 0.97)
-    colors = [(139, 92, 246), (124, 58, 237), (99, 102, 241), (79, 70, 229),
-              (67, 56, 202), (55, 48, 163), (49, 46, 129)]
-    margin = size * 0.12
-    gap = size * 0.03
-    bar_w = (size - 2 * margin - (len(heights) - 1) * gap) / len(heights)
-    base_y = size - margin
-    for i, (h, c) in enumerate(zip(heights, colors)):
-        x0 = margin + i * (bar_w + gap)
-        bar_h = h * (size - 2 * margin)
-        d.rectangle([x0, base_y - bar_h, x0 + bar_w, base_y], fill=c + (255,))
+    d.rounded_rectangle([2, 2, size - 2, size - 2], radius=12, fill=(12, 12, 14, 255))
+    cx, cy = size / 2, size / 2
+    r = size * 0.34
+    d.polygon(
+        [(cx - r * 0.62, cy - r), (cx - r * 0.62, cy + r), (cx + r, cy)],
+        fill=(255, 255, 255, 255),
+    )
     return img
 
 
