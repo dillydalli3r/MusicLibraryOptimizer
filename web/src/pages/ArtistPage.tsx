@@ -22,7 +22,11 @@ export default function ArtistPage() {
   if (isLoading || !data) return <div className="p-8 text-zinc-500">Loading artist…</div>;
 
   const allTracks = data.albums.flatMap((a) =>
-    a.tracks.map((t) => ({ path: t.path, file: t.file, albumPath: a.path, artist: data.name }))
+    a.tracks.map((t) => ({
+      path: t.path, file: t.file, albumPath: a.path,
+      artist: a.album_artist || data.display_name || data.name,
+      album: a.meta?.ALBUM ?? undefined,
+    }))
   );
 
   return (

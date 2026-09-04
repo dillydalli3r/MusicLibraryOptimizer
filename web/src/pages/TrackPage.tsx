@@ -154,7 +154,10 @@ export default function TrackPage() {
               <Clapperboard className="h-4 w-4" /> Watch
             </button>
           ) : null}
-          <button className="btn-ghost" onClick={() => playNow([{ path: decoded, file: fileName, albumPath: albumDir }])}>
+          <button className="btn-ghost" onClick={() => playNow([{
+            path: decoded, file: fileName, albumPath: albumDir,
+            artist: tags.ALBUMARTIST ?? tags.ARTIST, album: tags.ALBUM,
+          }])}>
             <Play className="h-4 w-4" /> Play
           </button>
           <button className="btn-primary" onClick={saveLyrics} disabled={!dirty}>

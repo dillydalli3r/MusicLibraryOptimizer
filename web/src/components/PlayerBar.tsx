@@ -131,7 +131,9 @@ export default function PlayerBar() {
       <div className="min-w-0 flex-1">
         <div className="text-sm truncate font-medium">{current.file.replace(/\.[^.]+$/, "")}</div>
         <div className="text-[11px] text-zinc-500 truncate">
-          {current.artist ?? current.albumPath.split("/").pop()}
+          {[current.artist ?? current.albumPath.split("/").pop(), current.album]
+            .filter(Boolean)
+            .join(" · ")}
           <span className="ml-2">{queue.length > 1 ? `${index + 1}/${queue.length}` : ""}</span>
         </div>
       </div>

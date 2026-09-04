@@ -35,6 +35,16 @@ export default function PlaylistsPage() {
   const qc = useQueryClient();
   const { playNow } = useStore();
   const { data: playlists, isLoading } = useQuery({ queryKey: ["playlists"], queryFn: api.playlists });
+  const { data: lib } = useQuery({ queryKey: ["library"], queryFn: api.library });
+  // path -> tag-derived artist/album so the player bar shows real names
+  const trackInfo = useMemo(() => {
+    const map = new Map<string, { artist?: string; album?: string }>();
+    for (const a of lib?.artists ?? [])
+      for (const al of a.albums)
+        for (const t of al.tracks)
+          map.set(t.path, { artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined });
+    return map;
+  }, [lib]);
   const [newName, setNewName] = useState("");
   const [editing, setEditing] = useState<Playlist | null>(null);
   const [conditions, setConditions] = useState<FilterCondition[]>([]);
@@ -118,14 +128,26 @@ export default function PlaylistsPage() {
       )}
 
       {manual.map((p) => (
-        <PlaylistCard key={p.id} playlist={p} onDelete={() => del.mutate(p.id)} onPlay={(paths) => playNow(paths.map((path) => ({ path, file: path.split("/").pop()!, albumPath: path.split("/").slice(0, -1).join("/") })))} onSmart={() => smartFilter(p)} />
+        <PlaylistCard key={p.id} playlist={p} onDelete={() => del.mutate(p.id)} onPlay={(paths) => playNow(paths.map((path) => ({
+              path,
+              file: path.split("/").pop()!,
+              albumPath: path.split("/").slice(0, -1).join("/"),
+              artist: trackInfo.get(path)?.artist,
+              album: trackInfo.get(path)?.album,
+            })))} onSmart={() => smartFilter(p)} />
       ))}
 
       {smart.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500 mb-2">Smart playlists</h2>
           {smart.map((p) => (
-            <PlaylistCard key={p.id} playlist={p} onDelete={() => del.mutate(p.id)} onPlay={(paths) => playNow(paths.map((path) => ({ path, file: path.split("/").pop()!, albumPath: path.split("/").slice(0, -1).join("/") })))} onSmart={() => smartFilter(p)} />
+            <PlaylistCard key={p.id} playlist={p} onDelete={() => del.mutate(p.id)} onPlay={(paths) => playNow(paths.map((path) => ({
+              path,
+              file: path.split("/").pop()!,
+              albumPath: path.split("/").slice(0, -1).join("/"),
+              artist: trackInfo.get(path)?.artist,
+              album: trackInfo.get(path)?.album,
+            })))} onSmart={() => smartFilter(p)} />
           ))}
         </div>
       )}
@@ -205,11 +227,17 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
   };
 
   const trackMeta = useMemo(() => {
-    const map = new Map<string, { title: string; audit: string | null; pass: boolean }>();
+    const map = new Map<string, { title: string; audit: string | null; pass: boolean; artist?: string; album?: string }>();
     for (const a of lib?.artists ?? [])
       for (const al of a.albums)
         for (const t of al.tracks)
-          map.set(t.path, { title: t.tags.TITLE ?? t.file, audit: t.audit, pass: t.grade_pass });
+          map.set(t.path, {
+            title: t.tags.TITLE ?? t.file,
+            audit: t.audit,
+            pass: t.grade_pass,
+            artist: al.album_artist || a.name,
+            album: al.meta?.ALBUM ?? undefined,
+          });
     return map;
   }, [lib]);
 

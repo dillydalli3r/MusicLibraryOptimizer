@@ -1,4 +1,4 @@
-﻿import { useRef, useState } from "react";
+﻿import { Fragment, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, Info as InfoIcon, ImageUp, FileVideo } from "lucide-react";
@@ -7,7 +7,7 @@ import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Bad
 import CoverImg from "../components/CoverImg";
 import StatsPanel from "../components/StatsPanel";
 import TrackDetails from "../components/TrackDetails";
-import { SortHeader, sortRows, toggleSort, type SortState } from "../lib/sort.tsx";
+import { SortHeader, sortRows, toggleSort, groupByDisc, type SortState } from "../lib/sort.tsx";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "./LibraryPage";
 import type { Track } from "../types";
@@ -186,7 +186,10 @@ export default function AlbumPage() {
           </div>
         </div>
         <div className="flex flex-col gap-2 shrink-0">
-          <button className="btn-primary" onClick={() => playNow(data.tracks.map((t) => ({ path: t.path, file: t.file, albumPath: data.path })))}>
+          <button className="btn-primary" onClick={() => playNow(data.tracks.map((t) => ({
+            path: t.path, file: t.file, albumPath: data.path,
+            artist: data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? undefined, album: data.meta?.ALBUM ?? undefined,
+          })))}>
             <Play className="h-4 w-4" /> Play album
           </button>
           <button className="btn-ghost" onClick={() => navigate(`/import?album=${encodeURIComponent(data.path)}`)}>
@@ -265,7 +268,7 @@ export default function AlbumPage() {
         <table className="w-full text-sm">
           <thead className="bg-panel/60">
             <tr>
-              <SortHeader label="#" sort={sort} sortKey="tags.TRACKNUMBER" onSort={(k) => setSort(toggleSort(sort, k))} className="w-12" />
+              <SortHeader label="#" sort={sort} sortKey="tracknumber" onSort={(k) => setSort(toggleSort(sort, k))} className="w-12" />
               <th className="th w-10"></th>
               <SortHeader label="Title" sort={sort} sortKey="tags.TITLE" onSort={(k) => setSort(toggleSort(sort, k))} />
               <SortHeader label="Grade" sort={sort} sortKey="grade_pass" onSort={(k) => setSort(toggleSort(sort, k))} />
@@ -277,9 +280,21 @@ export default function AlbumPage() {
             </tr>
           </thead>
           <tbody>
-            {tracks.map((tr) => (
+            {(() => {
+              const groups = groupByDisc(tracks);
+              const multiDisc = groups.length > 1;
+              return groups.map((g) => (
+                <Fragment key={g.disc ?? 0}>
+                  {multiDisc && (
+                    <tr className="bg-panel/60">
+                      <td colSpan={10} className="td text-[10px] uppercase tracking-wider text-zinc-500">
+                        Disc {g.disc ?? "?"}
+                      </td>
+                    </tr>
+                  )}
+                  {g.tracks.map((tr) => (
               <tr key={tr.path} className="table-row">
-                <td className="td text-zinc-500">{tr.tags.TRACKNUMBER ?? "—"}</td>
+                <td className="td text-zinc-500">{tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}</td>
                 <td className="td pr-0">
                   {tr.cover_file && (
                     <CoverImg
@@ -330,7 +345,11 @@ export default function AlbumPage() {
                     className="btn-ghost !px-2 !py-1"
                     onClick={() =>
                       playNow(
-                        data.tracks.map((t) => ({ path: t.path, file: t.file, albumPath: data.path })),
+                        data.tracks.map((t) => ({
+                          path: t.path, file: t.file, albumPath: data.path,
+                          artist: data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? undefined,
+                          album: data.meta?.ALBUM ?? undefined,
+                        })),
                         data.tracks.findIndex((t) => t.path === tr.path)
                       )
                     }
@@ -339,7 +358,10 @@ export default function AlbumPage() {
                   </button>
                 </td>
               </tr>
-            ))}
+                  ))}
+                </Fragment>
+              ));
+            })()}
           </tbody>
         </table>
       </div>

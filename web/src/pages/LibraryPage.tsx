@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { Fragment, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
-import { sortRows, SortHeader, type SortState } from "../lib/sort.tsx";
+import { sortRows, SortHeader, groupByDisc, type SortState } from "../lib/sort.tsx";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
 import StatsPanel from "../components/StatsPanel";
@@ -89,7 +89,7 @@ const ARTIST_COLS: Col[] = [
 ];
 
 const TRACK_COLS: Col[] = [
-  { id: "num", label: "#", sortKey: "tags.TRACKNUMBER" },
+  { id: "num", label: "#", sortKey: "tracknumber" },
   { id: "title", label: "Title", sortKey: "tags.TITLE" },
   { id: "artist", label: "Artist", sortKey: "artist" },
   { id: "album", label: "Album", sortKey: "album" },
@@ -135,6 +135,7 @@ export default function LibraryPage() {
   const [statsOpen, setStatsOpen] = useState(false);
   const [detailTrack, setDetailTrack] = useState<{ track: Track; albumPath: string } | null>(null);
 
+  const [fullDates, setFullDates] = useLocalPref("full-dates", false);
   const [albumCols, toggleAlbumCol] = useColumnPrefs("albums", ALBUM_COLS);
   const [artistCols, toggleArtistCol] = useColumnPrefs("artists", ARTIST_COLS);
   const [trackCols, toggleTrackCol] = useColumnPrefs("tracks", TRACK_COLS);
@@ -269,17 +270,17 @@ export default function LibraryPage() {
   };
 
   const playSelection = () => {
-    const out: { path: string; file: string; albumPath: string; artist?: string }[] = [];
+    const out: { path: string; file: string; albumPath: string; artist?: string; album?: string }[] = [];
     for (const al of sortedAlbums)
       if (selection.albums.includes(al.path))
-        for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.artist });
+        for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.artist, album: al.meta?.ALBUM ?? undefined });
     for (const a of sortedArtists)
       if (selection.artists.includes(a.path))
         for (const al of a.albums)
-          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.album_artist || a.name });
+          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined });
     for (const tr of sortedTracks)
       if (selection.tracks.includes(tr.path))
-        out.push({ path: tr.path, file: tr.file, albumPath: tr.path.split("/").slice(0, -1).join("/"), artist: tr.artist });
+        out.push({ path: tr.path, file: tr.file, albumPath: tr.path.split("/").slice(0, -1).join("/"), artist: tr.artist, album: tr.album });
     if (out.length) playNow(out);
   };
 
@@ -385,6 +386,8 @@ const toggleExpand = (path: string) =>
           cols={view === "albums" ? ALBUM_COLS : view === "artists" ? ARTIST_COLS : TRACK_COLS}
           visible={view === "albums" ? albumCols : view === "artists" ? artistCols : trackCols}
           onToggle={view === "albums" ? toggleAlbumCol : view === "artists" ? toggleArtistCol : toggleTrackCol}
+          fullDates={fullDates}
+          onFullDates={setFullDates}
         />
         <button
           className="btn-ghost !py-1 text-xs"
@@ -544,6 +547,7 @@ const toggleExpand = (path: string) =>
                       onPlaylist={() => addToPlaylist(row.album.tracks.map((t) => t.path))}
                       onTrackDetails={(t) => setDetailTrack({ track: t, albumPath: row.album.path })}
                       colSpan={albumColSpan}
+                      fullDates={fullDates}
                     />
                   )
                 )}
@@ -573,7 +577,10 @@ const toggleExpand = (path: string) =>
               <tbody>
                 {sortedArtists.map((a) => {
                   const all = a.albums.flatMap((al) =>
-                    al.tracks.map((t) => ({ path: t.path, file: t.file, albumPath: al.path, artist: a.name }))
+                    al.tracks.map((t) => ({
+                      path: t.path, file: t.file, albumPath: al.path,
+                      artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined,
+                    }))
                   );
                   const sel = selection.artists.includes(a.path);
                   return (
@@ -636,7 +643,7 @@ const toggleExpand = (path: string) =>
                       <td className="td pr-0">
                         <input type="checkbox" className="" checked={sel} onChange={() => toggleTrack(tr.path)} />
                       </td>
-                      {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tags.TRACKNUMBER ?? "—"}</td>}
+                      {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}</td>}
                       {trackCols.includes("title") && (
                         <td className="td max-w-[260px]">
                           <div className="flex items-center gap-1.5 min-w-0">
@@ -658,7 +665,7 @@ const toggleExpand = (path: string) =>
                       )}
                       {trackCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[160px]">{tr.artist}</td>}
                       {trackCols.includes("album") && <td className="td text-zinc-500 truncate max-w-[160px]">{tr.album}</td>}
-                      {trackCols.includes("year") && <td className="td text-zinc-500">{tr.tags.DATE ?? "—"}</td>}
+                      {trackCols.includes("year") && <td className="td text-zinc-500" title={tr.tags.DATE ?? undefined}>{fmtDateCell(tr.tags.DATE, fullDates)}</td>}
                       {trackCols.includes("genre") && <td className="td text-zinc-500 truncate max-w-[130px]">{tr.tags.GENRE ?? "—"}</td>}
                       {trackCols.includes("media") && <td className="td"><MediaChip media={tr.tags.MEDIA} /></td>}
                       {trackCols.includes("grade") && <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : null} size="sm" /></td>}
@@ -674,7 +681,7 @@ const toggleExpand = (path: string) =>
                             title="Play"
                             onClick={() =>
                               playNow(
-                                sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist })),
+                                sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist, album: t.album })),
                                 sortedTracks.findIndex((t) => t.path === tr.path)
                               )
                             }
@@ -712,6 +719,7 @@ function AlbumRowGroup({
   onPlaylist,
   onTrackDetails,
   colSpan,
+  fullDates,
 }: {
   album: FlatAlbum;
   expanded: boolean;
@@ -726,12 +734,13 @@ function AlbumRowGroup({
   onPlaylist: () => void;
   onTrackDetails: (t: Track) => void;
   colSpan: number;
+  fullDates: boolean;
 }) {
-  const tracks = [...(album.tracks ?? [])].sort((a, b) => {
-    const na = parseInt(a.tags.TRACKNUMBER ?? "0", 10) || 0;
-    const nb = parseInt(b.tags.TRACKNUMBER ?? "0", 10) || 0;
-    return na - nb;
-  });
+  const tracks = [...(album.tracks ?? [])].sort((a, b) =>
+    (a.discnumber ?? 99) - (b.discnumber ?? 99) ||
+    (a.tracknumber ?? 999) - (b.tracknumber ?? 999) ||
+    String(a.file).localeCompare(String(b.file))
+  );
 
   return (
     <>
@@ -759,7 +768,9 @@ function AlbumRowGroup({
           </td>
         )}
         {visibleCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[200px]">{album.artist}</td>}
-        {visibleCols.includes("year") && <td className="td text-zinc-500">{album.meta?.DATE ?? "—"}</td>}
+        {visibleCols.includes("year") && (
+                    <td className="td text-zinc-500" title={album.meta?.DATE ?? undefined}>{fmtDateCell(album.meta?.DATE, fullDates)}</td>
+                  )}
         {visibleCols.includes("tracks") && <td className="td text-zinc-500">{album.track_count}</td>}
         {visibleCols.includes("grade") && <td className="td"><GradeBadge pass={album.pass} score={album.grade_pct} /></td>}
         {visibleCols.includes("audit") && <td className="td"><AuditBadge audit={album.audit_summary} /></td>}
@@ -772,7 +783,10 @@ function AlbumRowGroup({
               title="Play album"
               onClick={() =>
                 useStore.getState().playNow(
-                  tracks.map((t) => ({ path: t.path, file: t.file, albumPath: album.path, artist: album.artist }))
+                  tracks.map((t) => ({
+                    path: t.path, file: t.file, albumPath: album.path,
+                    artist: album.artist, album: album.meta?.ALBUM ?? undefined,
+                  }))
                 )
               }
             >
@@ -806,12 +820,24 @@ function AlbumRowGroup({
                 </tr>
               </thead>
               <tbody>
-                {tracks.map((t) => (
+                {(() => {
+                  const groups = groupByDisc(tracks);
+                  const multiDisc = groups.length > 1;
+                  return groups.map((g) => (
+                    <Fragment key={g.disc ?? 0}>
+                      {multiDisc && (
+                        <tr className="bg-panel/60">
+                          <td colSpan={10} className="td text-[10px] uppercase tracking-wider text-zinc-500">
+                            Disc {g.disc ?? "?"}
+                          </td>
+                        </tr>
+                      )}
+                      {g.tracks.map((t) => (
                   <tr key={t.path} className={`table-row ${selTracks.has(t.path) ? "bg-accent/15" : ""}`}>
                     <td className="td pr-0">
                       <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
                     </td>
-                    <td className="td text-zinc-600">{t.tags.TRACKNUMBER ?? "—"}</td>
+                    <td className="td text-zinc-600">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</td>
                     <td className="td pr-0">
                       {t.cover_file && (
                         <CoverImg
@@ -857,7 +883,10 @@ function AlbumRowGroup({
                         className="btn-ghost !px-1.5 !py-1"
                         onClick={() =>
                           useStore.getState().playNow(
-                            tracks.map((x) => ({ path: x.path, file: x.file, albumPath: album.path, artist: album.artist })),
+                            tracks.map((x) => ({
+                              path: x.path, file: x.file, albumPath: album.path,
+                              artist: album.artist, album: album.meta?.ALBUM ?? undefined,
+                            })),
                             tracks.findIndex((x) => x.path === t.path)
                           )
                         }
@@ -866,7 +895,10 @@ function AlbumRowGroup({
                       </button>
                     </td>
                   </tr>
-                ))}
+                      ))}
+                    </Fragment>
+                  ));
+                })()}
               </tbody>
             </table>
           </td>
@@ -911,10 +943,14 @@ function ColumnsMenu({
   cols,
   visible,
   onToggle,
+  fullDates,
+  onFullDates,
 }: {
   cols: Col[];
   visible: string[];
   onToggle: (id: string) => void;
+  fullDates?: boolean;
+  onFullDates?: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -933,6 +969,15 @@ function ColumnsMenu({
                 {c.label}
               </label>
             ))}
+            {onFullDates && (
+              <>
+                <div className="border-t border-border my-1.5" />
+                <label className="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-panel rounded">
+                  <input type="checkbox" checked={!!fullDates} onChange={(e) => onFullDates(e.target.checked)} />
+                  Show full dates
+                </label>
+              </>
+            )}
           </div>
         </>
       )}
@@ -967,6 +1012,35 @@ function useColumnPrefs(key: string, defs: Col[]): [string[], (id: string) => vo
       return next;
     });
   return [visible, toggle];
+}
+
+/** Year by default ("2010-12-15" -> "2010"); full value when the user
+ *  enables Show full dates. The raw date is always the tooltip. */
+export function fmtDateCell(value: string | null | undefined, full: boolean): string {
+  if (!value) return "—";
+  if (full) return value;
+  const m = String(value).match(/^(\d{4})/);
+  return m ? m[1] : value;
+}
+
+function useLocalPref(key: string, initial: boolean): [boolean, (v: boolean) => void] {
+  const storageKey = `mlo-pref-${key}`;
+  const [value, setValue] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(storageKey) === "1";
+    } catch {
+      return initial;
+    }
+  });
+  const set = (v: boolean) => {
+    setValue(v);
+    try {
+      localStorage.setItem(storageKey, v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
+  return [value, set];
 }
 
 export function fmtDuration(sec: number | undefined): string {

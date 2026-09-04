@@ -57,6 +57,8 @@ export interface TrackTags {
 export interface Track {
   file: string;
   path: string;
+  tracknumber?: number | null;
+  discnumber?: number | null;
   issues: string[];
   values: Record<string, string | null>;
   audit: string | null;

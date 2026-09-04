@@ -5,6 +5,7 @@ export interface QueueTrack {
   file: string;
   albumPath: string;
   artist?: string;
+  album?: string;
 }
 
 interface Store {

@@ -43,6 +43,35 @@ def _read_tags(path):
     return tags
 
 
+def _parse_num(val):
+    """Numeric part of a tag value: '3/12' -> 3, '1-04' -> 4, '01' -> 1."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    if "-" in s:
+        s = s.split("-")[-1]
+    s = s.split("/")[0].strip()
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
+def _nums_from_filename(filename):
+    """Fallback (disc, track) from a leading 'D-TT' / 'TT' filename stem."""
+    import re
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    m = re.match(r"^\s*(\d+)\s*-\s*(\d+)", stem)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.match(r"^\s*(\d+)", stem)
+    if m:
+        return None, int(m.group(1))
+    return None, None
+
+
 def _enrich_track(tr, album_dir):
     """Add path, tech info, tags and per-track sidecar cover (cached reads)."""
     p = os.path.join(album_dir, tr["file"])
@@ -56,6 +85,19 @@ def _enrich_track(tr, album_dir):
         tr["cover_file"] = os.path.basename(sc) if sc else None
     except Exception:
         tr["cover_file"] = None
+    # Numeric disc/track numbers for correct ordering ("1-10" must not
+    # sort before "1-2"). Tags first, filename stem as fallback.
+    tags_obj = tr.get("tags") or {}
+    disc = _parse_num(tags_obj.get("DISCNUMBER"))
+    num = _parse_num(tags_obj.get("TRACKNUMBER"))
+    if num is None or disc is None:
+        f_disc, f_num = _nums_from_filename(tr.get("file") or "")
+        if num is None:
+            num = f_num
+        if disc is None:
+            disc = f_disc
+    tr["discnumber"] = disc
+    tr["tracknumber"] = num
     # Per-track audit/grade convenience fields for sorting.
     tr["grade_pass"] = not tr.get("issues")
     tr["lyrics_present"] = bool(tr.get("lyrics_embedded") or tr.get("lyrics_lrc"))
