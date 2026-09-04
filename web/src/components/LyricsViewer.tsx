@@ -117,6 +117,7 @@ export default function LyricsViewer({
   const [dur, setDur] = useState(duration ?? 0);
   const [selIdx, setSelIdx] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [searchHits, setSearchHits] = useState<{ id: number; artist: string; track: string; duration?: number }[] | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -236,11 +237,18 @@ export default function LyricsViewer({
       return;
     }
     setLoading(true);
+    setSearchHits(null);
     try {
       const res = await api.lyricsGet(artist, track, album, duration);
       const lrc = res?.syncedLyrics ?? res?.plainLyrics;
       if (!lrc) {
-        toast("No lyrics found on LRCLIB");
+        const hits = await api.lyricsSearch(artist, track, album, duration);
+        setSearchHits(
+          Array.isArray(hits) && hits.length
+            ? hits.map((h) => ({ id: h.id, artist: String(h.artist ?? ""), track: String(h.track ?? ""), duration: h.duration ? Number(h.duration) : undefined }))
+            : []
+        );
+        if (!hits?.length) toast("No lyrics found on LRCLIB");
         return;
       }
       const parsed = parseLrc(lrc);
@@ -254,6 +262,29 @@ export default function LyricsViewer({
           ? `Imported from LRCLIB — ${parsed.length} lines, ${wordCount} word-synced (ELRC)`
           : `Imported from LRCLIB — ${parsed.length} lines`,
       );
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const importSearchHit = async (hit: { artist: string; track: string; duration?: number }) => {
+    setSearchHits(null);
+    setLoading(true);
+    try {
+      const res = await api.lyricsGet(hit.artist, hit.track, undefined, hit.duration);
+      const lrc = res?.syncedLyrics ?? res?.plainLyrics;
+      if (!lrc) {
+        toast("That result has no lyrics on LRCLIB");
+        return;
+      }
+      const parsed = parseLrc(lrc);
+      setLines(parsed);
+      setRaw(lrc);
+      emit(parsed);
+      setSelIdx(0);
+      toast(`Imported "${hit.artist} — ${hit.track}" from LRCLIB`);
     } catch (e) {
       toast(String(e));
     } finally {
@@ -298,6 +329,28 @@ export default function LyricsViewer({
         onEnded={() => setPlaying(false)}
         className="hidden"
       />
+
+      {searchHits && (
+        <div className="rounded-md border border-border bg-panel p-3 mb-2">
+          <div className="text-[11px] text-zinc-400 mb-1.5">
+            {searchHits.length ? "Multiple matches — pick one:" : "No exact match — nothing found on LRCLIB."}
+          </div>
+          {searchHits.length > 0 && (
+            <div className="space-y-1 max-h-40 overflow-auto">
+              {searchHits.map((h) => (
+                <div key={h.id} className="flex items-center gap-2 text-xs">
+                  <span className="flex-1 truncate text-zinc-300">
+                    {h.artist} — <span className="text-zinc-400">{h.track}</span>
+                  </span>
+                  <button className="btn-ghost !py-0.5 text-[11px]" onClick={() => importSearchHit(h)}>
+                    Import
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {rawMode ? (
         <textarea

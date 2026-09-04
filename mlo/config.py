@@ -339,7 +339,6 @@ DEFAULT_CONFIG = {
     "auto_instrumental": True,
     "auto_zero_advisory_for_instrumental": True,
     "force_auto_tag": False,
-    "force_auto_tag_ui": False,
 
     # Misc
     "auto_advance": True,
@@ -348,40 +347,11 @@ DEFAULT_CONFIG = {
     "worker_limit": 0,
     "run_all_order": list(DEFAULT_RUN_ALL_ORDER),
 
-    # External taggers (Mp3tag / MusicBrainz Picard): explicit exe paths.
-    # Empty means auto-detect (registry / install dirs / PATH).
-    "mp3tag_path": "",
-    "picard_path": "",
-    "foobar2000_path": "",
-
-    # UI
-    "compact_ui": False,
-    "sidebar_visible": True,
-    "force_ui": False,
-    "force_flac_ui": False,
-    "force_images_ui": False,
-    "force_audit_ui": False,
-    "force_lyrics_ui": False,
-    "force_cue_ui": False,
-    "library_sort": "name",
-    "library_columns": {},
-
-    # GUI: theme ("dark" | "light" | "system"), accent color ("" = theme
-    # default, else #rrggbb), and whether the library tree also lists
-    # non-audio files inside each album. Tkinter is now the GUI (PySide6
-    # removed as obsolete).
-    "theme": "dark",
-    "accent_color": "",
-    "library_show_all_files": False,
-
     # First run / updates
     "first_run_done": False,
     "last_update_check": 0,
-    "check_updates_on_start": True,
-    "auto_update_on_start": False,
     "update_check_interval_days": 7,
-    "update_close_other_instances": True,
-    "confirm_before_update": True,
+    # Sidecar files (cue/log/lrc/accurip) shown as extra rows in library views
     "show_sidecar_files": False,
 }
 
@@ -543,9 +513,6 @@ def normalize_config(user=None) -> dict:
             if fam in user_audio["m4a"]:
                 merged_audio["mp4"][fam] = _as_bool(user_audio["m4a"].get(fam), merged_audio["mp4"].get(fam, True))
     cfg["audio_tag_writes"] = merged_audio
-
-    columns = cfg.get("library_columns")
-    cfg["library_columns"] = dict(columns) if isinstance(columns, dict) else {}
 
     order = cfg.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
     clean_order = []

@@ -1,7 +1,7 @@
-﻿import { useState } from "react";
+﻿import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, Info as InfoIcon } from "lucide-react";
+import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, Info as InfoIcon, ImageUp } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
@@ -29,7 +29,25 @@ export default function AlbumPage() {
   const [sort, setSort] = useState<SortState | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const [detailTrack, setDetailTrack] = useState<Track | null>(null);
+  const [coverBusy, setCoverBusy] = useState(false);
+  const coverInput = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
+
+  const uploadCover = async (file: File) => {
+    setCoverBusy(true);
+    try {
+      const r = await api.cover(decoded, file);
+      toast(r.ok ? `Cover saved as ${r.path.split("/").pop()}` : "Cover upload failed");
+      qc.invalidateQueries({ queryKey: ["library"] });
+      qc.invalidateQueries({ queryKey: ["coverColor", decoded] });
+      qc.invalidateQueries({ queryKey: ["album", decoded] });
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setCoverBusy(false);
+      if (coverInput.current) coverInput.current.value = "";
+    }
+  };
 
   if (error) return <EmptyState title="Album not found" hint={String(error)} />;
   if (isLoading || !data) return <div className="p-8 text-zinc-500">Loading album…</div>;
@@ -83,11 +101,28 @@ export default function AlbumPage() {
         }
       >
         <div className="flex items-start gap-5">
-          <CoverImg
-            albumPath={data.path}
-            coverFile={data.cover_file}
-            wrapperClass="h-40 w-40 rounded-lg border border-border bg-raise overflow-hidden shrink-0"
-          />
+          <div className="shrink-0">
+            <CoverImg
+              albumPath={data.path}
+              coverFile={data.cover_file}
+              wrapperClass="h-40 w-40 rounded-lg border border-border bg-raise overflow-hidden"
+            />
+            <input
+              ref={coverInput}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && uploadCover(e.target.files[0])}
+            />
+            <button
+              className="btn-ghost !py-1 text-[11px] w-full mt-1.5"
+              onClick={() => coverInput.current?.click()}
+              disabled={coverBusy}
+              title="Upload a new album cover (replaces cover.*)"
+            >
+              <ImageUp className="h-3.5 w-3.5" /> {coverBusy ? "Uploading…" : "Upload cover"}
+            </button>
+          </div>
         <div className="flex-1 min-w-0">
           <div className="text-xs text-zinc-500 uppercase tracking-wider">{data.meta?.DATE ?? "—"}</div>
           <h1 className="text-3xl font-bold tracking-tight">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>

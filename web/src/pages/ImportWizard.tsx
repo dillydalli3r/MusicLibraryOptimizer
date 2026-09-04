@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  UploadCloud, ExternalLink, Check, ChevronLeft, ChevronRight, ChevronDown, Search, Wand2,
+  UploadCloud, ExternalLink, Check, ChevronLeft, ChevronRight, ChevronDown, Wand2,
   ListMusic, Plus, Trash2, Disc3, FolderOpen, X,
 } from "lucide-react";
 import { api } from "../api";
@@ -581,16 +581,39 @@ export default function ImportWizard() {
 
   // ---------------- Step 1: links ----------------
   const [searchMode, setSearchMode] = useState<"release" | "track" | "catno" | "barcode">("release");
-  const doSearch = async () => {
-    if (!mbSearch.trim()) return;
+  const doSearch = async (q?: string) => {
+    const query = q ?? mbSearch;
+    if (!query.trim()) return;
     setBusy(true);
     try {
-      setSearchHits(await api.mbSearchReleases(mbSearch.trim(), searchMode));
+      setSearchHits(await api.mbSearchReleases(query.trim(), searchMode));
     } catch (e) {
       toast(String(e));
     } finally {
       setBusy(false);
     }
+  };
+
+  const [artistQuery, setArtistQuery] = useState("");
+  const [artistHits, setArtistHits] = useState<{ id: string; name: string; type?: string }[]>([]);
+  const doArtistSearch = async () => {
+    if (!artistQuery.trim()) return;
+    setBusy(true);
+    try {
+      const hits = await api.mbSearchArtists(artistQuery.trim());
+      setArtistHits(Array.isArray(hits) ? hits : []);
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const applyArtist = (name: string) => {
+    setArtistHits([]);
+    setArtistQuery("");
+    setMbSearch(`artist:"${name}"`);
+    setSearchMode("release");
+    doSearch(`artist:"${name}"`);
   };
 
   const pickRelease = async (id: string) => {
@@ -658,7 +681,7 @@ export default function ImportWizard() {
     }
     setBusy(true);
     try {
-      await api.importCommit(currentAlbumName, mbLink || `https://musicbrainz.org/release/${rid}`, rymValid ? rymLink : undefined);
+      await api.importCommit(albumPath, mbLink || `https://musicbrainz.org/release/${rid}`, rymValid ? rymLink : undefined);
       toast("Links saved to album");
       setStep(2);
     } catch (e) {
@@ -1203,10 +1226,31 @@ const finish = async () => {
                   <option value="barcode">Barcode</option>
                 </select>
                 <input className="input" placeholder="Search MusicBrainz…" value={mbSearch} onChange={(e) => setMbSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
-                <button className="btn-ghost shrink-0" onClick={doSearch} disabled={busy}>Search</button>
+                <button className="btn-ghost shrink-0" onClick={() => doSearch()} disabled={busy}>Search</button>
               </div>
-              <button className="btn-ghost" onClick={doSearch} disabled={busy}><Search className="h-4 w-4" /></button>
             </div>
+            <div className="text-xs text-zinc-600">or find an artist:</div>
+            <div className="flex gap-2">
+              <input
+                className="input"
+                placeholder="Artist name…"
+                value={artistQuery}
+                onChange={(e) => setArtistQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && doArtistSearch()}
+              />
+              <button className="btn-ghost shrink-0" onClick={doArtistSearch} disabled={busy}>Find artist</button>
+            </div>
+            {artistHits.length > 0 && (
+              <div className="max-h-40 overflow-auto space-y-1">
+                {artistHits.map((a) => (
+                  <button key={a.id} className="w-full text-left px-3 py-2 rounded bg-panel hover:bg-raise text-sm flex items-center gap-2"
+                    onClick={() => applyArtist(a.name)} title={`Search releases by ${a.name}`}>
+                    <span className="flex-1 truncate min-w-0 text-zinc-200">{a.name}</span>
+                    {a.type && <span className="chip bg-zinc-800 text-zinc-500 border border-border text-[10px]">{a.type}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
             {searchHits.length > 0 && (
               <div className="max-h-48 overflow-auto space-y-1">
                 {searchHits.map((h) => (

@@ -18,6 +18,11 @@ const ACCENT_OPTIONS: { id: string; name: string; color: string }[] = [
   { id: "mono", name: "Black & white", color: "#ffffff" },
 ];
 
+const ENCODER_FORMATS = ["flac", "jpeg", "png", "jxl"] as const;
+const ENCODER_FIELDS = ["ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"] as const;
+const AUDIO_TYPES = ["flac", "mp3", "mp4", "ogg", "opus", "aac"] as const;
+const TAG_FAMILIES = ["AUDIT", "LOG_GRADE", "REPLAYGAIN", "DYNAMIC_RANGE", "MEDIA_SOURCE", "INSTRUMENTAL", "ADVISORY", "LYRICS"] as const;
+
 export default function SettingsPage() {
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
   const qc = useQueryClient();
@@ -56,6 +61,7 @@ export default function SettingsPage() {
       title: "Images (script 5)",
       blurb: "Requires libjxl in .dependencies for JPEG XL conversion.",
       fields: [
+        { k: "reencode_images", label: "Re-encode images (master switch)", type: "bool" },
         { k: "rename_to_cover", label: "Rename album art to cover.*", type: "bool" },
         { k: "reencode_to_jxl", label: "Convert images to JPEG XL", type: "bool" },
         { k: "convert_jxl_back", label: "Convert JXL back to original", type: "bool" },
@@ -96,6 +102,7 @@ export default function SettingsPage() {
         { k: "lrc_enhanced_word_sync", label: "Enhanced LRC word sync", type: "bool" },
         { k: "lrc_extended_enabled", label: "Extended LRC (E-LRC)", type: "bool" },
         { k: "lrc_add_zero_timestamp", label: "Add [00:00.00] opening line", type: "bool" },
+        { k: "lrc_zero_timestamp_blank", label: "Zero timestamp is blank line", type: "bool" },
         { k: "lrc_zero_timestamp_target", label: "Zero timestamp target", type: "select", options: [["EMBEDDED", "Embedded"], ["LRC", "LRC sidecar"], ["BOTH", "Both"]] },
         { k: "append_final_newline", label: "Append final newline", type: "bool" },
         { k: "keep_empty_cue_lines", label: "Keep empty CUE lines", type: "bool" },
@@ -140,6 +147,7 @@ export default function SettingsPage() {
         { k: "audit_true_peak", label: "Measure true peak", type: "bool" },
         { k: "audit_lufs", label: "Measure LUFS", type: "bool" },
         { k: "audit_bpm", label: "Measure BPM", type: "bool" },
+        { k: "audit_check_cd_format", label: "Verify CD format (16/44.1)", type: "bool" },
         { k: "force_audit", label: "Force re-audit", type: "bool" },
       ],
     },
@@ -162,7 +170,7 @@ export default function SettingsPage() {
     },
     {
       title: "Tag writes (global switches)",
-      blurb: "Which tag families may be written at all. Per-filetype overrides live in the raw config (audio_tag_writes).",
+      blurb: "Which tag families may be written at all. Per-filetype overrides and encoder marker tags are below.",
       fields: [
         { k: "write_audit_tag", label: "Write AUDIT verdicts", type: "bool" },
         { k: "write_log_grade", label: "Write LOG_GRADE scores", type: "bool" },
@@ -172,6 +180,18 @@ export default function SettingsPage() {
         { k: "strip_source_on_cd", label: "Strip SOURCE on CD rips", type: "bool" },
         { k: "fill_empty_source", label: "Fill empty SOURCE on digital", type: "bool" },
         { k: "digital_media_source_value", label: "Digital SOURCE value", type: "text" },
+      ],
+    },
+    {
+      title: "CD Rips (scripts 2/6/9/10)",
+      blurb: "Deterministic CD-N renaming of .log/.cue/.accurip and conservative CUE FILE-name fixes.",
+      fields: [
+        { k: "discs_rename_enabled", label: "Auto-rename disc sheets to CD-{n}", type: "bool" },
+        { k: "discs_rename_single_fallback", label: "Rename lone sheet in single-disc album", type: "bool" },
+        { k: "discs_rename_pattern", label: "Rename pattern (must contain {n})", type: "text" },
+        { k: "discs_toc_tolerance_s", label: "TOC tolerance (s)", type: "number", min: 0.5, max: 10, step: 0.5 },
+        { k: "discs_toc_unique_margin_s", label: "TOC unique margin (s)", type: "number", min: 0.5, max: 10, step: 0.5 },
+        { k: "cue_fix_filenames", label: "Fix CUE FILE lines to real files", type: "bool" },
       ],
     },
     {
@@ -229,6 +249,7 @@ export default function SettingsPage() {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [rawConfig, setRawConfig] = useState("{}");
   const [tab, setTab] = useState("general");
   const [runAll, setRunAll] = useState<number[]>([1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
 
@@ -257,6 +278,7 @@ export default function SettingsPage() {
     { id: "audit", label: "Audit", section: "Scripts" },
     { id: "autotag", label: "AutoTag", section: "Scripts" },
     { id: "accurip", label: "AccurateRip", section: "Scripts" },
+    { id: "cdrips", label: "CD Rips", section: "Scripts" },
     { id: "tagwrites", label: "Tag writes", section: "Scripts" },
     { id: "grading", label: "Grading", section: "Scripts" },
   ];
@@ -288,6 +310,19 @@ export default function SettingsPage() {
     setNamingScript(String(config.naming_script ?? "") || DEFAULT_NAMING_SCRIPT);
     setShortFolderNames(!!config.short_folder_names);
     setScriptCfg(Object.fromEntries(ALL_CFG_KEYS.map((k) => [k, config[k]])));
+    const enc = (config.encoder_tags ?? {}) as Record<string, Record<string, boolean>>;
+    const aw = (config.audio_tag_writes ?? {}) as Record<string, Record<string, boolean>>;
+    setEncoderTags(
+      Object.fromEntries(
+        ENCODER_FORMATS.map((fmt) => [fmt, Object.fromEntries(ENCODER_FIELDS.map((f) => [f, !!enc[fmt]?.[f]]))])
+      )
+    );
+    setAudioTagWrites(
+      Object.fromEntries(
+        AUDIO_TYPES.map((t) => [t, Object.fromEntries(TAG_FAMILIES.map((fam) => [fam, aw[t]?.[fam] ?? true]))])
+      )
+    );
+    setRawConfig(JSON.stringify(config, null, 2));
     setRunAll(Array.isArray(config.run_all_order) ? config.run_all_order.map(Number).filter((n) => n >= 1 && n <= 10) : [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
     setLoaded(true);
   }, [config, loaded]);
@@ -322,6 +357,8 @@ export default function SettingsPage() {
       await api.saveConfig({
         ...config,
         ...scriptCfg,
+        encoder_tags: encoderTags,
+        audio_tag_writes: audioTagWrites,
         music_folder: musicFolder,
         lyrics_format: lyricsFormat,
         worker_limit: workerLimit,
@@ -337,11 +374,49 @@ export default function SettingsPage() {
     }
   };
 
+  const applyRaw = () => {
+    try {
+      const parsed = JSON.parse(rawConfig) as Record<string, unknown>;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("expected an object");
+      const enc = (parsed.encoder_tags ?? {}) as Record<string, Record<string, boolean>>;
+      const aw = (parsed.audio_tag_writes ?? {}) as Record<string, Record<string, boolean>>;
+      setScriptCfg(Object.fromEntries(ALL_CFG_KEYS.map((k) => [k, parsed[k]])));
+      setEncoderTags(
+        Object.fromEntries(
+          ENCODER_FORMATS.map((fmt) => [fmt, Object.fromEntries(ENCODER_FIELDS.map((f) => [f, !!enc[fmt]?.[f]]))])
+        )
+      );
+      setAudioTagWrites(
+        Object.fromEntries(
+          AUDIO_TYPES.map((t) => [t, Object.fromEntries(TAG_FAMILIES.map((fam) => [fam, aw[t]?.[fam] ?? true]))])
+        )
+      );
+      setMusicFolder(String(parsed.music_folder ?? musicFolder));
+      setLyricsFormat(String(parsed.lyrics_format ?? lyricsFormat));
+      setWorkerLimit(Number(parsed.worker_limit ?? workerLimit));
+      setNamingScript(String(parsed.naming_script ?? "") || namingScript);
+      setShortFolderNames(!!parsed.short_folder_names);
+      setRunAll(Array.isArray(parsed.run_all_order) ? parsed.run_all_order.map(Number).filter((n: number) => n >= 1 && n <= 10) : runAll);
+      toast("Raw config applied — click Save all settings to persist");
+    } catch (e) {
+      toast("Invalid JSON: " + String(e));
+    }
+  };
+
   const GROUP_BY_TAB: Record<string, CfgGroup> = {
     flac: CFG_GROUPS[0], images: CFG_GROUPS[1], lyrics: CFG_GROUPS[2],
     dr: CFG_GROUPS[3], audit: CFG_GROUPS[4], autotag: CFG_GROUPS[5],
     accurip: CFG_GROUPS[6], tagwrites: CFG_GROUPS[7], grading: CFG_GROUPS[8],
+    cdrips: CFG_GROUPS[9],
   };
+
+  const [encoderTags, setEncoderTags] = useState<Record<string, Record<string, boolean>>>({});
+  const toggleEncoder = (fmt: string, field: string, on: boolean) =>
+    setEncoderTags((e) => ({ ...e, [fmt]: { ...e[fmt], [field]: on } }));
+
+  const [audioTagWrites, setAudioTagWrites] = useState<Record<string, Record<string, boolean>>>({});
+  const toggleTagWrite = (ftype: string, fam: string, on: boolean) =>
+    setAudioTagWrites((a) => ({ ...a, [ftype]: { ...a[ftype], [fam]: on } }));
 
   const { data: deps, refetch: refetchDeps } = useQuery({
     queryKey: ["dependencies"],
@@ -458,6 +533,16 @@ export default function SettingsPage() {
                 <span className="text-xs text-zinc-500 uppercase">Worker limit (0 = auto)</span>
                 <input className="input mt-1" type="number" min={0} value={workerLimit} onChange={(e) => setWorkerLimit(Number(e.target.value))} />
               </label>
+              <div className="flex flex-wrap gap-x-6 gap-y-1.5">
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+                  <input type="checkbox" checked={!!scriptCfg.auto_advance} onChange={(e) => setCfg("auto_advance", e.target.checked)} />
+                  Auto-advance between Run All scripts
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+                  <input type="checkbox" checked={!!scriptCfg.show_sidecar_files} onChange={(e) => setCfg("show_sidecar_files", e.target.checked)} />
+                  Show sidecar files (cue/log/lrc/accurip) in library
+                </label>
+              </div>
               <div>
                 <span className="text-xs text-zinc-500 uppercase">Run All — scripts in order</span>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-1.5">
@@ -617,6 +702,76 @@ export default function SettingsPage() {
               <div className="text-xs font-bold text-zinc-300">{GROUP_BY_TAB[tab].title}</div>
               {GROUP_BY_TAB[tab].blurb && <div className="text-[10px] text-zinc-600">{GROUP_BY_TAB[tab].blurb}</div>}
               {renderFields(GROUP_BY_TAB[tab].fields)}
+              {tab === "tagwrites" && (
+                <>
+                  <div className="pt-2 border-t border-border">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Per-filetype tag writes</div>
+                    <div className="text-[10px] text-zinc-600 mt-0.5 mb-1.5">
+                      Which tag families each audio container receives (ANDed with the global switches above).
+                    </div>
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr>
+                          <th className="text-left text-zinc-500 font-medium py-1">Type</th>
+                          {TAG_FAMILIES.map((fam) => (
+                            <th key={fam} className="text-zinc-500 font-medium py-1">{fam}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {AUDIO_TYPES.map((t) => (
+                          <tr key={t}>
+                            <td className="py-0.5 text-zinc-300">{t}</td>
+                            {TAG_FAMILIES.map((fam) => (
+                              <td key={fam} className="py-0.5">
+                                <input
+                                  type="checkbox"
+                                  className="accent-[var(--accent)]"
+                                  checked={!!audioTagWrites[t]?.[fam]}
+                                  onChange={(e) => toggleTagWrite(t, fam, e.target.checked)}
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="pt-2 border-t border-border">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Encoder marker tags</div>
+                    <div className="text-[10px] text-zinc-600 mt-0.5 mb-1.5">
+                      Written to files when re-encoded. QUALITY/VERSION gate re-optimization; PROGRAM is informational.
+                    </div>
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr>
+                          <th className="text-left text-zinc-500 font-medium py-1">Format</th>
+                          {ENCODER_FIELDS.map((f) => (
+                            <th key={f} className="text-zinc-500 font-medium py-1">{f}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ENCODER_FORMATS.map((fmt) => (
+                          <tr key={fmt}>
+                            <td className="py-0.5 text-zinc-300">{fmt}</td>
+                            {ENCODER_FIELDS.map((f) => (
+                              <td key={f} className="py-0.5">
+                                <input
+                                  type="checkbox"
+                                  className="accent-[var(--accent)]"
+                                  checked={!!encoderTags[fmt]?.[f]}
+                                  onChange={(e) => toggleEncoder(fmt, f, e.target.checked)}
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -633,7 +788,20 @@ export default function SettingsPage() {
 
           <details className="bg-card rounded-lg border border-border p-4">
             <summary className="text-sm font-semibold cursor-pointer">Raw config (advanced)</summary>
-            <pre className="mt-2 text-xs text-zinc-400 overflow-auto max-h-80">{JSON.stringify(config, null, 2)}</pre>
+            <textarea
+              className="input font-mono text-[11px] min-h-[220px] mt-2"
+              value={rawConfig}
+              onChange={(e) => setRawConfig(e.target.value)}
+              spellCheck={false}
+            />
+            <div className="flex items-center gap-2 mt-2">
+              <button className="btn-ghost !py-1 text-xs" onClick={applyRaw}>
+                Apply to form
+              </button>
+              <span className="text-[10px] text-zinc-600">
+                Edits the form fields (then click Save all settings). Invalid JSON is rejected.
+              </span>
+            </div>
           </details>
         </div>
       </div>

@@ -9,9 +9,12 @@ services:
     volumes:
       # Point this at your music library (artist/album folders).
       - ./music:/music
-      # App state (playlists.db, config.json lives in /app).
-      - mlo-data:/app/data
+      # App state: config.json lives at /app/config.json, playlists at
+      # /app/server/data/playlists.db — persist both across rebuilds.
+      - mlo-config:/app/config.json
+      - mlo-data:/app/server/data
     restart: unless-stopped
 
 volumes:
+  mlo-config:
   mlo-data:

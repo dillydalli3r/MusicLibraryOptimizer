@@ -11,6 +11,8 @@ from .grader import run_grade_library
 from .images import run_process_images
 from .loudness import run_calc_dr_replaygain
 from .lyrics import run_format_lyrics
+from .accurip import run_generate_accurip
+from .format_all import run_format_all
 from .report import print_results, print_grade_results, print_combined_results
 from .tools import detect_all_tools
 from .ui import (
@@ -38,6 +40,8 @@ def edit_run_all_order(config):
         print("    6. Audit Library")
         print("    7. DR & ReplayGain")
         print("    8. Auto Tagging")
+        print("    9. AccurateRip")
+        print("   10. Format All")
         print("-" * 72)
 
         current = config.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
@@ -54,7 +58,7 @@ def edit_run_all_order(config):
         valid = True
 
         for p in parts:
-            if p in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            if p in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
                 pid = int(p)
                 if pid not in order:
                     order.append(pid)
@@ -129,7 +133,6 @@ def show_config_menu(config):
         print(f" 36. Auto Album Advisory      : {config.get('auto_advisory', True)}")
         print(f" 37. Auto Instrumental Tag    : {config.get('auto_instrumental', True)}")
         print(f" 38. Force Auto Tagging       : {config.get('force_auto_tag', False)}")
-        print(f" 39. Check Updates on Start   : {config.get('check_updates_on_start', True)}")
 
         print_separator()
         print("  Auto-detected encoder versions (.dependencies):")
@@ -396,12 +399,6 @@ def show_config_menu(config):
             print(f"\nSaved. Force Auto Tagging = {config['force_auto_tag']}")
             pause_for_input()
 
-        elif choice == "39":
-            config["check_updates_on_start"] = tf("Check for updates when the app starts? (y/n): ")
-            save_config(config)
-            print(f"\nSaved. Check Updates on Start = {config['check_updates_on_start']}")
-            pause_for_input()
-
         elif choice == "0":
             break
 
@@ -423,6 +420,8 @@ def show_custom_menu():
     print("    6. Audit Library")
     print("    7. DR & ReplayGain")
     print("    8. Auto Tagging")
+    print("    9. AccurateRip")
+    print("   10. Format All")
     print_separator()
 
     print("Enter the order of scripts to run (comma-separated, e.g. '3,1,2,5'):")
@@ -432,7 +431,7 @@ def show_custom_menu():
     order = []
 
     for p in parts:
-        if p in ("1", "2", "3", "4", "5", "6", "7", "8"):
+        if p in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
             order.append(int(p))
         else:
             print(c(f"  Ignoring invalid entry: '{p}'", Color.YELLOW))
@@ -454,6 +453,8 @@ def run_scripts_sequence(config, script_ids, title):
         6: ("Audit Library", run_audit_library),
         7: ("DR & ReplayGain", run_calc_dr_replaygain),
         8: ("Auto Tagging", run_auto_tagging),
+        9: ("AccurateRip", run_generate_accurip),
+        10: ("Format All", run_format_all),
     }
 
     auto_advance = config.get("auto_advance", True)
@@ -530,10 +531,12 @@ def show_main_menu(config):
     print("  6. Audit Library    (AudioAuditor: fake lossless / AI / MQA)")
     print("  7. DR & ReplayGain  (rsgain + simple-dr-meter tags)")
     print("  8. Auto Tagging     (advisory + instrumental)")
-    print(f"  9. Run All          {config.get('run_all_order', DEFAULT_RUN_ALL_ORDER)}")
-    print(" 10. Run Custom       (select order)")
-    print(" 11. Configuration")
-    print(" 12. Dependencies     (download latest tools)")
+    print("  9. AccurateRip     (CUETools .accurip files)")
+    print(" 10. Format All      (canonical trim pass)")
+    print(f" 11. Run All          {config.get('run_all_order', DEFAULT_RUN_ALL_ORDER)}")
+    print(" 12. Run Custom       (select order)")
+    print(" 13. Configuration")
+    print(" 14. Dependencies     (download latest tools)")
     print(c("  0. Exit", Color.YELLOW))
 
     print()
@@ -608,6 +611,8 @@ def main():
         6: ("Audit Library", run_audit_library),
         7: ("DR & ReplayGain", run_calc_dr_replaygain),
         8: ("Auto Tagging", run_auto_tagging),
+        9: ("AccurateRip", run_generate_accurip),
+        10: ("Format All", run_format_all),
     }
 
     while True:
@@ -617,7 +622,7 @@ def main():
         if choice == "0":
             break
 
-        elif choice in ("1", "2", "3", "4", "5", "6", "7", "8"):
+        elif choice in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
             script_id = int(choice)
             name, runner = runners[script_id]
 
@@ -634,11 +639,11 @@ def main():
 
             pause_for_input()
 
-        elif choice == "9":
+        elif choice == "11":
             order = config.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
             run_scripts_sequence(config, order, title="RUN ALL SCRIPTS")
 
-        elif choice == "10":
+        elif choice == "12":
             order = show_custom_menu()
 
             if not order:
@@ -648,10 +653,10 @@ def main():
 
             run_scripts_sequence(config, order, title="CUSTOM RUN ORDER")
 
-        elif choice == "11":
+        elif choice == "13":
             show_config_menu(config)
 
-        elif choice == "12":
+        elif choice == "14":
             manage_dependencies()
 
         else:

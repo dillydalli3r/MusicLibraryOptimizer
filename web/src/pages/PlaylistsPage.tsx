@@ -198,6 +198,12 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
     qc.invalidateQueries({ queryKey: ["playlists"] });
   };
 
+  const removeTrack = async (path: string) => {
+    await api.playlistRemove(playlist.id, [path]);
+    qc.invalidateQueries({ queryKey: ["playlist", playlist.id] });
+    qc.invalidateQueries({ queryKey: ["playlists"] });
+  };
+
   const trackMeta = useMemo(() => {
     const map = new Map<string, { title: string; audit: string | null; pass: boolean }>();
     for (const a of lib?.artists ?? [])
@@ -242,6 +248,15 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
               <div className="flex gap-0.5">
                 <button className="text-zinc-600 hover:text-zinc-300 disabled:opacity-30" onClick={() => move(i, -1)} disabled={i === 0}><ChevronUp className="h-4 w-4" /></button>
                 <button className="text-zinc-600 hover:text-zinc-300 disabled:opacity-30" onClick={() => move(i, 1)} disabled={i === tracks.length - 1}><ChevronDown className="h-4 w-4" /></button>
+                {playlist.kind === "manual" && (
+                  <button
+                    className="text-zinc-600 hover:text-red-400 ml-1"
+                    title="Remove from playlist"
+                    onClick={() => removeTrack(t)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           ))}

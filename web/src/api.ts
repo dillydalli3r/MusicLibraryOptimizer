@@ -162,8 +162,8 @@ export const api = {
       body: JSON.stringify({ tracks }),
     }),
 
-  lyricsSearch: (artist: string, track: string, album?: string) =>
-    json<any[]>(`${API}/lyrics/search?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}${album ? `&album=${encodeURIComponent(album)}` : ""}`),
+  lyricsSearch: (artist: string, track: string, album?: string, duration?: number) =>
+    json<any[]>(`${API}/lyrics/search?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}${album ? `&album=${encodeURIComponent(album)}` : ""}${duration ? `&duration=${duration}` : ""}`),
   lyricsGet: (artist: string, track: string, album?: string, duration?: number) =>
     json<any>(
       `${API}/lyrics/get?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}${album ? `&album=${encodeURIComponent(album)}` : ""}${duration ? `&duration=${duration}` : ""}`

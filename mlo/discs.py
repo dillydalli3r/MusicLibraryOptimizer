@@ -817,9 +817,18 @@ def score_disc_log(cli_exe, log_path=None, disc_files=None, timeout=30):
         env = dict(os.environ)
         try:
             import sys as _sys
-            for p in [os.path.join(os.path.dirname(_sys.executable), "Scripts"),
-                      r"C:\Users\dillydallier\AppData\Local\Python\pythoncore-3.14-64\Scripts",
-                      r"C:\Users\dillydallier\AppData\Local\Python\bin\Scripts"]:
+            import glob as _glob
+            candidates = [os.path.join(os.path.dirname(_sys.executable), "Scripts")]
+            # Also scan common user-level Python installs so Logchecker's
+            # eac-logchecker helper resolves on any machine (the Scripts
+            # dir of a second, non-runtime Python often holds the shim).
+            for pattern in (
+                os.path.expandvars(r"%LocalAppData%\Python\*\Scripts"),
+                os.path.expandvars(r"%LocalAppData%\Programs\Python\Python*\Scripts"),
+                os.path.expandvars(r"%LocalAppData%\Programs\Python\*\Scripts"),
+            ):
+                candidates.extend(_glob.glob(pattern))
+            for p in candidates:
                 if os.path.isdir(p) and p not in env.get("PATH", ""):
                     env["PATH"] = p + os.pathsep + env.get("PATH", "")
             # Also add python exe dir

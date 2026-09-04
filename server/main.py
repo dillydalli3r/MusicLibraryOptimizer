@@ -144,7 +144,8 @@ class AssignTagsRequest(BaseModel):
 
 
 class ImportCommit(BaseModel):
-    """Move staged files into the library. target_dir = album folder name."""
+    """Store MB/RYM links on an imported album. target_dir = album folder
+    name under music_folder, or an absolute path already inside it."""
     target_dir: str
     mb_link: Optional[str] = None
     rym_link: Optional[str] = None
@@ -187,8 +188,20 @@ def _music_folder(cfg=None):
 
 
 def _in_music_folder(p, folder):
-    """Path-containment guard shared by every path-taking endpoint."""
-    return os.path.abspath(p).lower().startswith(os.path.abspath(folder).lower())
+    """Path-containment guard shared by every path-taking endpoint.
+
+    Compares normalized absolute paths at directory boundaries so a
+    sibling like C:\\Music2 is never treated as being inside C:\\Music.
+    """
+    try:
+        ap = os.path.abspath(os.path.normpath(p))
+        af = os.path.abspath(os.path.normpath(folder))
+    except (OSError, ValueError, TypeError):
+        return False
+    if ap == af:
+        return True
+    common = os.path.commonpath([ap, af])
+    return os.path.normcase(common) == os.path.normcase(af)
 
 
 def _skip_names():
@@ -753,7 +766,7 @@ def playlists_export(pid: int):
 @app.post("/api/playlists/import")
 async def playlists_import(name: str = Query(...), file: UploadFile = File(...)):
     content = (await file.read()).decode("utf-8", errors="replace")
-    base = os.path.dirname(load_config().get("music_folder", "") or ".")
+    base = load_config().get("music_folder") or os.getcwd()
     pid = pl_mod.import_m3u8(name.strip() or file.filename or "imported", content, base)
     return pl_mod.get_playlist(pid)
 
@@ -1021,7 +1034,7 @@ def album_remove(req: AlbumRemove):
     p = os.path.normpath(req.path)
     if not os.path.isdir(p):
         raise HTTPException(404, "album not found")
-    if not os.path.abspath(p).lower().startswith(os.path.abspath(folder).lower()):
+    if not _in_music_folder(p, folder):
         raise HTTPException(400, "album outside music folder")
     trash = os.path.normpath(os.path.join(folder, ".mlo_trash"))
     os.makedirs(trash, exist_ok=True)
@@ -1077,7 +1090,7 @@ def organize(req: OrganizeRequest):
         if not os.path.isdir(p):
             results.append({"path": album_dir, "error": "album not found"})
             continue
-        if not os.path.abspath(p).lower().startswith(os.path.abspath(folder).lower()):
+        if not _in_music_folder(p, folder):
             results.append({"path": album_dir, "error": "album outside music folder"})
             continue
         tracks = _scan_album_tracks(p)
@@ -1105,7 +1118,7 @@ def organize(req: OrganizeRequest):
                 errors.append(f"{t['file']}: script evaluated to empty path")
                 continue
             dst = os.path.normpath(os.path.join(folder, rel))
-            if not os.path.abspath(dst).lower().startswith(os.path.abspath(folder).lower()):
+            if not _in_music_folder(dst, folder):
                 errors.append(f"{t['file']}: destination outside music folder")
                 continue
             src = os.path.normpath(t["path"])
@@ -1228,7 +1241,7 @@ async def import_upload(
     if not folder or not os.path.isdir(folder):
         raise HTTPException(400, "music_folder not set or not found")
     target = os.path.normpath(os.path.join(folder, target_dir))
-    if not os.path.abspath(target).lower().startswith(os.path.abspath(folder).lower()):
+    if not _in_music_folder(target, folder):
         raise HTTPException(400, "target outside music folder")
     os.makedirs(target, exist_ok=True)
     saved = []
@@ -1251,12 +1264,14 @@ async def import_upload(
 
 @app.post("/api/import/scan")
 def import_scan(path: str = Query(...)):
-    """Recursively list a folder's files with relative paths (native picks)."""
+    """Recursively list a folder's files with relative paths (native picks).
+
+    The picked folder may live anywhere — the follow-up ingest step moves
+    it into the library.
+    """
     p = os.path.normpath(path)
     if not os.path.isdir(p):
         raise HTTPException(404, "folder not found")
-    if not _in_music_folder(p, _music_folder()):
-        raise HTTPException(400, "folder outside music folder")
     out = []
     for root, dirs, files in os.walk(p):
         for f in files:
@@ -1286,7 +1301,7 @@ def import_ingest(source: str = Query(...), target: str = Query(...)):
     if not name:
         raise HTTPException(400, "invalid target name")
     dest = os.path.normpath(os.path.join(folder, name))
-    if not os.path.abspath(dest).lower().startswith(os.path.abspath(folder).lower()):
+    if not _in_music_folder(dest, folder):
         raise HTTPException(400, "target outside music folder")
     if os.path.normcase(os.path.abspath(dest)) == os.path.normcase(os.path.abspath(src)):
         return {"ok": True, "path": dest.replace("\\", "/")}
@@ -1315,15 +1330,20 @@ def import_commit(req: ImportCommit):
     folder = cfg.get("music_folder") or ""
     if not folder or not os.path.isdir(folder):
         raise HTTPException(400, "music_folder not set or not found")
-    target = os.path.normpath(os.path.join(folder, req.target_dir))
+    target = os.path.normpath(req.target_dir)
+    if not os.path.isabs(target):
+        target = os.path.normpath(os.path.join(folder, req.target_dir))
+    if not _in_music_folder(target, folder):
+        raise HTTPException(400, "target outside music folder")
     if not os.path.isdir(target):
         raise HTTPException(404, "album not found")
     from mlo.audio import AudioFile
     changes = {}
-    for f in os.listdir(target):
-        if not is_audio_file(f):
-            continue
-        changes[os.path.join(target, f).replace("\\", "/")] = {}
+    for root, _dirs, files in os.walk(target):
+        for f in files:
+            if not is_audio_file(f):
+                continue
+            changes[os.path.join(root, f).replace("\\", "/")] = {}
     mb = intg._mbid(req.mb_link)
     if mb:
         for p in changes:
@@ -1358,9 +1378,16 @@ async def ws_progress(ws: WebSocket):
     progress_clients.add(ws)
     try:
         while True:
-            await asyncio.sleep(30)
-            await ws.ping()
-    except WebSocketDisconnect:
+            try:
+                # receive() detects dead peers (ping does not), so stale
+                # sockets get pruned instead of accumulating forever.
+                await asyncio.wait_for(ws.receive(), timeout=30)
+            except asyncio.TimeoutError:
+                try:
+                    await ws.send_json({"type": "ping"})
+                except Exception:
+                    break
+    except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         progress_clients.discard(ws)

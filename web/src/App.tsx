@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Library, ListMusic, Import, Settings as SettingsIcon, RefreshCw, Play } from "lucide-react";
 import { api } from "./api";
@@ -10,6 +10,7 @@ import AlbumPage from "./pages/AlbumPage";
 import TrackPage from "./pages/TrackPage";
 import PlaylistsPage from "./pages/PlaylistsPage";
 import SettingsPage from "./pages/SettingsPage";
+import SetupPage from "./pages/SetupPage";
 import PlayerBar from "./components/PlayerBar";
 import ImportWizard from "./pages/ImportWizard";
 import { ProgressBar } from "./components/ProgressBar";
@@ -66,7 +67,10 @@ export default function App() {
   const runAll = async () => {
     setToast("Running all scripts…");
     try {
-      const res = await api.run([1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
+      const order = Array.isArray(config?.run_all_order)
+        ? config.run_all_order.filter((n) => n >= 1 && n <= 10)
+        : [1, 2, 8, 3, 5, 9, 6, 4, 7, 10];
+      const res = await api.run(order.length ? order : [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
       const failed = (res.results ?? []).filter((r) => r.error);
       setToast(
         failed.length
@@ -79,6 +83,16 @@ export default function App() {
       qc.invalidateQueries({ queryKey: ["library"] });
     }
   };
+
+  // First-run gate: no music folder (or setup not completed) → setup wizard.
+  if (config && (!String(config.music_folder ?? "").trim() || !config.first_run_done)) {
+    return (
+      <Routes>
+        <Route path="/setup" element={<SetupPage />} />
+        <Route path="*" element={<Navigate to="/setup" replace />} />
+      </Routes>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-bg text-zinc-100 flex flex-col">
@@ -140,6 +154,7 @@ export default function App() {
             <Route path="/playlists" element={<PlaylistsPage />} />
             <Route path="/import" element={<ImportWizard />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/setup" element={<Navigate to="/" replace />} />
             <Route
               path="*"
               element={

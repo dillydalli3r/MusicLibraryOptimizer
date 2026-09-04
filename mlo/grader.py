@@ -364,12 +364,17 @@ def _cue_formatted(path, cfg):
         return False
     canonical = canonical_cue_text(
         content,
-        keep_empty_lines=cfg.get("keep_empty_cue_lines", False),
+        keep_empty_lines=cfg.get("keep_empty_cue_lines", False) or not cfg.get("grade_check_cue_blank_lines", True),
         keep_other_lines=cfg.get("keep_other_cue_lines", False),
         file_type=cfg.get("cue_file_type", "WAVE"),
         append_final_newline=cfg.get("append_final_newline", False),
     )
-    return canonical == content
+    if cfg.get("grade_check_cue_spaces", True):
+        return canonical == content
+    # Space check disabled: ignore leading/trailing whitespace per line
+    # (blank-line collapsing and every other normalization still apply).
+    return [ln.strip() for ln in canonical.split("\n")] == \
+        [ln.strip() for ln in content.split("\n")]
 
 
 # Non-audio files that the viewer can show alongside the tracks.
@@ -1643,10 +1648,10 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 # This ensures library viewer highlights tracks red like their album when .accurip is missing,
                 # even though the stored AUDIT tag may still be REAL until the next Audit Library run.
                 try:
-                    if media_summary == "CD" and cfg.get("audit_require_accuraterip", True):
+                    if media_summary == "CD" and cfg.get("audit_require_accuraterip", True) and cfg.get("grade_check_accuraterip", True):
                         if tr.get("accuraterip_status") in ("NONE", "FAKE"):
                             tr["audit"] = "FAKE"
-                    if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True):
+                    if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True) and cfg.get("grade_check_log_checksum", True):
                         if tr.get("checksum_status") == "FAKE":
                             tr["audit"] = "FAKE"
                 except Exception:
@@ -1654,11 +1659,11 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             # Second pass for tracks where accurip_status was set via per_map continue path: ensure audit override there too
             for tr in tracks:
                 try:
-                    if media_summary == "CD" and cfg.get("audit_require_accuraterip", True):
+                    if media_summary == "CD" and cfg.get("audit_require_accuraterip", True) and cfg.get("grade_check_accuraterip", True):
                         if tr.get("accuraterip_status") in ("NONE", "FAKE"):
                             if tr.get("audit") != "FAKE":
                                 tr["audit"] = "FAKE"
-                    if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True):
+                    if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True) and cfg.get("grade_check_log_checksum", True):
                         if tr.get("checksum_status") == "FAKE" and tr.get("audit") != "FAKE":
                             tr["audit"] = "FAKE"
                 except Exception:
@@ -1743,7 +1748,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 cover_ok = False
                 add_issue(f"Cover image unreadable/corrupt (need {target_cov}x{target_cov})", "album")
         # Square enforcement: aspect within threshold (force_exact uses strict threshold from config)
-        if enforce_square and cfg.get("grade_check_cover", True):
+        if enforce_square and cfg.get("grade_check_cover", True) and cfg.get("grade_check_cover_crop", True):
             total_checks += 1
             if force_exact:
                 try:
@@ -1942,7 +1947,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         # This fixes the bug where one bad track's checksum/accurip made whole album's tracks show FAKE via uniform status; now per-track is accurate,
         # but album summary remains FAKE if any track is FAKE (so folder still indicates issue, but per-track column shows which track)
         try:
-            if media_summary == "CD" and cfg.get("audit_require_accuraterip", True):
+            if media_summary == "CD" and cfg.get("audit_require_accuraterip", True) and cfg.get("grade_check_accuraterip", True):
                 # Check per-track accuraterip: if any track is NONE/FAKE, album audit is FAKE, but per-track already set correctly above
                 for tr in tracks:
                     if tr.get("accuraterip_status") in ("NONE", "FAKE"):
@@ -1951,7 +1956,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             pass
         # Check log checksum per-track (per-disc)
         try:
-            if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True):
+            if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True) and cfg.get("grade_check_log_checksum", True):
                 for tr in tracks:
                     if tr.get("checksum_status") == "FAKE":
                         return "FAKE"
@@ -1973,8 +1978,8 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             return "FAKE"
         # For REAL, require all per-track checks to be REAL as well (not just album aggregate)
         try:
-            all_ar_real = all(tr.get("accuraterip_status") == "REAL" for tr in tracks) if media_summary == "CD" and cfg.get("audit_require_accuraterip", True) else True
-            all_csum_ok = all(tr.get("checksum_status") != "FAKE" for tr in tracks) if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True) else True
+            all_ar_real = all(tr.get("accuraterip_status") == "REAL" for tr in tracks) if media_summary == "CD" and cfg.get("audit_require_accuraterip", True) and cfg.get("grade_check_accuraterip", True) else True
+            all_csum_ok = all(tr.get("checksum_status") != "FAKE" for tr in tracks) if media_summary == "CD" and cfg.get("audit_verify_log_checksum", True) and cfg.get("grade_check_log_checksum", True) else True
         except Exception:
             all_ar_real = accuraterip_status == "REAL"
             all_csum_ok = checksum_status != "FAKE"
@@ -1984,7 +1989,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         # (audit hasn't been run, but files would pass)
         if tag_summary is None and all_ar_real and all_csum_ok:
             # Need to ensure accuraterip is REAL when required
-            if media_summary == "CD" and cfg.get("audit_require_accuraterip", True):
+            if media_summary == "CD" and cfg.get("audit_require_accuraterip", True) and cfg.get("grade_check_accuraterip", True):
                 if all_ar_real:
                     return "REAL"
             else:
@@ -1992,7 +1997,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         if tag_summary is None and media_summary == "CD":
             # No accurip and no tag → treat as not yet audited, but per user should be FAKE
             # Only when audit_require_accuraterip is on and any track is NONE
-            if cfg.get("audit_require_accuraterip", True):
+            if cfg.get("audit_require_accuraterip", True) and cfg.get("grade_check_accuraterip", True):
                 for tr in tracks:
                     if tr.get("accuraterip_status") == "NONE":
                         return "FAKE"

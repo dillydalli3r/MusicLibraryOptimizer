@@ -35,7 +35,7 @@ COPY tools/ /app/tools/
 
 RUN pip install --no-cache-dir -r /app/server/requirements.txt
 
-VOLUME ["/music", "/app/data"]
+VOLUME ["/music"]
 EXPOSE 8000
 
 CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000"]

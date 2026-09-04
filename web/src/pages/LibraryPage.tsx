@@ -51,7 +51,6 @@ const ALBUM_SORTS = [
 ];
 
 const SCRIPTS: { ids: number[]; label: string }[] = [
-  { ids: [1, 2, 8, 3, 5, 9, 6, 4, 7, 10], label: "Run all" },
   { ids: [1], label: "Format lyrics" },
   { ids: [2], label: "Format CUEs" },
   { ids: [3], label: "Optimize FLACs" },
@@ -61,6 +60,8 @@ const SCRIPTS: { ids: number[]; label: string }[] = [
   { ids: [8], label: "Auto tagging" },
   { ids: [4], label: "Grade" },
 ];
+
+const DEFAULT_RUN_ALL = [1, 2, 8, 3, 5, 9, 6, 4, 7, 10];
 
 interface Col {
   id: string;
@@ -114,6 +115,10 @@ interface FlatTrack extends Track {
 
 export default function LibraryPage() {
   const { data: lib, isLoading, error } = useQuery({ queryKey: ["library"], queryFn: api.library });
+  const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
+  const runAllIds = Array.isArray(config?.run_all_order) && config.run_all_order.length
+    ? config.run_all_order.filter((n: number) => n >= 1 && n <= 10)
+    : DEFAULT_RUN_ALL;
   const qc = useQueryClient();
   const { query, setQuery, setToast, folder } = useStore();
   const {
@@ -459,7 +464,7 @@ const toggleExpand = (path: string) =>
             >
               <Trash2 className="h-3.5 w-3.5" /> Remove
             </button>
-            <ScriptsDropdown onRun={runScriptsOnSelection} />
+            <ScriptsDropdown onRun={runScriptsOnSelection} runAllIds={runAllIds} />
             <button
               className="btn-ghost !py-1 text-xs"
               onClick={organizeSelection}
@@ -879,8 +884,9 @@ function AlbumRowGroup({
   );
 }
 
-function ScriptsDropdown({ onRun }: { onRun: (ids: number[]) => void }) {
+function ScriptsDropdown({ onRun, runAllIds }: { onRun: (ids: number[]) => void; runAllIds: number[] }) {
   const [open, setOpen] = useState(false);
+  const items = [{ ids: runAllIds, label: "Run all" }, ...SCRIPTS];
   return (
     <div className="relative">
       <button className="btn-ghost !py-1 text-xs" onClick={() => setOpen(!open)}>
@@ -890,7 +896,7 @@ function ScriptsDropdown({ onRun }: { onRun: (ids: number[]) => void }) {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg p-1.5 w-44 shadow-2xl">
-            {SCRIPTS.map((s) => (
+            {items.map((s) => (
               <button
                 key={s.label}
                 className="w-full text-left px-2.5 py-1.5 text-xs rounded hover:bg-panel text-zinc-300 hover:text-white"
