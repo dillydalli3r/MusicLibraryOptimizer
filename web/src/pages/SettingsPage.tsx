@@ -212,6 +212,18 @@ export default function SettingsPage() {
         { k: "grader_strict_square_threshold", label: "Strict square threshold", type: "number", min: 0, max: 0.05, step: 0.005 },
       ],
     },
+    {
+      title: "Videos (script 11)",
+      blurb: "Lossless remux: any video container → MP4. Video stream is copied when MP4-compatible (h264/hevc/mpeg4/av1/vp9); all audio streams are re-encoded to FLAC (lossless).",
+      fields: [
+        { k: "video_reencode_incompatible", label: "Re-encode incompatible video to H.264", type: "bool" },
+        { k: "video_crf", label: "H.264 CRF (lower = better)", type: "number", min: 0, max: 51 },
+        { k: "video_preset", label: "H.264 preset", type: "select", options: [["ultrafast","ultrafast"],["superfast","superfast"],["veryfast","veryfast"],["faster","faster"],["fast","fast"],["medium","medium"],["slow","slow"],["slower","slower"],["veryslow","veryslow"]] },
+        { k: "video_flac_level", label: "FLAC compression (0-8)", type: "number", min: 0, max: 8 },
+        { k: "video_remove_original", label: "Remove original after verified remux", type: "bool" },
+        { k: "video_process_mp4", label: "Also normalize MP4s without FLAC audio", type: "bool" },
+      ],
+    },
   ];
   const GRADE_CHECK_KEYS: CfgField[] = [
     { k: "grade_check_tag_spaces", label: "Tag spaces", type: "bool" },
@@ -251,9 +263,10 @@ export default function SettingsPage() {
   const [previewing, setPreviewing] = useState(false);
   const [rawConfig, setRawConfig] = useState("{}");
   const [tab, setTab] = useState("general");
-  const [runAll, setRunAll] = useState<number[]>([1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
+  const [runAll, setRunAll] = useState<number[]>([11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
 
   const RUN_ALL_SCRIPTS: { id: number; label: string }[] = [
+    { id: 11, label: "Video Remux" },
     { id: 1, label: "Lyrics" },
     { id: 2, label: "CUEs" },
     { id: 8, label: "AutoTag" },
@@ -279,6 +292,7 @@ export default function SettingsPage() {
     { id: "autotag", label: "AutoTag", section: "Scripts" },
     { id: "accurip", label: "AccurateRip", section: "Scripts" },
     { id: "cdrips", label: "CD Rips", section: "Scripts" },
+    { id: "videos", label: "Videos", section: "Scripts" },
     { id: "tagwrites", label: "Tag writes", section: "Scripts" },
     { id: "grading", label: "Grading", section: "Scripts" },
   ];
@@ -323,7 +337,7 @@ export default function SettingsPage() {
       )
     );
     setRawConfig(JSON.stringify(config, null, 2));
-    setRunAll(Array.isArray(config.run_all_order) ? config.run_all_order.map(Number).filter((n) => n >= 1 && n <= 10) : [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
+    setRunAll(Array.isArray(config.run_all_order) ? config.run_all_order.map(Number).filter((n) => n >= 1 && n <= 11) : [11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
     setLoaded(true);
   }, [config, loaded]);
 
@@ -396,7 +410,7 @@ export default function SettingsPage() {
       setWorkerLimit(Number(parsed.worker_limit ?? workerLimit));
       setNamingScript(String(parsed.naming_script ?? "") || namingScript);
       setShortFolderNames(!!parsed.short_folder_names);
-      setRunAll(Array.isArray(parsed.run_all_order) ? parsed.run_all_order.map(Number).filter((n: number) => n >= 1 && n <= 10) : runAll);
+      setRunAll(Array.isArray(parsed.run_all_order) ? parsed.run_all_order.map(Number).filter((n: number) => n >= 1 && n <= 11) : runAll);
       toast("Raw config applied — click Save all settings to persist");
     } catch (e) {
       toast("Invalid JSON: " + String(e));
@@ -407,7 +421,7 @@ export default function SettingsPage() {
     flac: CFG_GROUPS[0], images: CFG_GROUPS[1], lyrics: CFG_GROUPS[2],
     dr: CFG_GROUPS[3], audit: CFG_GROUPS[4], autotag: CFG_GROUPS[5],
     accurip: CFG_GROUPS[6], tagwrites: CFG_GROUPS[7], grading: CFG_GROUPS[8],
-    cdrips: CFG_GROUPS[9],
+    cdrips: CFG_GROUPS[9], videos: CFG_GROUPS[10],
   };
 
   const [encoderTags, setEncoderTags] = useState<Record<string, Record<string, boolean>>>({});

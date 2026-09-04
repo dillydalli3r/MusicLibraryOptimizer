@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -69,6 +70,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# The /api/library payload is large (every track's tags + grading details);
+# gzip cuts it ~10x for a cheap first-paint win on big libraries.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # --------------------------------------------------------------------------- #
 # Progress relay (WebSocket + original hook)
@@ -109,9 +113,9 @@ class RunRequest(BaseModel):
     force: Optional[dict] = None
 
 
-class TagsRequest(BaseModel):
+class LyricsEmbedRequest(BaseModel):
     path: str
-    tags: dict
+    lyrics: str
 
 
 class PlaylistCreate(BaseModel):
@@ -407,16 +411,9 @@ def get_artist(path: str = Query(...)):
         raise HTTPException(400, "artist outside music folder")
     cfg = load_config()
     albums = lib_mod._find_albums(p)
-    albums_data = []
-    for alb in sorted(albums):
-        if os.path.dirname(alb).lower() != p.lower():
-            continue
-        try:
-            a = lib_mod.build_album(alb, cfg)
-            if a is not None:
-                albums_data.append(a)
-        except Exception as e:
-            albums_data.append({"path": alb.replace("\\", "/"), "error": str(e), "tracks": []})
+    direct = [alb for alb in sorted(albums)
+              if os.path.dirname(alb).lower() == p.lower()]
+    albums_data = lib_mod.build_albums_parallel(direct, cfg)
     return {
         "path": p.replace("\\", "/"),
         "name": os.path.basename(p),
@@ -430,7 +427,9 @@ def get_artist(path: str = Query(...)):
 # --------------------------------------------------------------------------- #
 _CTYPES = {
     ".flac": "audio/flac", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
-    ".mp4": "audio/mp4", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+    # Music videos live in .mp4 too — video/mp4 demuxes fine in <audio>
+    # elements and is required for <video> playback.
+    ".mp4": "video/mp4", ".ogg": "audio/ogg", ".opus": "audio/ogg",
     ".wav": "audio/wav", ".aac": "audio/aac",
 }
 
@@ -448,6 +447,8 @@ def stream(path: str = Query(...)):
 
 @app.get("/api/tags")
 def get_tags(path: str = Query(...)):
+    """Read-only tag/lyrics/cover view (tag *writing* was removed — the
+    engine's grading/auditing scripts own all tag writes now)."""
     from mlo.audio import AudioFile
     p = os.path.normpath(path)
     if not os.path.isfile(p):
@@ -472,69 +473,6 @@ def get_tags(path: str = Query(...)):
     except Exception:
         pass
     return {"path": p.replace("\\", "/"), "tags": tags, "lyrics": lyr, "cover": cover}
-
-
-@app.post("/api/tags")
-def set_tags(req: TagsRequest):
-    from mlo.audio import AudioFile
-    p = os.path.normpath(req.path)
-    if not os.path.isfile(p):
-        raise HTTPException(404, "file not found")
-    if not _in_music_folder(p, _music_folder()):
-        raise HTTPException(400, "file outside music folder")
-    af = AudioFile(p)
-    if af.audio is None:
-        raise HTTPException(500, af.error or "unreadable")
-    errors = []
-    for k, v in req.tags.items():
-        if k.upper() in ("LYRICS", "UNSYNCEDLYRICS"):
-            if not af.set_lyrics(str(v)):
-                errors.append(f"{k}: {af.error}")
-        else:
-            if v is None or str(v) == "":
-                if not af.delete_tag(k):
-                    errors.append(f"{k}: {af.error or 'delete failed'}")
-            else:
-                if not af.set_tag(k, str(v)):
-                    errors.append(f"{k}: {af.error or 'write failed'}")
-    if errors:
-        raise HTTPException(500, "; ".join(errors))
-    tagcache.invalidate_path(p)
-    return {"ok": True}
-
-
-@app.post("/api/tags/batch")
-def set_tags_batch(req: TagsRequest):
-    """Apply a tag map to multiple files: {path: {tag: value}}."""
-    from mlo.audio import AudioFile
-    errors = []
-    changed = 0
-    for p, tag_map in req.tags.items():
-        fp = os.path.normpath(p)
-        if not os.path.isfile(fp):
-            errors.append(f"{p}: not found")
-            continue
-        if not _in_music_folder(fp, _music_folder()):
-            errors.append(f"{p}: outside music folder")
-            continue
-        af = AudioFile(fp)
-        if af.audio is None:
-            errors.append(f"{p}: {af.error or 'unreadable'}")
-            continue
-        for k, v in tag_map.items():
-            try:
-                if v is None or str(v) == "":
-                    if not af.delete_tag(k):
-                        errors.append(f"{p} {k}: {af.error or 'delete failed'}")
-                elif not af.set_tag(k, str(v)):
-                    errors.append(f"{p} {k}: {af.error or 'write failed'}")
-            except Exception as e:
-                errors.append(f"{p} {k}: {e}")
-        changed += 1
-        tagcache.invalidate_path(fp)
-    if errors:
-        raise HTTPException(500, "; ".join(errors))
-    return {"ok": True, "changed": changed}
 
 
 @app.get("/api/cover")
@@ -566,7 +504,11 @@ def get_cover(request: Request, album: str = Query(...), file: Optional[str] = Q
 
 
 @app.post("/api/cover")
-async def upload_cover(album: str = Query(...), file: UploadFile = File(...)):
+async def upload_cover(album: str = Query(...), file: UploadFile = File(...),
+                       track: Optional[str] = Query(None)):
+    """Upload cover art. Without `track` this replaces the album's cover.*;
+    with `track=<audio filename>` it writes a per-track sidecar cover named
+    after the track stem (e.g. '01 - Song.jpg')."""
     alb = os.path.normpath(album)
     if not os.path.isdir(alb):
         raise HTTPException(404, "album not found")
@@ -575,7 +517,12 @@ async def upload_cover(album: str = Query(...), file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in (".jpg", ".jpeg", ".png", ".jxl", ".webp", ".bmp"):
         ext = ".jpg"
-    dest = os.path.join(alb, f"cover{ext}")
+    stem = "cover"
+    if track:
+        tstem = os.path.splitext(os.path.basename(track))[0].strip()
+        tstem = re_safe_filename(tstem).strip().rstrip(".") or "cover"
+        stem = tstem
+    dest = os.path.join(alb, f"{stem}{ext}")
     data = await file.read()
     fd, tmp = tempfile.mkstemp(prefix=".cover_tmp_", suffix=ext, dir=alb)
     try:
@@ -598,6 +545,62 @@ async def upload_cover(album: str = Query(...), file: UploadFile = File(...)):
     return {"ok": True, "path": dest.replace("\\", "/")}
 
 
+@app.get("/api/videos/scan")
+def videos_scan(path: str = Query(None)):
+    """List video files (non-audio containers) under an album or the whole
+    library, with codec/duration info from ffprobe, so the UI can offer
+    one-click remuxing."""
+    from mlo.remux import VIDEO_EXTS, _stream_info
+    from mlo.tools import detect_all_tools
+
+    folder = _music_folder()
+    root = os.path.normpath(path) if path else folder
+    if not os.path.isdir(root):
+        raise HTTPException(404, "folder not found")
+    if not _in_music_folder(root, folder):
+        raise HTTPException(400, "folder outside music folder")
+    ffprobe = (detect_all_tools().get("ffmpeg") or {}).get("ffprobe_exe")
+    skip = _skip_names()
+    out = []
+    for r, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d.lower() not in skip]
+        for f in sorted(files):
+            if os.path.splitext(f)[1].lower() not in VIDEO_EXTS:
+                continue
+            full = os.path.join(r, f)
+            info = _stream_info(full, ffprobe) if ffprobe else None
+            out.append({
+                "path": full.replace("\\", "/"),
+                "album": r.replace("\\", "/"),
+                "file": f,
+                "size": os.path.getsize(full),
+                "video_codec": info[0] if info else None,
+                "audio_codecs": info[1] if info else [],
+                "duration": info[3] if info else None,
+                "mp4_safe": (info[0] in ("h264", "hevc", "mpeg4", "av1", "vp9")) if info else None,
+            })
+    return {"videos": out}
+
+
+@app.post("/api/lyrics/embed")
+def lyrics_embed(req: LyricsEmbedRequest):
+    """Write ONLY the embedded LYRICS tag (the last tag-write path the UI
+    still needs; everything else is grading-script territory)."""
+    from mlo.audio import AudioFile
+    p = os.path.normpath(req.path)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
+    af = AudioFile(p)
+    if af.audio is None:
+        raise HTTPException(500, af.error or "unreadable")
+    if not af.set_lyrics(req.lyrics or ""):
+        raise HTTPException(500, af.error or "lyrics write failed")
+    tagcache.invalidate_path(p)
+    return {"ok": True}
+
+
 # --------------------------------------------------------------------------- #
 # Run scripts
 # --------------------------------------------------------------------------- #
@@ -616,12 +619,16 @@ def run_scripts(req: RunRequest):
         from mlo.format_all import run_format_all
     except ImportError:
         run_format_all = None
+    try:
+        from mlo.remux import run_remux_videos
+    except ImportError:
+        run_remux_videos = None
 
     RUNNERS = {
         1: run_format_lyrics, 2: run_format_cues, 3: run_optimize_flacs,
         4: run_grade_library, 5: run_process_images, 6: run_audit_library,
         7: run_calc_dr_replaygain, 8: run_auto_tagging, 9: run_generate_accurip,
-        10: run_format_all,
+        10: run_format_all, 11: run_remux_videos,
     }
     cfg = load_config()
     if req.targets:

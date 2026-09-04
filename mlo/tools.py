@@ -27,6 +27,7 @@ def _detect_tool(prefix, deps_dir):
         return None, None
 
     cands = []
+    unversioned = None
     for entry in os.listdir(deps_dir):
         full = os.path.join(deps_dir, entry)
         if not os.path.isdir(full):
@@ -35,6 +36,9 @@ def _detect_tool(prefix, deps_dir):
             continue
         m = re.search(r"v?\s*(\d+(?:\.\d+)*)", entry)
         if not m:
+            # Rolling installs (e.g. "ffmpeg vlatest") have no parseable
+            # version; keep them as lowest-priority candidates.
+            unversioned = full
             continue
         try:
             v = tuple(int(x) for x in m.group(1).split("."))
@@ -43,6 +47,8 @@ def _detect_tool(prefix, deps_dir):
         cands.append((v, m.group(1), entry))
 
     if not cands:
+        if unversioned and os.path.isdir(unversioned):
+            return None, os.path.basename(unversioned)
         return None, None
 
     cands.sort(reverse=True)
@@ -51,6 +57,48 @@ def _detect_tool(prefix, deps_dir):
 
 _TOOLS_CACHE = None
 _CACHE_LOCK = __import__("threading").Lock()
+
+
+def _which_pair(exe_name):
+    """Find exe+probe on PATH, skipping Microsoft Store alias stubs.
+
+    WindowsApps execution aliases shadow real installs (the alias is a
+    0-byte reparse point that fails when spawned), so walk PATH in order
+    and prefer a directory whose exe is a real binary (>1 MB). Returns
+    (ffmpeg_path, ffprobe_path) or (None, None).
+    """
+    probe_name = "ffprobe.exe" if exe_name.lower() == "ffmpeg.exe" else None
+    real = None
+    any_hit = None
+    try:
+        path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    except Exception:
+        path_dirs = []
+    for d in path_dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        exe = os.path.join(d, exe_name)
+        if not os.path.isfile(exe):
+            continue
+        try:
+            size = os.path.getsize(exe)
+        except OSError:
+            continue
+        if size <= 1:
+            continue  # 0-byte app-execution alias
+        if probe_name:
+            probe = os.path.join(d, probe_name)
+            if not os.path.isfile(probe):
+                continue
+            pair = (exe, probe)
+        else:
+            pair = (exe, None)
+        if any_hit is None:
+            any_hit = pair
+        if size > 1024 * 1024:
+            real = pair
+            break
+    return real or any_hit or (None, None)
 
 
 def _detect_system_tools():
@@ -80,8 +128,10 @@ def _detect_system_tools():
     if oxipng:
         tools["oxipng"] = {"version": None, "oxipng_exe": oxipng}
 
-    ffmpeg = shutil.which("ffmpeg")
-    ffprobe = shutil.which("ffprobe")
+    ffmpeg, ffprobe = _which_pair("ffmpeg.exe")
+    if not ffmpeg:
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe") if ffmpeg else None
     if ffmpeg and ffprobe:
         tools["ffmpeg"] = {"version": None, "ffmpeg_exe": ffmpeg, "ffprobe_exe": ffprobe}
 

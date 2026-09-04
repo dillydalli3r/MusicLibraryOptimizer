@@ -2169,8 +2169,10 @@ def run_process_images(config):
 
     print_header("Image Processing")
 
-    if convert_jxl_back:
+    if convert_jxl_back and reencode_to_jxl:
         mode = "JXL -> original (reverse only; other files untouched)"
+    elif convert_jxl_back:
+        mode = "JXL -> original + in-place lossless JPEG/PNG optimization"
     elif reencode_to_jxl:
         mode = f"JPEG XL conversion (effort {effort})"
     elif config.get("images_convert_to_jpeg"):
@@ -2251,33 +2253,34 @@ def run_process_images(config):
     for f in files:
         ext = os.path.splitext(f)[1].lower()
 
-        if convert_jxl_back:
-            # Reverse mode is EXCLUSIVE: only .jxl files are converted back
-            # to their original format; other files are left untouched. This
-            # prevents the endless .jpg/.png <-> .jxl alternation on re-runs.
-            if ext == ".jxl":
-                tasks.append((
-                    _process_jxl_back_to_original,
-                    (
-                        djxl_path,
-                        ljt["jpegtran_exe"] if ljt else None,
-                        ljt["version"] if ljt else None,
-                        ox["oxipng_exe"] if ox else None,
-                        ox["version"] if ox else None,
-                        f,
-                        _renames(f),
-                        remove_alpha,
-                        HAS_PIL,
-                        force,
-                        progressive,
-                        optimization_level,
-                        enc,
-                        config,
-                    ),
+        if convert_jxl_back and ext == ".jxl":
+            # JXL files go back to their original format. This branch only
+            # catches .jxl so a reverse-only run (convert_jxl_back on,
+            # reencode_to_jxl off) still runs the normal in-place lossless
+            # pass on JPEG/PNG below — previously those files were left
+            # untouched entirely, so covers were never resized/optimized.
+            tasks.append((
+                _process_jxl_back_to_original,
+                (
+                    djxl_path,
+                    ljt["jpegtran_exe"] if ljt else None,
+                    ljt["version"] if ljt else None,
+                    ox["oxipng_exe"] if ox else None,
+                    ox["version"] if ox else None,
                     f,
-                ))
+                    _renames(f),
+                    remove_alpha,
+                    HAS_PIL,
+                    force,
+                    progressive,
+                    optimization_level,
+                    enc,
+                    config,
+                ),
+                f,
+            ))
 
-        elif reencode_to_jxl:
+        elif reencode_to_jxl and not convert_jxl_back:
             tasks.append((
                 _process_image_to_jxl,
                 (

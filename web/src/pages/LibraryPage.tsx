@@ -2,7 +2,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Search, FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Tags as TagsIcon, Info as InfoIcon,
+  Search, FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Info as InfoIcon,
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
@@ -10,7 +10,6 @@ import { sortRows, SortHeader, type SortState } from "../lib/sort.tsx";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
 import StatsPanel from "../components/StatsPanel";
-import BatchTagEditor from "../components/BatchTagEditor";
 import TrackDetails from "../components/TrackDetails";
 import type { Album, Artist, Track } from "../types";
 
@@ -59,9 +58,10 @@ const SCRIPTS: { ids: number[]; label: string }[] = [
   { ids: [7], label: "DR & ReplayGain" },
   { ids: [8], label: "Auto tagging" },
   { ids: [4], label: "Grade" },
+  { ids: [11], label: "Remux videos (MP4/FLAC)" },
 ];
 
-const DEFAULT_RUN_ALL = [1, 2, 8, 3, 5, 9, 6, 4, 7, 10];
+const DEFAULT_RUN_ALL = [11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10];
 
 interface Col {
   id: string;
@@ -117,7 +117,7 @@ export default function LibraryPage() {
   const { data: lib, isLoading, error } = useQuery({ queryKey: ["library"], queryFn: api.library });
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
   const runAllIds = Array.isArray(config?.run_all_order) && config.run_all_order.length
-    ? config.run_all_order.filter((n: number) => n >= 1 && n <= 10)
+    ? config.run_all_order.filter((n: number) => n >= 1 && n <= 11)
     : DEFAULT_RUN_ALL;
   const qc = useQueryClient();
   const { query, setQuery, setToast, folder } = useStore();
@@ -133,7 +133,6 @@ export default function LibraryPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [groupByArtist, setGroupByArtist] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
-  const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const [detailTrack, setDetailTrack] = useState<{ track: Track; albumPath: string } | null>(null);
 
   const [albumCols, toggleAlbumCol] = useColumnPrefs("albums", ALBUM_COLS);
@@ -453,9 +452,6 @@ const toggleExpand = (path: string) =>
             <button className="btn-ghost !py-1 text-xs" onClick={() => addToPlaylist([...selTracks])}>
               <ListPlus className="h-3.5 w-3.5" /> Playlist
             </button>
-            <button className="btn-ghost !py-1 text-xs" onClick={() => setTagEditorOpen(true)} disabled={!selTracks.size}>
-              <TagsIcon className="h-3.5 w-3.5" /> Edit tags
-            </button>
             <button
               className="btn-danger !py-1 text-xs"
               onClick={() => removeAlbums(selectionAlbumDirs)}
@@ -497,13 +493,6 @@ const toggleExpand = (path: string) =>
         />
       )}
 
-      {tagEditorOpen && selTracks.size > 0 && (
-        <BatchTagEditor
-          paths={[...selTracks]}
-          onClose={() => setTagEditorOpen(false)}
-          onDone={() => qc.invalidateQueries({ queryKey: ["library"] })}
-        />
-      )}
 
       {detailTrack && (
         <TrackDetails track={detailTrack.track} albumPath={detailTrack.albumPath} onClose={() => setDetailTrack(null)} />

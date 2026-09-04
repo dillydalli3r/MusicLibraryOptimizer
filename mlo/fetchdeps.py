@@ -222,16 +222,27 @@ def get_latest_release(key):
 
     Tools are pinned to exact versions (see PINNED) rather than "latest", so
     installs are reproducible. Fetches the specific release tag from GitHub.
+    Rolling-release repos (ffmpeg autobuilds) delete old tags, so a 404 on
+    the pinned tag falls back to the repo's current latest release.
     """
     if key not in _release_cache:
         pin = PINNED[key]
-        data = _api_json(
-            f"https://api.github.com/repos/{REPOS[key]}/releases/tags/{pin['tag']}"
-        )
+        try:
+            data = _api_json(
+                f"https://api.github.com/repos/{REPOS[key]}/releases/tags/{pin['tag']}"
+            )
+            version = pin["version"]
+        except urllib.error.HTTPError as e:
+            if e.code != 404 or not ASSET_PATTERNS.get(key):
+                raise
+            data = _api_json(
+                f"https://api.github.com/repos/{REPOS[key]}/releases/latest"
+            )
+            version = str(data.get("tag_name") or pin["version"])
         urls = {a.get("name", ""): a.get("browser_download_url", "")
                 for a in data.get("assets", [])}
         _release_cache[key] = {
-            "version": pin["version"],
+            "version": version,
             "assets": list(urls),
             "urls": urls,
         }
@@ -260,18 +271,32 @@ def tools_mod_simple_dr_meter():
 
 
 def pick_asset(key):
-    """Return the exact pinned asset name for a tool, if one is set."""
+    """Return the exact pinned asset name for a tool, if it exists."""
     pin = PINNED.get(key) or {}
     if pin.get("asset"):
-        return pin["asset"]
-    # Fallback: match patterns against the release assets.
+        rel = get_latest_release(key)
+        if pin["asset"] in rel["assets"]:
+            return pin["asset"]
+    return _pattern_asset(key)
+
+
+def _pattern_asset(key, assets=None):
+    """First release asset matching ASSET_PATTERNS for a tool."""
     rel = get_latest_release(key)
-    for pattern in ASSET_PATTERNS[key]:
+    names = assets if assets is not None else rel["assets"]
+    for pattern in ASSET_PATTERNS.get(key, []):
         rx = re.compile(pattern, re.IGNORECASE)
-        for name in rel["assets"]:
+        for name in names:
             if rx.match(name):
                 return name
     return None
+
+
+def _fallback_assets(key, rel, exclude=""):
+    """Assets in a release matching our patterns, minus a failed pin."""
+    candidates = [a for a in rel["assets"] if a != exclude]
+    picked = _pattern_asset(key, candidates)
+    return [picked] if picked else []
 
 
 # ----------------------------------------------------------------------
@@ -553,8 +578,6 @@ def install_dependency(key, log=print, progress=None):
         raise RuntimeError(f"No suitable Windows asset in latest {key} release")
 
     display = DISPLAY_NAMES[key]
-    log(f"Downloading {display} v{version} ({asset}) …")
-
     prefix = INSTALL_PREFIX[key]
     dest_dir = os.path.join(DEPS_DIR, f"{prefix} v{version}")
 
@@ -564,7 +587,26 @@ def install_dependency(key, log=print, progress=None):
     workdir = tempfile.mkdtemp(prefix="mlo_dep_")
 
     try:
-        _download(rel["urls"][asset], tmp_archived, progress)
+        try:
+            log(f"Downloading {display} v{version} ({asset}) …")
+            _download(rel["urls"][asset], tmp_archived, progress)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+            # Rolling releases (e.g. BtbN ffmpeg autobuilds) rotate assets
+            # out of old tags — a pinned name can disappear. Fall back to
+            # any other asset in the same release matching our patterns.
+            fallbacks = _fallback_assets(key, rel, exclude=asset)
+            if not fallbacks:
+                raise
+            asset = fallbacks[0]
+            suffix = os.path.splitext(asset)[1]
+            if suffix != os.path.splitext(tmp_archived)[1]:
+                os.remove(tmp_archived)
+                fd, tmp_archived = tempfile.mkstemp(suffix=suffix)
+                os.close(fd)
+            log(f"Pinned asset is gone (404) — falling back to {asset}")
+            _download(rel["urls"][asset], tmp_archived, progress)
 
         if key in SINGLE_EXE_TOOLS:
             # The release asset is the tool itself - no extraction step.

@@ -62,6 +62,13 @@ def ensure_data_dirs():
 
 AUDIO_EXTS = (".flac", ".ogg", ".opus", ".aac", ".m4a", ".mp3")
 
+# Audio (+ music-video) extensions the library treats as tracks. MP4/M4A
+# carry taggable AAC or FLAC audio, so album discovery and grading see them
+# as music — a folder with only music videos is still an album, and music
+# videos inside an album don't fail the "disallowed file types" check.
+# Engine scripts (audit/DR/etc.) keep walking the stricter AUDIO_EXTS.
+LIB_AUDIO_EXTS = AUDIO_EXTS + (".m4a", ".mp4")
+
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".jxl")
 

@@ -334,6 +334,19 @@ DEFAULT_CONFIG = {
     "force_dr_replaygain": False,
     "force_dr_ui": False,
 
+    # Video remux (script 11): every video container -> MP4. Video streams
+    # are copied bit-exact when MP4-compatible; incompatible codecs (MPEG-2
+    # in VOB, VP8...) are re-encoded to H.264 when the flag below is set.
+    # All audio streams are decoded and re-encoded to FLAC (lossless from
+    # the decoded source). The original is only deleted after a verified
+    # remux and when video_remove_original is on.
+    "video_reencode_incompatible": True,
+    "video_crf": 18,
+    "video_preset": "medium",
+    "video_flac_level": 8,
+    "video_remove_original": False,
+    "video_process_mp4": False,
+
     # Auto Tagging (script 8)
     "auto_advisory": True,
     "auto_instrumental": True,
@@ -361,6 +374,8 @@ _BOOL_KEYS = {
 }
 _INT_RANGES = {
     "flac_level": (0, 8),
+    "video_crf": (0, 51),
+    "video_flac_level": (0, 8),
     "jpegxl_effort": (1, 10),
     "lrc_timestamp_precision": (2, 3),
     "png_optimization_level": (0, 6),
@@ -384,6 +399,8 @@ _CHOICES = {
     "lyrics_format": {"EMBEDDED", "LRC", "BOTH"},
     "lrc_zero_timestamp_target": {"EMBEDDED", "LRC", "BOTH"},
     "cue_file_type": {"WAVE", "MP3"},
+    "video_preset": {"ultrafast", "superfast", "veryfast", "faster", "fast",
+                     "medium", "slow", "slower", "veryslow"},
 }
 
 
@@ -430,8 +447,9 @@ def normalize_config(user=None) -> dict:
         cfg[key] = max(low, min(high, value))
 
     for key, choices in _CHOICES.items():
-        value = str(cfg.get(key, DEFAULT_CONFIG[key])).upper()
-        cfg[key] = value if value in choices else DEFAULT_CONFIG[key]
+        raw = str(cfg.get(key, DEFAULT_CONFIG[key]))
+        canonical = {c.upper(): c for c in choices}
+        cfg[key] = canonical.get(raw.upper(), DEFAULT_CONFIG[key])
 
     folder = cfg.get("music_folder", "")
     cfg["music_folder"] = folder.strip() if isinstance(folder, str) else ""
@@ -522,7 +540,7 @@ def normalize_config(user=None) -> dict:
                 script_id = int(value)
             except (TypeError, ValueError):
                 continue
-            if 1 <= script_id <= 10 and script_id not in clean_order:
+            if 1 <= script_id <= 11 and script_id not in clean_order:
                 clean_order.append(script_id)
     # Migrate legacy sequential default [1..8] to systematic pipeline
     if clean_order == [1, 2, 3, 4, 5, 6, 7, 8] and clean_order != list(DEFAULT_RUN_ALL_ORDER):

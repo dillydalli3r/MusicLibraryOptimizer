@@ -24,6 +24,7 @@ from .loudness import run_calc_dr_replaygain
 from .lyrics import run_format_lyrics
 from .accurip import run_generate_accurip
 from .format_all import run_format_all
+from .remux import run_remux_videos
 from .report import print_results, print_grade_results, print_combined_results
 from .config import load_config, save_config, DEFAULT_CONFIG
 from .paths import SCRIPT_DIR, DEPS_DIR, HOME_MARKER
@@ -45,6 +46,7 @@ SCRIPTS = {
     "autotag": (8, "Auto Tagging", run_auto_tagging),
     "accurip": (9, "AccurateRip", run_generate_accurip),
     "formatall": (10, "Format All", run_format_all),
+    "remux": (11, "Video Remux", run_remux_videos),
 }
 
 
@@ -365,7 +367,7 @@ def _resolve_script_ids(spec):
                     ids.append(sid)
             else:
                 print(c(f"Unknown script '{part}'. Use 1-{len(SCRIPTS)} or "
-                        "lyrics/cues/flac/grade/images/audit/dr/autotag/accurip/formatall.",
+                        "lyrics/cues/flac/grade/images/audit/dr/autotag/accurip/formatall/remux.",
                         Color.RED))
                 return None, None
     return ids, f"RUN {spec.upper()}"

@@ -68,8 +68,8 @@ export default function App() {
     setToast("Running all scripts…");
     try {
       const order = Array.isArray(config?.run_all_order)
-        ? config.run_all_order.filter((n) => n >= 1 && n <= 10)
-        : [1, 2, 8, 3, 5, 9, 6, 4, 7, 10];
+        ? config.run_all_order.filter((n) => n >= 1 && n <= 11)
+        : [11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10];
       const res = await api.run(order.length ? order : [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
       const failed = (res.results ?? []).filter((r) => r.error);
       setToast(
@@ -139,7 +139,7 @@ export default function App() {
             </NavLink>
           ))}
           <div className="mt-auto text-[10px] text-zinc-600 px-3 py-2">
-            Grading · Auditing · Tagging
+            Grading · Auditing · Optimization
             <br />
             MusicBrainz · LRCLIB · RYM
           </div>

@@ -41,7 +41,7 @@ export default function ArtistPage() {
             <GradeBadge pass={(data.aggregate.grade_pct ?? 0) >= 100} score={data.aggregate.grade_pct} />
           </div>
           <div className="mt-2 inline-flex items-center gap-1 text-xs text-zinc-500">
-            <ExternalLink className="h-3 w-3" /> MusicBrainz / RYM links live in the track tags — set them from Import & tag
+            <ExternalLink className="h-3 w-3" /> MusicBrainz / RYM links live on the tracks — set them via Import & link
           </div>
         </div>
         <button className="btn-primary" onClick={() => playNow(allTracks)}>

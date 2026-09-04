@@ -1,7 +1,7 @@
 ﻿import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, Info as InfoIcon, ImageUp } from "lucide-react";
+import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, Info as InfoIcon, ImageUp, FileVideo } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
@@ -29,9 +29,38 @@ export default function AlbumPage() {
   const [sort, setSort] = useState<SortState | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const [detailTrack, setDetailTrack] = useState<Track | null>(null);
+  const [videoOpen, setVideoOpen] = useState<string | null>(null);
+  const [remuxing, setRemuxing] = useState(false);
   const [coverBusy, setCoverBusy] = useState(false);
   const coverInput = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
+
+  // Raw video files (VOB/MKV/...) in this album folder that the remuxer
+  // could convert to MP4 — surfaced as a one-click action in the header.
+  const { data: videosData, refetch: refetchVideos } = useQuery({
+    queryKey: ["videos", decoded],
+    queryFn: () => api.videosScan(decoded),
+    retry: false,
+  });
+  const rawVideos = videosData?.videos ?? [];
+
+  const convertVideos = async () => {
+    setRemuxing(true);
+    try {
+      const res = await api.run([11], [decoded]);
+      const r = res.results?.[0];
+      if (r?.error) toast(`Remux failed: ${r.error}`);
+      else toast(`Remuxed ${r?.stats?.converted ?? 0} video(s) to MP4`);
+      qc.invalidateQueries({ queryKey: ["videos", decoded] });
+      qc.invalidateQueries({ queryKey: ["library"] });
+      qc.invalidateQueries({ queryKey: ["album", decoded] });
+      refetchVideos();
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setRemuxing(false);
+    }
+  };
 
   const uploadCover = async (file: File) => {
     setCoverBusy(true);
@@ -161,7 +190,7 @@ export default function AlbumPage() {
             <Play className="h-4 w-4" /> Play album
           </button>
           <button className="btn-ghost" onClick={() => navigate(`/import?album=${encodeURIComponent(data.path)}`)}>
-            <Wand2 className="h-4 w-4" /> Import & tag
+            <Wand2 className="h-4 w-4" /> Import & link
           </button>
           <button className="btn-ghost" onClick={organizeAlbum} title="Apply the naming script from Settings">
             <FolderSync className="h-4 w-4" /> Organize
@@ -169,6 +198,12 @@ export default function AlbumPage() {
           <button className="btn-ghost" onClick={async () => { try { await api.openFolder(data.path); } catch (e) { toast(String(e)); } }} title="Reveal this album in the file manager">
             <FolderOpen className="h-4 w-4" /> Open folder
           </button>
+          {rawVideos.length > 0 && (
+            <button className="btn-ghost" onClick={convertVideos} disabled={remuxing}
+              title={`Remux ${rawVideos.length} video file(s) to MP4 (video copied, audio → FLAC)`}>
+              <FileVideo className="h-4 w-4" /> {remuxing ? "Converting…" : `Convert ${rawVideos.length} video${rawVideos.length === 1 ? "" : "s"}`}
+            </button>
+          )}
           <button className="btn-ghost" onClick={() => setStatsOpen(true)}>
             <BarChart3 className="h-4 w-4" /> Stats
           </button>
@@ -189,6 +224,7 @@ export default function AlbumPage() {
           { ids: [7], label: "DR/RG" },
           { ids: [8], label: "AutoTag" },
           { ids: [4], label: "Grade" },
+          { ids: [11], label: "Remux" },
         ].map(({ ids, label }) => (
           <button key={label} className="btn-ghost text-xs" onClick={() => runScripts(ids)}>
             {label}
@@ -207,6 +243,22 @@ export default function AlbumPage() {
 
       {detailTrack && (
         <TrackDetails track={detailTrack} albumPath={data.path} onClose={() => setDetailTrack(null)} />
+      )}
+
+      {videoOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-6" onClick={() => setVideoOpen(null)}>
+          <div className="w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
+            <video
+              src={api.streamUrl(videoOpen)}
+              controls
+              autoPlay
+              className="w-full max-h-[80vh] rounded-lg border border-border bg-black"
+            />
+            <div className="flex justify-end mt-2">
+              <button className="btn-ghost !py-1" onClick={() => setVideoOpen(null)}>Close</button>
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="bg-card rounded-lg border border-border overflow-hidden">
@@ -265,6 +317,15 @@ export default function AlbumPage() {
                   {tr.tech.sample_rate ? ` · ${Math.round(tr.tech.sample_rate / 1000)} kHz` : ""}
                 </td>
                 <td className="td text-right">
+                  {tr.file.toLowerCase().endsWith(".mp4") && (
+                    <button
+                      className="btn-ghost !px-2 !py-1"
+                      title="Watch music video"
+                      onClick={() => setVideoOpen(tr.path)}
+                    >
+                      <FileVideo className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <button
                     className="btn-ghost !px-2 !py-1"
                     onClick={() =>

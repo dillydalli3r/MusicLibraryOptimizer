@@ -6,8 +6,9 @@ so the frontend can sort/filter by grade, audit, genre, year, advisory,
 instrumental, MBIDs, RYM links, duration, bitrate, sample rate, etc.
 """
 import os
+from concurrent.futures import ThreadPoolExecutor
 
-from mlo.stats import _find_albums
+from mlo.stats import _find_albums, worker_count
 from mlo.grader import _grade_album
 from mlo.audio import AudioFile
 from mlo.paths import get_sidecar_cover_path
@@ -111,6 +112,43 @@ def build_album(album_dir, cfg):
     return res
 
 
+def build_albums_parallel(album_dirs, cfg):
+    """Grade a list of album dirs concurrently, preserving order.
+
+    Grading is mostly file I/O + image decode (Pillow releases the GIL),
+    so a small thread pool cuts full-library scan time roughly by the
+    worker count. Errors become {"path": ..., "error": ...} placeholders
+    so one bad folder never hides the rest of the library.
+    """
+    workers = worker_count(cfg, default=min(8, os.cpu_count() or 1),
+                           items=len(album_dirs))
+    if workers <= 1 or len(album_dirs) <= 1:
+        results = []
+        for alb in album_dirs:
+            try:
+                a = build_album(alb, cfg)
+                results.append(a if a is not None else
+                               {"path": alb.replace("\\", "/"), "error": "no audio files", "tracks": []})
+            except Exception as e:
+                results.append({"path": alb.replace("\\", "/"), "error": str(e), "tracks": []})
+        return results
+
+    results = [None] * len(album_dirs)
+
+    def _one(i, alb):
+        try:
+            a = build_album(alb, cfg)
+            results[i] = a if a is not None else {
+                "path": alb.replace("\\", "/"), "error": "no audio files", "tracks": []}
+        except Exception as e:
+            results[i] = {"path": alb.replace("\\", "/"), "error": str(e), "tracks": []}
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for i, alb in enumerate(album_dirs):
+            pool.submit(_one, i, alb)
+    return results
+
+
 def build_library(cfg, progress=None):
     """Full library tree with artist/album/track aggregates (TTL-cached)."""
     folder = cfg.get("music_folder") or ""
@@ -135,14 +173,7 @@ def build_library(cfg, progress=None):
         for i, (artist_dir, alb_list) in enumerate(sorted(artists.items())):
             if progress:
                 progress(i + 1, total, "Scanning library")
-            albums_data = []
-            for alb in sorted(alb_list):
-                try:
-                    a = build_album(alb, cfg)
-                    if a is not None:
-                        albums_data.append(a)
-                except Exception as e:
-                    albums_data.append({"path": alb.replace("\\", "/"), "error": str(e), "tracks": []})
+            albums_data = build_albums_parallel(sorted(alb_list), cfg)
             agg = _aggregate_albums(albums_data)
             result.append({
                 "path": artist_dir.replace("\\", "/"),

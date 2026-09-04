@@ -3,7 +3,7 @@ import os
 import threading
 
 from .deps import tqdm
-from .paths import SKIP_DIRS, AUDIO_EXTS
+from .paths import LIB_AUDIO_EXTS, SKIP_DIRS, AUDIO_EXTS
 
 BAR_OPTS = dict(
     dynamic_ncols=True,
@@ -160,7 +160,10 @@ def _walk_files(root_dir, extensions):
 
 
 def is_audio_file(path):
-    return os.path.splitext(path)[1].lower() in AUDIO_EXTS
+    # LIB_AUDIO_EXTS: music-video MP4/M4A are first-class tracks (taggable,
+    # playable, graded); engine walkers that need lossless-only inputs keep
+    # using AUDIO_EXTS directly.
+    return os.path.splitext(path)[1].lower() in LIB_AUDIO_EXTS
 
 
 def _clean_set(values):
@@ -197,7 +200,7 @@ def _decode_mp4_value(v):
 
 def _find_albums(root_dir):
     albums = set()
-    for file_path in _walk_files(root_dir, AUDIO_EXTS):
+    for file_path in _walk_files(root_dir, LIB_AUDIO_EXTS):
         # Normalize so F:/Music/Artists + \System\... mixed separators don't
         # create mismatched keys between the scanner and the UI's
         # os.path.dirname comparisons (Windows allows both / and \).

@@ -383,6 +383,18 @@ class AudioFile:
                     key = f"----:{mean}:{name2}"
                     vals = self.audio.tags.get(key) if self.audio.tags else None
                     if not vals:
+                        # Freeform atom names are case-sensitive in the
+                        # container but taggers disagree on case (rsgain
+                        # writes UPPER, simple-dr-meter lower) — match
+                        # case-insensitively on the subname.
+                        prefix = f"----:{mean}:".lower()
+                        want = str(name2).lower()
+                        for k in (self.audio.tags.keys() if self.audio.tags else []):
+                            kl = str(k).lower()
+                            if kl.startswith(prefix) and kl[len(prefix):] == want:
+                                vals = self.audio.tags.get(k)
+                                break
+                    if not vals:
                         return None
                     return _decode_mp4_value(vals[0])
 

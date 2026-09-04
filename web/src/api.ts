@@ -65,19 +65,20 @@ export const api = {
     }),
 
   streamUrl: (path: string) => `${API}/stream?path=${encodeURIComponent(path)}`,
+  // Read-only tag view (tag writing was removed; grading scripts own writes).
   tags: (path: string) => json<any>(`${API}/tags?path=${encodeURIComponent(path)}`),
-  setTags: (path: string, tags: Record<string, string | null>) =>
-    json<{ ok: boolean }>(`${API}/tags`, {
+  lyricsEmbed: (path: string, lyrics: string) =>
+    json<{ ok: boolean }>(`${API}/lyrics/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, tags }),
+      body: JSON.stringify({ path, lyrics }),
     }),
-  setTagsBatch: (tracks: Record<string, Record<string, string | null>>) =>
-    json<{ ok: boolean; changed: number }>(`${API}/tags/batch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tags: tracks }),
-    }),
+  videosScan: (path?: string) =>
+    json<{ videos: { path: string; album: string; file: string; size: number; video_codec: string | null; audio_codecs: string[]; duration: number | null; mp4_safe: boolean | null }[] }>(
+      `${API}/videos/scan${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+      undefined,
+      60000
+    ),
 
   run: (ids: number[], targets?: string[], force?: Record<string, boolean>) =>
     json<{ results: any[] }>(`${API}/run`, {
@@ -240,11 +241,12 @@ export const api = {
       900000
     ),
 
-  cover: (albumPath: string, file: File) => {
+  cover: (albumPath: string, file: File, track?: string) => {
     const fd = new FormData();
     fd.append("file", file);
+    const q = track ? `&track=${encodeURIComponent(track)}` : "";
     return json<{ ok: boolean; path: string }>(
-      `${API}/cover?album=${encodeURIComponent(albumPath)}`,
+      `${API}/cover?album=${encodeURIComponent(albumPath)}${q}`,
       { method: "POST", body: fd }
     );
   },

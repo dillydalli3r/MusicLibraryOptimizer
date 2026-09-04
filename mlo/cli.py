@@ -13,6 +13,7 @@ from .loudness import run_calc_dr_replaygain
 from .lyrics import run_format_lyrics
 from .accurip import run_generate_accurip
 from .format_all import run_format_all
+from .remux import run_remux_videos
 from .report import print_results, print_grade_results, print_combined_results
 from .tools import detect_all_tools
 from .ui import (
@@ -42,6 +43,7 @@ def edit_run_all_order(config):
         print("    8. Auto Tagging")
         print("    9. AccurateRip")
         print("   10. Format All")
+        print("   11. Video Remux (MP4)")
         print("-" * 72)
 
         current = config.get("run_all_order", DEFAULT_RUN_ALL_ORDER)
@@ -58,7 +60,7 @@ def edit_run_all_order(config):
         valid = True
 
         for p in parts:
-            if p in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
+            if p in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"):
                 pid = int(p)
                 if pid not in order:
                     order.append(pid)
@@ -422,6 +424,7 @@ def show_custom_menu():
     print("    8. Auto Tagging")
     print("    9. AccurateRip")
     print("   10. Format All")
+    print("   11. Video Remux (MP4)")
     print_separator()
 
     print("Enter the order of scripts to run (comma-separated, e.g. '3,1,2,5'):")
@@ -431,7 +434,7 @@ def show_custom_menu():
     order = []
 
     for p in parts:
-        if p in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
+        if p in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"):
             order.append(int(p))
         else:
             print(c(f"  Ignoring invalid entry: '{p}'", Color.YELLOW))
@@ -455,6 +458,7 @@ def run_scripts_sequence(config, script_ids, title):
         8: ("Auto Tagging", run_auto_tagging),
         9: ("AccurateRip", run_generate_accurip),
         10: ("Format All", run_format_all),
+        11: ("Video Remux", run_remux_videos),
     }
 
     auto_advance = config.get("auto_advance", True)
@@ -533,6 +537,7 @@ def show_main_menu(config):
     print("  8. Auto Tagging     (advisory + instrumental)")
     print("  9. AccurateRip     (CUETools .accurip files)")
     print(" 10. Format All      (canonical trim pass)")
+    print(" 11. Video Remux     (any video -> MP4, audio -> FLAC)")
     print(f" 11. Run All          {config.get('run_all_order', DEFAULT_RUN_ALL_ORDER)}")
     print(" 12. Run Custom       (select order)")
     print(" 13. Configuration")
@@ -613,6 +618,7 @@ def main():
         8: ("Auto Tagging", run_auto_tagging),
         9: ("AccurateRip", run_generate_accurip),
         10: ("Format All", run_format_all),
+        11: ("Video Remux", run_remux_videos),
     }
 
     while True:
@@ -622,7 +628,7 @@ def main():
         if choice == "0":
             break
 
-        elif choice in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
+        elif choice in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"):
             script_id = int(choice)
             name, runner = runners[script_id]
 
