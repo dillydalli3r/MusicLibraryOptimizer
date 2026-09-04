@@ -15,6 +15,7 @@ export interface Aggregate {
 
 export interface AlbumMeta {
   ALBUM?: string | null;
+  ALBUMARTIST?: string | null;
   ARTIST?: string | null;
   DATE?: string | null;
   MUSICBRAINZ_ALBUMID?: string | null;
@@ -78,6 +79,7 @@ export interface Album {
   path: string;
   error?: string;
   meta?: AlbumMeta;
+  album_artist?: string | null;
   album_values?: Record<string, string>;
   grade_pct: number | null;
   pass: boolean;
@@ -101,6 +103,7 @@ export interface Album {
 export interface Artist {
   path: string;
   name: string;
+  display_name?: string | null;
   albums: Album[];
   aggregate: Aggregate;
 }

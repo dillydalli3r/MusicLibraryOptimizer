@@ -155,7 +155,7 @@ export default function AlbumPage() {
         <div className="flex-1 min-w-0">
           <div className="text-xs text-zinc-500 uppercase tracking-wider">{data.meta?.DATE ?? "—"}</div>
           <h1 className="text-3xl font-bold tracking-tight">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
-          <div className="text-zinc-400 mt-1">{data.meta?.ARTIST ?? "—"}</div>
+          <div className="text-zinc-400 mt-1">{data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? "—"}</div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <GradeBadge pass={data.pass} score={data.grade_pct} />
             <AuditBadge audit={data.audit_summary} />

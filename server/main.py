@@ -414,9 +414,13 @@ def get_artist(path: str = Query(...)):
     direct = [alb for alb in sorted(albums)
               if os.path.dirname(alb).lower() == p.lower()]
     albums_data = lib_mod.build_albums_parallel(direct, cfg)
+    # Display name: the tag-derived artist (folders carry an MBID suffix).
+    display_name = next((a.get("album_artist") for a in albums_data
+                         if a.get("album_artist")), None)
     return {
         "path": p.replace("\\", "/"),
         "name": os.path.basename(p),
+        "display_name": display_name,
         "albums": albums_data,
         "aggregate": lib_mod._aggregate_albums(albums_data),
     }

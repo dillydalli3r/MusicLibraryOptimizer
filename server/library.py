@@ -16,7 +16,7 @@ from server import tagcache
 
 # Tags surfaced per track for sorting/filtering on the frontend.
 TRACK_TAGS = [
-    "TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
+    "TITLE", "ARTIST", "ALBUMARTIST", "ALBUM", "DATE", "GENRE",
     "ITUNESADVISORY", "INSTRUMENTAL", "MEDIA", "SOURCE",
     "TRACKNUMBER", "DISCNUMBER",
     "MUSICBRAINZ_ALBUMID", "MUSICBRAINZ_ALBUMARTISTID",
@@ -29,7 +29,7 @@ TRACK_TAGS = [
 
 # Tags read from the first track to represent album-level metadata.
 ALBUM_LEVEL_TAGS = [
-    "ALBUM", "ARTIST", "DATE", "MUSICBRAINZ_ALBUMID",
+    "ALBUM", "ALBUMARTIST", "ARTIST", "DATE", "MUSICBRAINZ_ALBUMID",
     "MUSICBRAINZ_ALBUMARTISTID", "MUSICBRAINZ_RELEASEGROUPID",
     "RATEYOURMUSIC_ALBUM",
 ]

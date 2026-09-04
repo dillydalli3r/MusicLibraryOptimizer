@@ -32,7 +32,10 @@ export default function ArtistPage() {
           <Music2 className="h-10 w-10 text-zinc-400" />
         </div>
         <div className="flex-1 min-w-0">
-          <h1 className="text-3xl font-bold tracking-tight">{data.name}</h1>
+          <h1 className="text-3xl font-bold tracking-tight">{data.display_name || data.name}</h1>
+          {data.display_name && data.display_name !== data.name && (
+            <div className="text-xs text-zinc-600 mt-0.5">{data.name}</div>
+          )}
           <div className="mt-1 flex items-center gap-3 text-sm text-zinc-400">
             <span>
               {data.aggregate.album_count} albums · {data.aggregate.track_count} tracks

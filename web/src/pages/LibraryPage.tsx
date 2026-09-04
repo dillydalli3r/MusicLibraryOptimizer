@@ -144,8 +144,11 @@ export default function LibraryPage() {
     const tracks: FlatTrack[] = [];
     for (const a of lib?.artists ?? [])
       for (const al of a.albums) {
-        albums.push({ ...al, artist: a.name });
-        for (const t of al.tracks) tracks.push({ ...t, artist: a.name, album: al.meta?.ALBUM ?? al.path.split("/").pop() ?? "" });
+        // Prefer the tag-derived album artist (ALBUMARTIST/ARTIST); the
+        // artist folder name is only a fallback (it carries the MBID suffix).
+        const artistName = al.album_artist || a.name;
+        albums.push({ ...al, artist: artistName });
+        for (const t of al.tracks) tracks.push({ ...t, artist: artistName, album: al.meta?.ALBUM ?? al.path.split("/").pop() ?? "" });
       }
     return { albums, tracks };
   }, [lib]);
@@ -273,7 +276,7 @@ export default function LibraryPage() {
     for (const a of sortedArtists)
       if (selection.artists.includes(a.path))
         for (const al of a.albums)
-          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: a.name });
+          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.album_artist || a.name });
     for (const tr of sortedTracks)
       if (selection.tracks.includes(tr.path))
         out.push({ path: tr.path, file: tr.file, albumPath: tr.path.split("/").slice(0, -1).join("/"), artist: tr.artist });
