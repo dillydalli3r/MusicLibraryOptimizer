@@ -82,7 +82,59 @@ fn project_root() -> PathBuf {
     dir
 }
 
+fn backend_port_open() -> bool {
+    std::net::TcpStream::connect(("127.0.0.1", 8000)).is_ok()
+}
+
+/// Ask a running backend to exit via the env-gated shutdown endpoint
+/// (works for backends this shell didn't spawn, e.g. after a restart).
+fn request_backend_shutdown() {
+    use std::io::{Read, Write};
+    if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", 8000)) {
+        let req = "POST /api/shutdown HTTP/1.1\r\nHost: 127.0.0.1:8000\r\n\
+                   Content-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(req.as_bytes());
+        let mut buf = String::new();
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.read_to_string(&mut buf);
+    }
+}
+
+/// Force-kill whatever process is LISTENING on the backend port (last
+/// resort for backends spawned without MLO_ALLOW_SHUTDOWN=1). Windows only.
+#[cfg(windows)]
+fn kill_port_listener() {
+    use std::os::windows::process::CommandExt;
+    let out = Command::new("netstat")
+        .arg("-aon")
+        .creation_flags(0x08000000)
+        .output();
+    if let Ok(out) = out {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if !line.contains("LISTENING") {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 5 && parts[1].ends_with(":8000") {
+                if let Some(pid) = parts.last() {
+                    let _ = Command::new("taskkill")
+                        .args(["/F", "/PID", pid])
+                        .creation_flags(0x08000000)
+                        .output();
+                }
+            }
+        }
+    }
+}
+
 fn spawn_backend(app: &tauri::AppHandle) {
+    // Adopt an already-running backend (tray app, previous run) instead of
+    // spawning a duplicate that fails to bind and leaves confusion behind.
+    if backend_port_open() {
+        println!("[mlo-desktop] adopting already-running backend");
+        return;
+    }
     let (exe, args, cwd) = find_backend(app);
     let mut cmd = Command::new(&exe);
     cmd.args(&args);
@@ -90,6 +142,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
         cmd.current_dir(dir);
     }
     cmd.env("MLO_BACKEND_PORT", PORT);
+    cmd.env("MLO_ALLOW_SHUTDOWN", "1");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -113,6 +166,16 @@ fn stop_backend(app: &tauri::AppHandle) {
             let _ = child.wait();
             println!("[mlo-desktop] backend stopped");
         }
+    }
+    // Also stop any backend on the port that we didn't spawn (adopted or
+    // orphaned from an earlier run) so Quit really clears the background.
+    if backend_port_open() {
+        request_backend_shutdown();
+        std::thread::sleep(Duration::from_millis(700));
+    }
+    #[cfg(windows)]
+    if backend_port_open() {
+        kill_port_listener();
     }
 }
 

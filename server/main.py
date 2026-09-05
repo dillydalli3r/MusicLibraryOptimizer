@@ -177,6 +177,25 @@ class AlbumRemove(BaseModel):
 # --------------------------------------------------------------------------- #
 # Health / config
 # --------------------------------------------------------------------------- #
+@app.post("/api/shutdown")
+def shutdown_backend():
+    """Stop the backend process itself.
+
+    Only honored when this backend was spawned by a launcher that set
+    MLO_ALLOW_SHUTDOWN=1 (the tray app / desktop shell), so they can stop
+    even backends they didn't spawn (e.g. after a restart of the shell).
+    """
+    if os.environ.get("MLO_ALLOW_SHUTDOWN") != "1":
+        raise HTTPException(403, "shutdown not enabled for this backend")
+
+    def _die():
+        time.sleep(0.3)
+        os._exit(0)
+
+    threading.Thread(target=_die, daemon=True).start()
+    return {"ok": True}
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "version": "2.0.0"}

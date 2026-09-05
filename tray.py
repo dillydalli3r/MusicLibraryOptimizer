@@ -51,13 +51,22 @@ class Backend:
         if port_open(PORT):
             return "already-running"
         flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
+        exe = sys.executable
+        if os.name == "nt" and exe.lower().endswith("python.exe"):
+            # never give the backend a console of its own
+            pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+            if os.path.isfile(pythonw):
+                exe = pythonw
+        env = dict(os.environ)
+        env["MLO_ALLOW_SHUTDOWN"] = "1"  # lets any launcher stop this backend
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "server.main:app",
+            [exe, "-m", "uvicorn", "server.main:app",
              "--host", "127.0.0.1", "--port", str(PORT)],
             cwd=ROOT,
             creationflags=flags,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=env,
         )
         for _ in range(30):
             time.sleep(1)
@@ -84,6 +93,62 @@ class Backend:
 
 
 backend = Backend()
+
+
+def _request_backend_shutdown(timeout=2.0):
+    """Ask a running backend to exit (only works when it was spawned by a
+    launcher that set MLO_ALLOW_SHUTDOWN=1)."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{URL}/api/shutdown", method="POST", data=b"")
+        urllib.request.urlopen(req, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def _kill_port_listener(port=None):
+    """Force-kill whatever process is LISTENING on the backend port."""
+    if os.name != "nt":
+        return False
+    port = port or PORT
+    killed = False
+    try:
+        out = subprocess.run(["netstat", "-aon"], capture_output=True,
+                             text=True, timeout=15).stdout or ""
+        suffix = f":{port}"
+        for line in out.splitlines():
+            if "LISTENING" not in line:
+                continue
+            parts = line.split()
+            if len(parts) >= 5 and parts[1].endswith(suffix):
+                pid = parts[-1]
+                if pid.isdigit() and int(pid) != os.getpid():
+                    subprocess.run(["taskkill", "/F", "/PID", pid],
+                                   capture_output=True, timeout=15)
+                    killed = True
+    except Exception:
+        pass
+    return killed
+
+
+def stop_any_backend():
+    """Stop our child if we have one, then any adopted/orphaned backend:
+    graceful shutdown endpoint first, force-kill as the last resort."""
+    stopped = backend.stop()
+    if port_open(PORT):
+        _request_backend_shutdown()
+        for _ in range(6):
+            time.sleep(0.5)
+            if not port_open(PORT):
+                return True
+    if port_open(PORT):
+        _kill_port_listener()
+        for _ in range(4):
+            time.sleep(0.5)
+            if not port_open(PORT):
+                return True
+    return stopped or not port_open(PORT)
 
 
 # --------------------------------------------------------------------------- #
@@ -134,7 +199,7 @@ def on_open(icon, item):
 
 
 def on_restart(icon, item):
-    backend.stop()
+    stop_any_backend()
     time.sleep(1)
     backend.ensure_running()
     webbrowser.open(URL)
@@ -146,7 +211,7 @@ def on_autostart(icon, item):
 
 
 def on_exit(icon, item):
-    backend.stop()
+    stop_any_backend()
     icon.stop()
 
 
@@ -253,7 +318,25 @@ def run_plain():
               "to see errors.")
 
 
+def _relaunch_detached():
+    """When started with console python (double-click on tray.py), re-exec
+    via pythonw so no terminal window stays open while the tray runs."""
+    if os.name != "nt" or not sys.executable.lower().endswith("python.exe"):
+        return False
+    pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if not os.path.isfile(pythonw):
+        return False
+    subprocess.Popen(
+        [pythonw, os.path.abspath(__file__)],
+        cwd=ROOT,
+        creationflags=0x08000000,  # CREATE_NO_WINDOW
+    )
+    return True
+
+
 if __name__ == "__main__":
+    if HAVE_TRAY and _relaunch_detached():
+        sys.exit(0)
     if HAVE_TRAY:
         run_tray()
     else:

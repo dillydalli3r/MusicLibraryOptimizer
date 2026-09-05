@@ -42,6 +42,8 @@ def main():
     else:
         print("Starting backend...")
         flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
+        env = dict(os.environ)
+        env["MLO_ALLOW_SHUTDOWN"] = "1"  # lets the tray / desktop shell stop it
         try:
             subprocess.Popen(
                 [sys.executable, "-m", "uvicorn", "server.main:app",
@@ -50,6 +52,7 @@ def main():
                 creationflags=flags,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=env,
             )
         except Exception as e:
             print(f"Failed to start backend: {e}")
