@@ -62,9 +62,11 @@ export default function PlayerBar() {
       } else if (code === "Digit0") {
         setSpeed(1);
       } else if (code === "ArrowLeft") {
+        if (document.querySelector("[data-lrc-editor]")) return; // lyrics editor owns seeking
         const a = audioRef.current;
         if (a) a.currentTime = Math.max(0, a.currentTime - 5);
       } else if (code === "ArrowRight") {
+        if (document.querySelector("[data-lrc-editor]")) return;
         const a = audioRef.current;
         if (a && a.duration) a.currentTime = Math.min(a.duration, a.currentTime + 5);
       }

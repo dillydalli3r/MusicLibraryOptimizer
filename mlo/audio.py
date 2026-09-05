@@ -89,6 +89,27 @@ TAG_MAP = {
     "BPM": {
         "flac": "BPM", "mp3": ("TBPM", None), "mp4": "tmpo",
     },
+    "INITIALKEY": {
+        "flac": "INITIALKEY",
+        "mp3": ("TXXX", "INITIALKEY"),
+        "mp4": ("freeform", "com.apple.iTunes", "INITIALKEY"),
+    },
+    # Classical work/movement (Picard-compatible: ID3 MVNM/MVIN, TXXX:WORK)
+    "WORK": {
+        "flac": "WORK",
+        "mp3": ("TXXX", "WORK"),
+        "mp4": ("freeform", "com.apple.iTunes", "WORK"),
+    },
+    "MOVEMENT": {
+        "flac": "MOVEMENT",
+        "mp3": ("MVNM", None),
+        "mp4": ("freeform", "com.apple.iTunes", "MOVEMENT"),
+    },
+    "MOVEMENTNUMBER": {
+        "flac": "MOVEMENTNUMBER",
+        "mp3": ("MVIN", None),
+        "mp4": ("freeform", "com.apple.iTunes", "MOVEMENTNUMBER"),
+    },
     "COPYRIGHT": {
         "flac": "COPYRIGHT", "mp3": ("TCOP", None), "mp4": "cprt",
     },

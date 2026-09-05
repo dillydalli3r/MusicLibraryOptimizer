@@ -279,6 +279,7 @@ export default function TrackPage() {
             path={decoded}
             initialLyrics={lyrics}
             onChange={(v) => { setLyrics(v); setDirty(true); }}
+            onSave={saveLyrics}
             artist={tags.ARTIST}
             track={tags.TITLE}
             album={tags.ALBUM}

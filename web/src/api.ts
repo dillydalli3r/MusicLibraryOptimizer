@@ -175,6 +175,22 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, lrc }),
     }),
+  lyricsAi: (
+    mode: "clean" | "repair" | "wordsync",
+    text: string,
+    opts?: { artist?: string; track?: string; candidates?: string[] }
+  ) =>
+    json<{ mode: string; result: string }>(`${API}/lyrics/ai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        text,
+        artist: opts?.artist ?? "",
+        track: opts?.track ?? "",
+        candidates: opts?.candidates,
+      }),
+    }, 180000),
 
   rymValidate: (url: string) => json<{ valid: boolean }>(`${API}/rym/validate?url=${encodeURIComponent(url)}`),
 
@@ -250,4 +266,63 @@ export const api = {
       { method: "POST", body: fd }
     );
   },
+
+  coverSearch: (artist: string, album: string) =>
+    json<{ results: import("./types").CoverResult[] }>(
+      `${API}/cover/search?artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(album)}`,
+      undefined,
+      90000
+    ),
+  coverFromUrl: (albumPath: string, url: string) =>
+    json<{ ok: boolean; path: string }>(
+      `${API}/cover/fromurl?album=${encodeURIComponent(albumPath)}&url=${encodeURIComponent(url)}`,
+      { method: "POST" },
+      120000
+    ),
+
+  beetsStatus: () =>
+    json<{ installed: boolean; version: string | null; db: string; config: string }>(`${API}/beets/status`),
+  beetsInstall: () =>
+    json<{ ok: boolean; version: string }>(`${API}/beets/install`, { method: "POST" }, 900000),
+  beetsImport: (paths: string[]) =>
+    json<{ ok: boolean; output: string; organized: any[] | null }>(
+      `${API}/beets/import`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths }),
+      },
+      3600000
+    ),
+
+  soulseekStatus: () =>
+    json<{ installed: boolean; running: boolean; logged_in: boolean | null; server: any; download_dir: string; web_port: number }>(`${API}/soulseek/status`),
+  soulseekStart: () =>
+    json<{ ok: boolean; message: string }>(`${API}/soulseek/start`, { method: "POST" }, 60000),
+  soulseekStop: () =>
+    json<{ ok: boolean; message: string }>(`${API}/soulseek/stop`, { method: "POST" }, 30000),
+  soulseekSearch: (query: string) =>
+    json<{ id: string }>(`${API}/soulseek/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    }, 60000),
+  soulseekSearchResults: (id: string) =>
+    json<{ state: string | null; responseCount?: number; fileCount?: number; responses: { username: string; file: string; size: number; bitrate: number | null; duration: number | null; vbr: boolean | null; slot: boolean; speed: number; queue: number }[] }>(
+      `${API}/soulseek/search/${encodeURIComponent(id)}`,
+      undefined,
+      30000
+    ),
+  soulseekDownload: (username: string, files: { filename: string; size: number }[]) =>
+    json<{ ok: boolean; queued: number }>(`${API}/soulseek/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, files }),
+    }, 60000),
+  soulseekDownloads: () =>
+    json<{ downloads: any[] }>(`${API}/soulseek/downloads`, undefined, 30000),
+  soulseekImport: () =>
+    json<{ ok: boolean; moved: string[] }>(`${API}/soulseek/import`, { method: "POST" }, 120000),
+  soulseekUser: (username: string) =>
+    json<any>(`${API}/soulseek/user/${encodeURIComponent(username)}`, undefined, 30000),
 };

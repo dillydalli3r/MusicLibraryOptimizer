@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Library, ListMusic, Import, Settings as SettingsIcon, RefreshCw, Play } from "lucide-react";
+import { Library, ListMusic, Import, Settings as SettingsIcon, RefreshCw, Play, ArrowDownUp } from "lucide-react";
 import { api } from "./api";
 import { useStore } from "./store";
 import LibraryPage from "./pages/LibraryPage";
@@ -11,6 +11,7 @@ import TrackPage from "./pages/TrackPage";
 import PlaylistsPage from "./pages/PlaylistsPage";
 import SettingsPage from "./pages/SettingsPage";
 import SetupPage from "./pages/SetupPage";
+import SoulseekPage from "./pages/SoulseekPage";
 import PlayerBar from "./components/PlayerBar";
 import ImportWizard from "./pages/ImportWizard";
 import { ProgressBar } from "./components/ProgressBar";
@@ -19,6 +20,7 @@ const NAV = [
   { to: "/", label: "Library", icon: Library, end: true },
   { to: "/playlists", label: "Playlists", icon: ListMusic, end: false },
   { to: "/import", label: "Import", icon: Import, end: false },
+  { to: "/soulseek", label: "Soulseek", icon: ArrowDownUp, end: false },
   { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
 ];
 
@@ -152,6 +154,7 @@ export default function App() {
             <Route path="/album/:path" element={<AlbumPage />} />
             <Route path="/track/:path" element={<TrackPage />} />
             <Route path="/playlists" element={<PlaylistsPage />} />
+            <Route path="/soulseek" element={<SoulseekPage />} />
             <Route path="/import" element={<ImportWizard />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/setup" element={<Navigate to="/" replace />} />

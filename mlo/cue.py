@@ -232,9 +232,11 @@ def run_format_cues(config):
             renamed_any = True if "->" in note else renamed_any
     if renamed_any:
         # Re-collect by walking each original album folder: explicit
-        # targets may have pointed at a now-renamed .cue file.
+        # targets may have pointed at a now-renamed .cue file. Capture the
+        # folder list BEFORE clearing cues — it is derived from them.
+        album_dirs = sorted({os.path.dirname(c) for c in cues})
         cues = []
-        for album_dir in sorted({os.path.dirname(c) for c in cues}):
+        for album_dir in album_dirs:
             if os.path.isdir(album_dir):
                 cues.extend(
                     os.path.join(album_dir, f)

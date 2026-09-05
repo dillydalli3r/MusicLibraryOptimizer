@@ -110,6 +110,16 @@ export interface Artist {
   aggregate: Aggregate;
 }
 
+export interface CoverResult {
+  source: string;
+  small: string | null;
+  big: string | null;
+  title: string | null;
+  artist: string | null;
+  tracks: number | null;
+  url: string | null;
+}
+
 export interface Playlist {
   id: number;
   name: string;

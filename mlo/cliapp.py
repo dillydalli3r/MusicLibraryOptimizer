@@ -23,6 +23,7 @@ from .images import run_process_images
 from .loudness import run_calc_dr_replaygain
 from .lyrics import run_format_lyrics
 from .accurip import run_generate_accurip
+from .audiometa import run_analyze_audiometa
 from .format_all import run_format_all
 from .remux import run_remux_videos
 from .report import print_results, print_grade_results, print_combined_results
@@ -47,6 +48,7 @@ SCRIPTS = {
     "accurip": (9, "AccurateRip", run_generate_accurip),
     "formatall": (10, "Format All", run_format_all),
     "remux": (11, "Video Remux", run_remux_videos),
+    "audiometa": (12, "Key & BPM", run_analyze_audiometa),
 }
 
 

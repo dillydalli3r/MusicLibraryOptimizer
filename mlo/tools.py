@@ -307,3 +307,21 @@ def simple_dr_meter_path():
     candidate = os.path.join(DEPS_DIR, SIMPLE_DR_METER_DIRNAME, "main.py")
     return candidate if os.path.isfile(candidate) else None
 
+
+def python_pkg_path(pkg):
+    """Vendored pip-package dir for *pkg* ('librosa', 'beets'), or None.
+
+    Layout is '.dependencies/<pkg> vX.Y' (see fetchdeps.PIP_PACKAGES).
+    """
+    if not os.path.isdir(DEPS_DIR):
+        return None
+    try:
+        for entry in sorted(os.listdir(DEPS_DIR)):
+            full = os.path.join(DEPS_DIR, entry)
+            if (os.path.isdir(full) and entry.lower().startswith(pkg.lower())
+                    and os.path.isfile(os.path.join(full, pkg, "__init__.py"))):
+                return full
+    except OSError:
+        pass
+    return None
+

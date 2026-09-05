@@ -10,6 +10,8 @@ import os
 import sys
 import json
 import asyncio
+import threading
+import time
 import pathlib
 import tempfile
 from contextlib import asynccontextmanager
@@ -46,6 +48,19 @@ _MAIN_LOOP = None
 async def _lifespan(app: FastAPI):
     global _MAIN_LOOP
     _MAIN_LOOP = asyncio.get_running_loop()
+    # Optionally bring up the managed slskd process with the backend.
+    if load_config().get("soulseek_autostart", False):
+        def _autostart_slskd():
+            try:
+                from server import soulseek
+                ok, msg = soulseek.start()
+                if ok:
+                    soulseek.wait_until_ready()
+                else:
+                    print(f"[mlo] slskd autostart skipped: {msg}")
+            except Exception as e:
+                print(f"[mlo] slskd autostart failed: {e}")
+        threading.Thread(target=_autostart_slskd, daemon=True).start()
     yield
 
 
@@ -526,8 +541,14 @@ async def upload_cover(album: str = Query(...), file: UploadFile = File(...),
         tstem = os.path.splitext(os.path.basename(track))[0].strip()
         tstem = re_safe_filename(tstem).strip().rstrip(".") or "cover"
         stem = tstem
-    dest = os.path.join(alb, f"{stem}{ext}")
     data = await file.read()
+    return _write_cover_bytes(alb, stem, ext, data)
+
+
+def _write_cover_bytes(alb: str, stem: str, ext: str, data: bytes):
+    """Atomically write cover bytes as <stem><ext> into the album folder
+    and bust the cover cache. Shared by upload and download-from-URL."""
+    dest = os.path.join(alb, f"{stem}{ext}")
     fd, tmp = tempfile.mkstemp(prefix=".cover_tmp_", suffix=ext, dir=alb)
     try:
         with os.fdopen(fd, "wb") as f:
@@ -547,6 +568,70 @@ async def upload_cover(album: str = Query(...), file: UploadFile = File(...),
         raise HTTPException(500, str(e))
     tagcache.invalidate_all()
     return {"ok": True, "path": dest.replace("\\", "/")}
+
+
+def _sniff_image_ext(data: bytes, content_type: str) -> str:
+    """File-extension for image bytes, from magic numbers, then the
+    Content-Type, defaulting to .jpg (the common cover-art case)."""
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[:2] == b"\xff\x0a" or data[:12] == b"\x00\x00\x00\x0cJXL ":
+        return ".jxl"
+    if data[:2] == b"BM":
+        return ".bmp"
+    ct = (content_type or "").split("/")[1].strip().lower()
+    if ct in ("jpeg", "jpg"):
+        return ".jpg"
+    if ct in ("png", "webp", "jxl", "bmp"):
+        return f".{ct}"
+    return ".jpg"
+
+
+@app.get("/api/cover/search")
+async def cover_search(artist: str = Query(""), album: str = Query(""),
+                       limit: int = Query(40, ge=1, le=100)):
+    """Search covers.musichoarders.xyz (aggregates Apple Music, Deezer,
+    Qobuz, Tidal, Discogs, ...) for album covers matching artist/album."""
+    if not artist.strip() and not album.strip():
+        raise HTTPException(400, "artist or album is required")
+    try:
+        results = await asyncio.to_thread(
+            intg.cover_search, artist.strip(), album.strip(), limit)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"cover search failed: {e}")
+    return {"results": results}
+
+
+@app.post("/api/cover/fromurl")
+async def cover_from_url(album: str = Query(...), url: str = Query(...),
+                         track: Optional[str] = Query(None)):
+    """Download a cover image from a URL (e.g. a COV search result) and
+    store it like an uploaded cover (album cover.* or per-track sidecar)."""
+    alb = os.path.normpath(album)
+    if not os.path.isdir(alb):
+        raise HTTPException(404, "album not found")
+    if not _in_music_folder(alb, _music_folder()):
+        raise HTTPException(400, "album outside music folder")
+    try:
+        data, ctype = await asyncio.to_thread(intg.fetch_image_bytes, url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"cover download failed: {e}")
+    if not data:
+        raise HTTPException(502, "empty image response")
+    stem = "cover"
+    if track:
+        tstem = os.path.splitext(os.path.basename(track))[0].strip()
+        tstem = re_safe_filename(tstem).strip().rstrip(".") or "cover"
+        stem = tstem
+    return _write_cover_bytes(alb, stem, _sniff_image_ext(data, ctype), data)
 
 
 @app.get("/api/videos/scan")
@@ -605,6 +690,47 @@ def lyrics_embed(req: LyricsEmbedRequest):
     return {"ok": True}
 
 
+class LyricsAiRequest(BaseModel):
+    mode: str  # "clean" | "repair" | "wordsync"
+    text: str = ""
+    artist: str = ""
+    track: str = ""
+    candidates: Optional[List[str]] = None
+
+
+@app.post("/api/lyrics/ai")
+async def lyrics_ai(req: LyricsAiRequest):
+    """AI-assisted lyrics tooling.
+
+    * wordsync - deterministic line→word sync (ELRC), no AI needed.
+    * clean   - strip ads/watermarks/garbage from raw lyrics via LLM.
+    * repair  - fill/fix lyric lines using LRCLIB candidate lines as
+                evidence via LLM.
+    """
+    cfg = load_config()
+    text = req.text or ""
+    if req.mode == "wordsync":
+        if not text.strip():
+            raise HTTPException(400, "no lyrics text provided")
+        from server.ai import wordsync_lrc
+        return {"mode": "wordsync", "result": wordsync_lrc(text)}
+
+    from server import ai as ai_mod
+    if not ai_mod.ai_configured(cfg):
+        raise HTTPException(400, "AI is not configured — set base URL and model in Settings → AI")
+    if req.mode == "clean":
+        if not text.strip():
+            raise HTTPException(400, "no lyrics text provided")
+        result = await asyncio.to_thread(ai_mod.lyrics_clean, cfg, text)
+    elif req.mode == "repair":
+        if not text.strip() and not req.candidates:
+            raise HTTPException(400, "repair needs lyrics text and/or candidates")
+        result = await asyncio.to_thread(ai_mod.lyrics_repair, cfg, text, req.candidates or [], req.artist, req.track)
+    else:
+        raise HTTPException(400, f"unknown mode: {req.mode}")
+    return {"mode": req.mode, "result": result}
+
+
 # --------------------------------------------------------------------------- #
 # Run scripts
 # --------------------------------------------------------------------------- #
@@ -627,12 +753,16 @@ def run_scripts(req: RunRequest):
         from mlo.remux import run_remux_videos
     except ImportError:
         run_remux_videos = None
+    try:
+        from mlo.audiometa import run_analyze_audiometa
+    except ImportError:
+        run_analyze_audiometa = None
 
     RUNNERS = {
         1: run_format_lyrics, 2: run_format_cues, 3: run_optimize_flacs,
         4: run_grade_library, 5: run_process_images, 6: run_audit_library,
         7: run_calc_dr_replaygain, 8: run_auto_tagging, 9: run_generate_accurip,
-        10: run_format_all, 11: run_remux_videos,
+        10: run_format_all, 11: run_remux_videos, 12: run_analyze_audiometa,
     }
     cfg = load_config()
     if req.targets:
@@ -647,6 +777,7 @@ def run_scripts(req: RunRequest):
     cfg["force_dr_replaygain"] = bool(f.get("dr", cfg.get("force_dr_replaygain")))
     cfg["force_auto_tag"] = bool(f.get("autotag", cfg.get("force_auto_tag")))
     cfg["force_accurip"] = bool(f.get("accurip", cfg.get("force_accurip")))
+    cfg["force_audiometa"] = bool(f.get("audiometa", cfg.get("force_audiometa")))
     # image-option overrides (subset of run_process_images knobs)
     for key in ("rename_to_cover", "reencode_to_jxl", "images_convert_to_jpeg",
                 "images_convert_lossless_to_png", "convert_jxl_back", "remove_alpha",
@@ -1076,6 +1207,187 @@ class OrganizeRequest(BaseModel):
     dry_run: bool = False
 
 
+class BeetsImportRequest(BaseModel):
+    paths: List[str]
+
+
+@app.get("/api/beets/status")
+def beets_status():
+    """Vendored-beets availability and the config that would be generated."""
+    from server import beetscfg
+    version = beetscfg.beets_available()
+    cfg = load_config()
+    return {
+        "installed": bool(version),
+        "version": version,
+        "db": beetscfg.db_path(),
+        "config": beetscfg.generate_config(cfg),
+    }
+
+
+@app.post("/api/beets/install")
+def beets_install():
+    """Vendor beets into .dependencies (pip-managed, like other tools)."""
+    from mlo import fetchdeps
+    fetchdeps.install_dependency("beets", log=lambda m: None)
+    return {"ok": True, "version": fetchdeps.PINNED["beets"]["version"]}
+
+
+@app.post("/api/beets/import")
+def beets_import(req: BeetsImportRequest):
+    """Tag albums with managed beets (MusicBrainz match + Picard-parity
+    plugin: locale aliases, work/movement, release-type caps), then
+    optionally re-organize file placement with the naming script."""
+    from server import beetscfg
+    folder = _music_folder()
+    if not folder or not os.path.isdir(folder):
+        raise HTTPException(400, "music_folder not set or not found")
+    valid = []
+    for p in req.paths:
+        np = os.path.normpath(p)
+        if not os.path.isdir(np):
+            raise HTTPException(404, f"album not found: {p}")
+        if not _in_music_folder(np, folder):
+            raise HTTPException(400, f"album outside music folder: {p}")
+        valid.append(np)
+    cutoff = time.time()
+    ok, output = beetscfg.run_beets_import(valid)
+    if not ok:
+        raise HTTPException(500, output[-2000:])
+    tagcache.invalidate_all()
+    organized = None
+    if load_config().get("beets_organize_after", False):
+        # beets already placed files per the naming script; organize only the
+        # album folders this import touched (fresh mtimes under music folder)
+        # so stale-file failures on the pre-import paths are impossible.
+        from mlo.stats import _find_albums
+        fresh = [d for d in _find_albums(folder)
+                 if os.path.getmtime(d) >= cutoff - 1]
+        if fresh:
+            res = organize(OrganizeRequest(paths=fresh, dry_run=False))
+            organized = res.get("results")
+    return {"ok": True, "output": output[-4000:], "organized": organized}
+
+
+class SoulseekSearchRequest(BaseModel):
+    query: str
+
+
+class SoulseekDownloadRequest(BaseModel):
+    username: str
+    files: List[dict]  # [{filename, size}]
+
+
+@app.get("/api/soulseek/status")
+def soulseek_status():
+    """Managed slskd availability, running state, login and download dir."""
+    from server import soulseek
+    cfg = load_config()
+    running = soulseek.is_running() or soulseek.web_up(cfg)
+    logged_in = None
+    server = None
+    if running:
+        try:
+            server = soulseek.server_state()
+            logged_in = bool(server and server.get("isLoggedIn"))
+        except Exception:
+            logged_in = False
+    return {
+        "installed": soulseek.slskd_installed(),
+        "running": running,
+        "logged_in": logged_in,
+        "server": server,
+        "download_dir": soulseek.download_dir(cfg),
+        "web_port": int(cfg.get("soulseek_web_port") or 5030),
+    }
+
+
+@app.post("/api/soulseek/start")
+def soulseek_start():
+    """Start the managed slskd process and wait for its web API."""
+    from server import soulseek
+    ok, msg = soulseek.start()
+    if not ok:
+        raise HTTPException(400, msg)
+    if not soulseek.wait_until_ready():
+        raise HTTPException(504, "slskd did not become ready in time")
+    return {"ok": True, "message": msg}
+
+
+@app.post("/api/soulseek/stop")
+def soulseek_stop():
+    from server import soulseek
+    stopped = soulseek.stop()
+    if not stopped:
+        return {"ok": True, "message": "not running"}
+    return {"ok": True, "message": "stopped"}
+
+
+@app.post("/api/soulseek/search")
+def soulseek_search(req: SoulseekSearchRequest):
+    """Start a Soulseek search; returns an id to poll for results."""
+    from server import soulseek
+    if not (soulseek.is_running() or soulseek.web_up(load_config())):
+        raise HTTPException(400, "slskd is not running — start it first")
+    if not req.query.strip():
+        raise HTTPException(400, "empty query")
+    return {"id": soulseek.search(req.query.strip())}
+
+
+@app.get("/api/soulseek/search/{search_id}")
+def soulseek_search_results(search_id: str):
+    from server import soulseek
+    if not soulseek.is_running():
+        raise HTTPException(400, "slskd is not running")
+    return soulseek.search_results(search_id)
+
+
+@app.post("/api/soulseek/download")
+def soulseek_download(req: SoulseekDownloadRequest):
+    """Queue files from a user for download into the download dir."""
+    from server import soulseek
+    if not (soulseek.is_running() or soulseek.web_up()):
+        raise HTTPException(400, "slskd is not running — start it first")
+    if not req.username or not req.files:
+        raise HTTPException(400, "username and files required")
+    soulseek.enqueue_download(req.username, req.files)
+    return {"ok": True, "queued": len(req.files)}
+
+
+@app.get("/api/soulseek/downloads")
+def soulseek_downloads():
+    """Download transfer tree (per user / directory / file with state)."""
+    from server import soulseek
+    if not soulseek.is_running():
+        return {"downloads": []}
+    return {"downloads": soulseek.downloads_state()}
+
+
+@app.post("/api/soulseek/import")
+def soulseek_import():
+    """Move completed downloads from the download dir into the library,
+    one album folder per shared folder."""
+    from server import soulseek
+    try:
+        moved = soulseek.import_completed()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    tagcache.invalidate_all()
+    return {"ok": True, "moved": moved}
+
+
+@app.get("/api/soulseek/user/{username}")
+def soulseek_user(username: str):
+    """Remote user profile info (speed, slots, shared file count)."""
+    from server import soulseek
+    if not soulseek.is_running():
+        raise HTTPException(400, "slskd is not running")
+    try:
+        return soulseek.user_info(username)
+    except Exception as e:
+        raise HTTPException(502, f"user info failed: {e}")
+
+
 @app.post("/api/organize")
 def organize(req: OrganizeRequest):
     """Rename/move albums according to the configured naming script.
@@ -1223,6 +1535,19 @@ def organize(req: OrganizeRequest):
             except OSError:
                 break
 
+        # Post-organize cue maintenance: renaming audio underneath cue
+        # sheets leaves stale FILE references, and album-named cues moved
+        # by the leftovers pass keep names the CD-N grader rejects. Re-run
+        # the same evidence-based engine the cue script uses.
+        notes = []
+        try:
+            from mlo.discs import fix_cue_filenames, rename_cues_for_discs
+            for old, new in rename_cues_for_discs(new_root, config=cfg):
+                notes.append(f"cue renamed: {old} -> {new}")
+            notes.extend(fix_cue_filenames(new_root, config=cfg))
+        except Exception as e:
+            errors.append(f"cue maintenance: {e}")
+
         results.append({
             "path": album_dir,
             "ok": True,
@@ -1230,6 +1555,7 @@ def organize(req: OrganizeRequest):
             "leftovers": leftovers,
             "album_root": new_root.replace("\\", "/"),
             "pruned": pruned,
+            "notes": notes,
             "errors": errors,
         })
     tagcache.invalidate_all()

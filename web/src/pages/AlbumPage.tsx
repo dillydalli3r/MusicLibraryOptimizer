@@ -1,10 +1,11 @@
 ﻿import { Fragment, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, Info as InfoIcon, ImageUp, FileVideo } from "lucide-react";
+import { ExternalLink, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, Info as InfoIcon, ImageUp, Image as ImageIcon, FileVideo, Disc3 } from "lucide-react";
 import { api } from "../api";
 import { AuditBadge, EmptyState, GradeBadge, MediaChip } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
+import CoverSearchModal from "../components/CoverSearchModal";
 import StatsPanel from "../components/StatsPanel";
 import TrackDetails from "../components/TrackDetails";
 import { SortHeader, sortRows, toggleSort, groupByDisc, type SortState } from "../lib/sort.tsx";
@@ -32,6 +33,8 @@ export default function AlbumPage() {
   const [videoOpen, setVideoOpen] = useState<string | null>(null);
   const [remuxing, setRemuxing] = useState(false);
   const [coverBusy, setCoverBusy] = useState(false);
+  const [coverSearchOpen, setCoverSearchOpen] = useState(false);
+  const [beetsBusy, setBeetsBusy] = useState(false);
   const coverInput = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
 
@@ -119,6 +122,22 @@ export default function AlbumPage() {
     }
   };
 
+  const beetsTagAlbum = async () => {
+    if (!window.confirm("Tag this album with beets (MusicBrainz match + Picard-parity plugin)?\nFiles are moved into the scripted folder structure.")) return;
+    setBeetsBusy(true);
+    try {
+      const r = await api.beetsImport([data.path]);
+      toast(`Beets import done${r.organized ? " (re-organized)" : ""}`);
+      qc.invalidateQueries({ queryKey: ["library"] });
+      qc.invalidateQueries({ queryKey: ["album", decoded] });
+      qc.invalidateQueries({ queryKey: ["coverColor", decoded] });
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBeetsBusy(false);
+    }
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-5xl">
       <div
@@ -150,6 +169,13 @@ export default function AlbumPage() {
               title="Upload a new album cover (replaces cover.*)"
             >
               <ImageUp className="h-3.5 w-3.5" /> {coverBusy ? "Uploading…" : "Upload cover"}
+            </button>
+            <button
+              className="btn-ghost !py-1 text-[11px] w-full mt-1"
+              onClick={() => setCoverSearchOpen(true)}
+              title="Search covers.musichoarders.xyz for a better cover"
+            >
+              <ImageIcon className="h-3.5 w-3.5" /> Find cover online
             </button>
           </div>
         <div className="flex-1 min-w-0">
@@ -197,6 +223,10 @@ export default function AlbumPage() {
           </button>
           <button className="btn-ghost" onClick={organizeAlbum} title="Apply the naming script from Settings">
             <FolderSync className="h-4 w-4" /> Organize
+          </button>
+          <button className="btn-ghost" onClick={beetsTagAlbum} disabled={beetsBusy}
+            title="MusicBrainz-match with managed beets, then organize (Settings → Beets for options)">
+            <Disc3 className="h-4 w-4" /> {beetsBusy ? "Beets…" : "Tag with beets"}
           </button>
           <button className="btn-ghost" onClick={async () => { try { await api.openFolder(data.path); } catch (e) { toast(String(e)); } }} title="Reveal this album in the file manager">
             <FolderOpen className="h-4 w-4" /> Open folder
@@ -365,6 +395,20 @@ export default function AlbumPage() {
           </tbody>
         </table>
       </div>
+
+      {coverSearchOpen && (
+        <CoverSearchModal
+          albumPath={data.path}
+          artist={data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? ""}
+          album={data.meta?.ALBUM ?? ""}
+          onClose={() => setCoverSearchOpen(false)}
+          onApplied={() => {
+            qc.invalidateQueries({ queryKey: ["library"] });
+            qc.invalidateQueries({ queryKey: ["coverColor", decoded] });
+            qc.invalidateQueries({ queryKey: ["album", decoded] });
+          }}
+        />
+      )}
     </div>
   );
 }

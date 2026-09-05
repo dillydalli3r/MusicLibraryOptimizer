@@ -21,7 +21,7 @@ const ACCENT_OPTIONS: { id: string; name: string; color: string }[] = [
 const ENCODER_FORMATS = ["flac", "jpeg", "png", "jxl"] as const;
 const ENCODER_FIELDS = ["ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"] as const;
 const AUDIO_TYPES = ["flac", "mp3", "mp4", "ogg", "opus", "aac"] as const;
-const TAG_FAMILIES = ["AUDIT", "LOG_GRADE", "REPLAYGAIN", "DYNAMIC_RANGE", "MEDIA_SOURCE", "INSTRUMENTAL", "ADVISORY", "LYRICS"] as const;
+const TAG_FAMILIES = ["AUDIT", "LOG_GRADE", "REPLAYGAIN", "DYNAMIC_RANGE", "MEDIA_SOURCE", "INSTRUMENTAL", "ADVISORY", "LYRICS", "BPM", "INITIALKEY"] as const;
 
 export default function SettingsPage() {
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
@@ -224,6 +224,52 @@ export default function SettingsPage() {
         { k: "video_process_mp4", label: "Also normalize MP4s without FLAC audio", type: "bool" },
       ],
     },
+    {
+      title: "AI-assisted lyrics",
+      blurb: "Any OpenAI-compatible chat endpoint (OpenAI, OpenRouter, LM Studio, llama.cpp…). Powers the lyrics editor's AI clean/repair actions.",
+      fields: [
+        { k: "ai_base_url", label: "Base URL (e.g. https://api.openai.com/v1)", type: "text" },
+        { k: "ai_api_key", label: "API key", type: "text" },
+        { k: "ai_model", label: "Model (e.g. gpt-4o-mini)", type: "text" },
+      ],
+    },
+    {
+      title: "Key & BPM (script 12)",
+      blurb: "Detects tempo and musical key with librosa and writes BPM + INITIALKEY. Install librosa from the Dependencies tab.",
+      fields: [
+        { k: "audiometa_enabled", label: "Enabled", type: "bool" },
+        { k: "audiometa_overwrite", label: "Overwrite existing BPM/key values", type: "bool" },
+        { k: "audiometa_min_seconds", label: "Skip tracks shorter than (seconds)", type: "number", min: 1, max: 120 },
+        { k: "audiometa_key_notation", label: "Key notation", type: "select", options: [["musical", "Musical (A min)"], ["camelot", "Camelot (8A)"], ["openkey", "Open Key (1m)"]] },
+        { k: "force_audiometa", label: "Force re-analysis", type: "bool" },
+      ],
+    },
+    {
+      title: "Soulseek (managed slskd)",
+      blurb: "Shares = your music folder. Downloads land in the download dir below; use the Soulseek page to search and download. Install slskd from the Dependencies tab.",
+      fields: [
+        { k: "soulseek_username", label: "Soulseek username", type: "text" },
+        { k: "soulseek_password", label: "Soulseek password", type: "text" },
+        { k: "soulseek_description", label: "Profile description (shown to other users)", type: "text" },
+        { k: "soulseek_listen_port", label: "Listen port", type: "number", min: 1024, max: 65535 },
+        { k: "soulseek_web_port", label: "Web/API port", type: "number", min: 1024, max: 65535 },
+        { k: "soulseek_up_limit", label: "Upload speed limit (kB/s, 0 = unlimited)", type: "number", min: 0, max: 100000 },
+        { k: "soulseek_down_limit", label: "Download speed limit (kB/s, 0 = unlimited)", type: "number", min: 0, max: 100000 },
+        { k: "soulseek_download_dir", label: "Download dir (blank = <music folder>/.mlo_downloads)", type: "text" },
+        { k: "soulseek_autostart", label: "Start slskd with the app backend", type: "bool" },
+      ],
+    },
+    {
+      title: "Beets tagging",
+      blurb: "Managed beets import with Picard-parity behaviors: MusicBrainz matching, locale alias translations, WORK/MOVEMENT from work relationships, and release-type capitalization (EP uppercased). Files are organized by your naming script via the mlo_dir path hook.",
+      fields: [
+        { k: "beets_locale", label: "Preferred locale for aliases (e.g. en, ja, de)", type: "text" },
+        { k: "beets_translations", label: "Translate titles/names to preferred locale", type: "bool" },
+        { k: "beets_work_movement", label: "Write WORK / MOVEMENT from work relationships", type: "bool" },
+        { k: "beets_release_type_caps", label: "Capitalize release types (EP uppercased)", type: "bool" },
+        { k: "beets_organize_after", label: "Re-run organize after each beets import", type: "bool" },
+      ],
+    },
   ];
   const GRADE_CHECK_KEYS: CfgField[] = [
     { k: "grade_check_tag_spaces", label: "Tag spaces", type: "bool" },
@@ -263,7 +309,25 @@ export default function SettingsPage() {
   const [previewing, setPreviewing] = useState(false);
   const [rawConfig, setRawConfig] = useState("{}");
   const [tab, setTab] = useState("general");
-  const [runAll, setRunAll] = useState<number[]>([11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
+  const [runAll, setRunAll] = useState<number[]>([11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10, 12]);
+  const [beetsBusy, setBeetsBusy] = useState(false);
+  const { data: beetsStatus, refetch: refetchBeets } = useQuery({
+    queryKey: ["beetsStatus"],
+    queryFn: api.beetsStatus,
+    enabled: tab === "beets",
+  });
+  const installBeets = async () => {
+    setBeetsBusy(true);
+    try {
+      const r = await api.beetsInstall();
+      toast(`beets v${r.version} installed`);
+      refetchBeets();
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBeetsBusy(false);
+    }
+  };
 
   const RUN_ALL_SCRIPTS: { id: number; label: string }[] = [
     { id: 11, label: "Video Remux" },
@@ -277,12 +341,16 @@ export default function SettingsPage() {
     { id: 4, label: "Grade" },
     { id: 7, label: "DR / ReplayGain" },
     { id: 10, label: "Format All" },
+    { id: 12, label: "Key & BPM" },
   ];
 
   const NAV: { id: string; label: string; section?: string }[] = [
     { id: "general", label: "General" },
     { id: "appearance", label: "Appearance" },
     { id: "naming", label: "File naming" },
+    { id: "ai", label: "AI" },
+    { id: "beets", label: "Beets" },
+    { id: "soulseek", label: "Soulseek" },
     { id: "deps", label: "Dependencies" },
     { id: "flac", label: "FLACs", section: "Scripts" },
     { id: "images", label: "Images", section: "Scripts" },
@@ -293,6 +361,7 @@ export default function SettingsPage() {
     { id: "accurip", label: "AccurateRip", section: "Scripts" },
     { id: "cdrips", label: "CD Rips", section: "Scripts" },
     { id: "videos", label: "Videos", section: "Scripts" },
+    { id: "audiometa", label: "Key & BPM", section: "Scripts" },
     { id: "tagwrites", label: "Tag writes", section: "Scripts" },
     { id: "grading", label: "Grading", section: "Scripts" },
   ];
@@ -421,7 +490,8 @@ export default function SettingsPage() {
     flac: CFG_GROUPS[0], images: CFG_GROUPS[1], lyrics: CFG_GROUPS[2],
     dr: CFG_GROUPS[3], audit: CFG_GROUPS[4], autotag: CFG_GROUPS[5],
     accurip: CFG_GROUPS[6], tagwrites: CFG_GROUPS[7], grading: CFG_GROUPS[8],
-    cdrips: CFG_GROUPS[9], videos: CFG_GROUPS[10],
+    cdrips: CFG_GROUPS[9], videos: CFG_GROUPS[10], ai: CFG_GROUPS[11],
+    audiometa: CFG_GROUPS[12], beets: CFG_GROUPS[14], soulseek: CFG_GROUPS[13],
   };
 
   const [encoderTags, setEncoderTags] = useState<Record<string, Record<string, boolean>>>({});
@@ -716,6 +786,31 @@ export default function SettingsPage() {
               <div className="text-xs font-bold text-zinc-300">{GROUP_BY_TAB[tab].title}</div>
               {GROUP_BY_TAB[tab].blurb && <div className="text-[10px] text-zinc-600">{GROUP_BY_TAB[tab].blurb}</div>}
               {renderFields(GROUP_BY_TAB[tab].fields)}
+              {tab === "beets" && (
+                <div className="pt-2 border-t border-border space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-zinc-400">
+                      {beetsStatus?.installed
+                        ? `beets v${beetsStatus.version} installed (vendored in .dependencies)`
+                        : "beets is not installed yet"}
+                    </span>
+                    <button className="btn-primary !py-1 text-xs" onClick={installBeets} disabled={beetsBusy}>
+                      {beetsBusy ? "Installing…" : beetsStatus?.installed ? "Reinstall" : "Install beets"}
+                    </button>
+                  </div>
+                  {beetsStatus?.installed && (
+                    <details className="text-[11px]">
+                      <summary className="cursor-pointer text-zinc-500">generated beets config (server/data/beets-config.yaml)</summary>
+                      <pre className="mt-1 p-2 bg-zinc-950 border border-border rounded overflow-auto max-h-64 text-[10px] font-mono text-zinc-400">{beetsStatus.config}</pre>
+                    </details>
+                  )}
+                  <div className="text-[10px] text-zinc-600">
+                    Run "Tag with beets" from an album page to import it: beets matches against MusicBrainz, writes tags
+                    (translations / work &amp; movement / release-type caps per the settings above) and organizes files with
+                    your naming script.
+                  </div>
+                </div>
+              )}
               {tab === "tagwrites" && (
                 <>
                   <div className="pt-2 border-t border-border">

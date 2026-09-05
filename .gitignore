@@ -61,3 +61,5 @@ Desktop.ini
 .idea/
 *.sublime-project
 *.sublime-workspace
+# ZCode local session state
+.zcode/

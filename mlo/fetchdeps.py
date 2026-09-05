@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 import urllib.request
@@ -49,9 +50,13 @@ DISPLAY_NAMES = {
     "logchecker": "Logchecker",
     "php": "PHP",
     "cuetools": "CUETools",
+    "librosa": "librosa",
+    "beets": "beets",
+    "slskd": "slskd",
 }
 
 REPOS = {
+    "slskd": "slskd/slskd",
     "flac": "xiph/flac",
     "libjxl": "libjxl/libjxl",
     "libjpeg_turbo": "libjpeg-turbo/libjpeg-turbo",
@@ -65,6 +70,7 @@ REPOS = {
 
 # Ordered asset-name preferences (regex, matched case-insensitively).
 ASSET_PATTERNS = {
+    "slskd": [r"^slskd-[\d.]+-win-x64\.zip$"],
     "flac": [r"^flac-[\d.]+-win\.zip$"],
     "libjxl": [r"^jxl-x64-windows-static\.zip$", r"^jxl-x64-windows\.zip$"],
     "libjpeg_turbo": [
@@ -90,6 +96,17 @@ INSTALL_PREFIX = {
     "logchecker": "Logchecker",
     "php": "php",
     "cuetools": "CUETools",
+    "librosa": "librosa",
+    "beets": "beets",
+    "slskd": "slskd",
+}
+
+# Vendored pure-Python tools: installed with `pip install --target` into a
+# versioned .dependencies folder instead of shipping binaries. They are
+# imported by prepending the folder to sys.path (see tools.python_pkg_path).
+PIP_PACKAGES = {
+    "librosa": "librosa==0.11.0",
+    "beets": "beets==2.4.0",
 }
 
 TOOL_DIRS = INSTALL_PREFIX  # backward compat for app.py (use installed_path() for versioned folder)
@@ -122,6 +139,7 @@ MARKER_EXES = {
     "logchecker": ("logchecker.phar",),
     "php": ("php.exe",),
     "cuetools": ("CUETools.exe",),
+    "slskd": ("slskd.exe",),
 }
 
 # Tools whose release asset is a single bare exe - no archive to extract.
@@ -186,6 +204,21 @@ PINNED = {
         "tag": "v2.2.6",
         "asset": "CUETools_2.2.6.zip",
         "version": "2.2.6",
+    },
+    "librosa": {
+        "tag": "0.11.0",
+        "asset": "",
+        "version": "0.11.0",
+    },
+    "beets": {
+        "tag": "v2.4.0",
+        "asset": "",
+        "version": "2.4.0",
+    },
+    "slskd": {
+        "tag": "0.26.0",
+        "asset": "slskd-0.26.0-win-x64.zip",
+        "version": "0.26.0",
     },
 }
 
@@ -262,7 +295,27 @@ def installed_versions():
     out = {key: info["version"] for key, info in tools.items()}
     if tools_mod_simple_dr_meter():
         out["simpledrmeter"] = PINNED["simpledrmeter"]["version"]
+    for key in PIP_PACKAGES:
+        if pip_package_path(key):
+            out[key] = PINNED[key]["version"]
+    # slskd has an exe but detect_all_tools doesn't scan for it; check the
+    # marker directly so the Dependencies UI shows it correctly.
+    d = installed_path("slskd")
+    if d and os.path.isfile(os.path.join(d, "slskd.exe")):
+        out["slskd"] = PINNED["slskd"]["version"]
     return out
+
+
+def pip_package_path(key):
+    """Folder of a vendored pip package (e.g. '.dependencies/librosa v0.11.0')
+    when its top-level package dir is present, else None."""
+    root = installed_path(key)
+    if not root or not os.path.isdir(root):
+        return None
+    top = key  # package name matches the tool key (librosa, beets)
+    if os.path.isfile(os.path.join(root, top, "__init__.py")):
+        return root
+    return None
 
 
 def tools_mod_simple_dr_meter():
@@ -477,6 +530,49 @@ def _install_simple_dr_meter(log=print, progress=None):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _pip_python():
+    """Interpreter for `pip install --target`; sys.executable is the frozen
+    exe (not a python) in PyInstaller builds."""
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    for cand in ("python", "python3", "py"):
+        found = shutil.which(cand)
+        if found:
+            return found
+    raise RuntimeError("vendored Python packages need a Python interpreter on PATH")
+
+
+def _install_pip_package(key, log=print, progress=None):
+    """Vendor a pure-Python tool into .dependencies with pip --target.
+
+    Keeps the running interpreter's site-packages untouched (portable
+    installs) and mirrors the versioned-folder layout of binary tools.
+    """
+    pin = PINNED[key]
+    version = pin["version"]
+    display = DISPLAY_NAMES[key]
+    dest_dir = os.path.join(DEPS_DIR, f"{key} v{version}")
+    if pip_package_path(key):
+        log(f"{display} v{version} already installed")
+        return version
+    log(f"Downloading {display} v{version} (pip) …")
+    cmd = [
+        _pip_python(), "-m", "pip", "install",
+        "--target", dest_dir, "--no-cache-dir",
+        "--progress-bar", "off", "--disable-pip-version-check",
+        PIP_PACKAGES[key],
+    ]
+    proc = run_tool(cmd, capture_output=True, text=True, timeout=1800)
+    if proc.returncode != 0 or not pip_package_path(key):
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        raise RuntimeError(
+            f"pip install failed for {display}: {tail[-1] if tail else 'unknown error'}")
+    _remove_older_versions(key, os.path.basename(dest_dir))
+    log(f"Installed {display} v{version} -> {dest_dir}")
+    return version
+
+
 def _install_php(log=print, progress=None):
     """Download PHP for Windows (needed for Logchecker phar)."""
     pin = PINNED["php"]
@@ -569,6 +665,8 @@ def install_dependency(key, log=print, progress=None):
         return version
     if key == "php":
         return _install_php(log=log, progress=progress)
+    if key in PIP_PACKAGES:
+        return _install_pip_package(key, log=log, progress=progress)
 
     rel = get_latest_release(key)
     version = rel["version"]

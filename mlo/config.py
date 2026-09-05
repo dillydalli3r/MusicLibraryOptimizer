@@ -10,7 +10,7 @@ from .ui import c, Color
 # Run All order — strict pipeline v1.7.0: 1 Lyrics → 2 CUEs → 8 Auto Tagging → 3 FLAC → 5 Images → 9 AccurateRip → 6 Audit → 4 Grade → 7 DR/ReplayGain → 10 Format All.
 # AccurateRip must run before Audit/Grade so the .accurip is present for real-time AUDIT; Grade after Audit so AUDIT tags are fresh; Format All at end does final canonical trims.
 # User's strict config default as of v1.6.0; reorder via Settings → Run All Order.
-DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]
+DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 9, 6, 4, 7, 10, 12]
 
 # Audio tag families that can be toggled per filetype.
 # Each family groups related TAG_MAP keys that are written together.
@@ -23,6 +23,8 @@ AUDIO_TAG_FAMILIES = [
     "INSTRUMENTAL",   # INSTRUMENTAL (lyrics presence)
     "ADVISORY",       # ITUNESADVISORY + ALBUMITUNESADVISORY
     "LYRICS",         # embedded LYRICS tag (and .lrc sidecar)
+    "BPM",            # BPM (Key & BPM analysis)
+    "INITIALKEY",     # INITIALKEY (Key & BPM analysis)
 ]
 AUDIO_TAG_TYPES = ["flac", "mp3", "mp4", "ogg", "opus", "aac"]
 
@@ -43,6 +45,8 @@ _TAG_TO_FAMILY = {
     "ALBUMITUNESADVISORY": "ADVISORY",
     "LYRICS": "LYRICS",
     "UNSYNCEDLYRICS": "LYRICS",
+    "BPM": "BPM",
+    "INITIALKEY": "INITIALKEY",
     # integrity tags follow AUDIT family (written alongside audit when present)
     "AUDIO_MD5": "AUDIT",
     "INTEGRITY": "AUDIT",
@@ -353,6 +357,36 @@ DEFAULT_CONFIG = {
     "auto_zero_advisory_for_instrumental": True,
     "force_auto_tag": False,
 
+    # Key & BPM analysis (script 12): librosa-backed BPM + initial key.
+    "audiometa_enabled": True,
+    "audiometa_overwrite": False,
+    "audiometa_min_seconds": 10,
+    "audiometa_key_notation": "musical",  # musical | camelot | openkey
+    "force_audiometa": False,
+
+    # AI-assisted lyrics (any OpenAI-compatible /chat/completions endpoint).
+    "ai_base_url": "",
+    "ai_api_key": "",
+    "ai_model": "",
+
+    # Managed beets tagging (Picard parity).
+    "beets_locale": "en",
+    "beets_translations": True,
+    "beets_work_movement": True,
+    "beets_release_type_caps": True,
+    "beets_organize_after": False,
+
+    # Soulseek via managed slskd (shares = music folder).
+    "soulseek_username": "",
+    "soulseek_password": "",
+    "soulseek_description": "",
+    "soulseek_listen_port": 50000,
+    "soulseek_web_port": 5030,
+    "soulseek_up_limit": 0,
+    "soulseek_down_limit": 0,
+    "soulseek_download_dir": "",
+    "soulseek_autostart": False,
+
     # Misc
     "auto_advance": True,
     # 0 means automatic. A positive value caps every module's worker pool,
@@ -375,6 +409,10 @@ _BOOL_KEYS = {
 _INT_RANGES = {
     "flac_level": (0, 8),
     "video_crf": (0, 51),
+    "soulseek_listen_port": (1024, 65535),
+    "soulseek_web_port": (1024, 65535),
+    "soulseek_up_limit": (0, 100000),
+    "soulseek_down_limit": (0, 100000),
     "video_flac_level": (0, 8),
     "jpegxl_effort": (1, 10),
     "lrc_timestamp_precision": (2, 3),
@@ -399,6 +437,7 @@ _CHOICES = {
     "lyrics_format": {"EMBEDDED", "LRC", "BOTH"},
     "lrc_zero_timestamp_target": {"EMBEDDED", "LRC", "BOTH"},
     "cue_file_type": {"WAVE", "MP3"},
+    "audiometa_key_notation": {"musical", "camelot", "openkey"},
     "video_preset": {"ultrafast", "superfast", "veryfast", "faster", "fast",
                      "medium", "slow", "slower", "veryslow"},
 }

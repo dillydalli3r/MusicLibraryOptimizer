@@ -56,6 +56,13 @@ LOG_NAME_DISC_RE = re.compile(
 
 CUE_FILE_RE = re.compile(r'^\s*FILE\s+"([^"]+)"', re.IGNORECASE)
 
+# Cue sheet structure: "  TRACK 01 AUDIO" and "    INDEX 01 03:45:60"
+# (mm:ss:ff, 75 frames per second).
+CUE_TRACK_RE = re.compile(r"^\s*TRACK\s+\d{1,2}\b", re.MULTILINE | re.IGNORECASE)
+CUE_INDEX_RE = re.compile(
+    r"^\s*INDEX\s+01\s+(\d{1,3}):(\d{2}):(\d{2})", re.MULTILINE | re.IGNORECASE
+)
+
 # EAC TOC rows: "     1  |  0:00.00  |  3:13.27  | ..." (length column)
 TOC_ROW_RE = re.compile(
     r"^\s*\d+\s*\|\s*\d+:\d{2}\.\d{2}\s*\|\s*(\d+):(\d{2})\.(\d{2})\s*\|",
@@ -304,12 +311,27 @@ def _audio_seconds(paths):
 # Renaming
 # ----------------------------------------------------------------------
 def _rename(src, dst, notes):
+    """Rename src to dst. Case-only renames (no-ops for os.rename on
+    Windows) go through a temp name so cd-1.cue can become CD-1.cue."""
+    sbase, dbase = os.path.basename(src), os.path.basename(dst)
     try:
+        if os.path.normcase(src) == os.path.normcase(dst):
+            if src == dst:
+                return False
+            tmp = src + ".mlo_case_tmp"
+            os.replace(src, tmp)
+            try:
+                os.replace(tmp, dst)
+            except OSError:
+                os.replace(tmp, src)  # roll back, surface the error
+                raise
+            notes.append((sbase, dbase))
+            return True
         os.rename(src, dst)
-        notes.append((os.path.basename(src), os.path.basename(dst)))
+        notes.append((sbase, dbase))
         return True
     except OSError as e:
-        notes.append((os.path.basename(src), f"rename failed: {e}"))
+        notes.append((sbase, f"rename failed: {e}"))
         return False
 
 
@@ -346,17 +368,67 @@ def _is_expected_disc_file(name, pattern, ext):
     return False
 
 
+def _cue_track_count(text):
+    return len(CUE_TRACK_RE.findall(text))
+
+
+def _cue_index_starts(text):
+    """Start time (seconds) of each track's INDEX 01 entry."""
+    return [int(m) * 60 + int(s) + int(f) / 75.0
+            for m, s, f in CUE_INDEX_RE.findall(text)]
+
+
+def _audio_durations(paths):
+    """Durations (seconds) of the given audio files in track-number order.
+
+    Returns None when any file is unreadable so the caller can treat the
+    disc as having no duration evidence.
+    """
+    def order_key(p):
+        n = _file_track_number(p)
+        return ((0, n, os.path.basename(p).lower()) if n is not None
+                else (1, 0, os.path.basename(p).lower()))
+    out = []
+    for p in sorted(paths, key=order_key):
+        try:
+            af = AudioFile(p)
+            if af.audio is None or af.audio.info is None:
+                return None
+            out.append(float(af.audio.info.length))
+        except Exception:
+            return None
+    return out
+
+
+def _cue_matches_disc(starts, durations, tol):
+    """True when the gaps between the cue's INDEX 01 starts match the audio
+    durations. Offset-invariant, so a pregap on track 1 is tolerated."""
+    if len(starts) < 2 or len(durations) != len(starts):
+        return False
+    return all(abs((starts[k + 1] - starts[k]) - durations[k]) <= tol
+               for k in range(len(starts) - 1))
+
+
 def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
-    """Rename cues to <pattern>.cue based on their FILE entries.
+    """Rename cues to <pattern>.cue using content-derived evidence, in
+    order of preference:
+
+      1. FILE entries referencing the audio of exactly one disc
+      2. an explicit disc number in the current filename
+      3. the trivial single-disc case (one disc, one cue)
+      4. a unique track-count match
+      5. a unique INDEX start-time match against disc audio durations
+         (covers image-style cue sheets whose FILE names no longer exist)
 
     Pattern is configurable via discs_rename_pattern (default 'CD-{n}').
-    Uses only content-derived evidence (FILE entries), never order.
-    Single-disc albums without D-TT naming are treated as disc 1 so
-    their single cue still becomes CD-1.cue (trivial, no guessing).
+    Uses only content-derived evidence, never order. Single-disc albums
+    without D-TT naming are treated as disc 1 so their single cue still
+    becomes CD-1.cue (trivial, no guessing).
     """
     if config is not None and not config.get("discs_rename_enabled", True):
         return []
     pattern = _disc_pattern_for(config)
+    synthetic = False
     discs = discs if discs is not None else album_discs(album_dir)
     # Single-disc fallback: no D-TT but audio files exist → treat as disc 1
     # Config discs_rename_single_fallback (default True) allows lone .cue/.log
@@ -369,13 +441,14 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
         if len(aud) > 0:
             # Only trivial single-cue case qualifies; multi-cue without
             # disc evidence remains untouched to avoid guessing.
-            cues = [f for f in os.listdir(album_dir) if f.lower().endswith(".cue")]
-            if len(cues) == 1 and len(aud) >= 1:
+            cues_tmp = [f for f in os.listdir(album_dir) if f.lower().endswith(".cue")]
+            if len(cues_tmp) == 1 and len(aud) >= 1:
                 discs = {1: [os.path.join(album_dir, f) for f in aud]}
+                synthetic = True
             else:
                 return []
-    # Build lookup maps: exact, stem-insensitive, and normalized (handles
-    # Unicode dashes, disc prefix, and .wav vs .flac)
+    # Build lookup maps for FILE-entry matching: exact, stem-insensitive,
+    # and normalized (handles Unicode dashes, disc prefix, and .wav vs .flac)
     known_exact = {}
     known_stem = {}
     known_norm = {}
@@ -383,36 +456,21 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
         for p in paths:
             base = os.path.basename(p)
             known_exact[base.lower()] = d
-            # stem without extension, ascii dashes, lower
-            stem = os.path.splitext(_ascii_dashes(base))[0].lower()
-            known_stem[stem] = d
-            norm = _norm_name(base)
-            known_norm[norm] = d
+            known_stem[os.path.splitext(_ascii_dashes(base))[0].lower()] = d
+            known_norm.setdefault(_norm_name(base), d)
 
     notes = []
-    # Trivial single-disc single-cue: rename directly to CD-1.cue (no FILE check)
-    # This covers cases like a.cue → CD-1.cue where FILE entries are .wav vs .flac
-    cues_all = [f for f in sorted(os.listdir(album_dir)) if f.lower().endswith(".cue") and not _is_expected_disc_file(f, pattern, ".cue")]
-    if len(discs) == 1 and len(cues_all) == 1:
-        sole_disc = next(iter(discs))
-        sole_cue = cues_all[0]
-        dst = os.path.join(album_dir, _disc_expected_name(pattern, sole_disc, ".cue"))
-        if not os.path.exists(dst):
-            _rename(os.path.join(album_dir, sole_cue), dst, notes)
-            if log_fn and notes:
-                for old, new in notes:
-                    log_fn(f"cue: {old} -> {new}")
-            return notes
+    claimed = {}  # disc number -> cue filename
+    remaining = []
+    info = {}     # cue filename -> (file_discs, track_count, index_starts)
     for f in sorted(os.listdir(album_dir)):
         if not f.lower().endswith(".cue"):
             continue
-        if _is_expected_disc_file(f, pattern, ".cue"):
-            continue
-        path = os.path.join(album_dir, f)
         try:
-            text = open(path, "r", encoding="utf-8", errors="replace").read()
+            text = open(os.path.join(album_dir, f), "r",
+                        encoding="utf-8", errors="replace").read()
         except OSError:
-            continue
+            text = ""
         file_discs = set()
         for m in CUE_FILE_RE.finditer(text):
             raw = m.group(1).replace("/", "\\").split("\\")[-1]
@@ -425,11 +483,98 @@ def rename_cues_for_discs(album_dir, discs=None, log_fn=None, config=None):
                 d = known_norm.get(_norm_name(raw))
             if d is not None:
                 file_discs.add(d)
-        if len(file_discs) == 1:
-            d = file_discs.pop()
-            dst = os.path.join(album_dir, _disc_expected_name(pattern, d, ".cue"))
-            if not os.path.exists(dst):
-                _rename(path, dst, notes)
+        info[f] = (file_discs, _cue_track_count(text), _cue_index_starts(text))
+
+        if _is_expected_disc_file(f, pattern, ".cue"):
+            # Keep its claim so no other cue takes the disc; case-only
+            # fixes (cd-1.cue -> CD-1.cue) still rename below.
+            d = _log_name_disc(f)
+            if d:
+                claimed.setdefault(d, f)
+            continue
+        remaining.append(f)
+
+    # 1) FILE entries referencing audio of exactly one disc
+    still = []
+    for f in remaining:
+        file_discs = info[f][0]
+        if len(file_discs) == 1 and next(iter(file_discs)) not in claimed:
+            claimed[next(iter(file_discs))] = f
+        else:
+            still.append(f)
+    remaining = still
+
+    # 2) explicit disc number already present in the filename
+    still = []
+    for f in remaining:
+        d = _log_name_disc(f)
+        if d and d in discs and d not in claimed:
+            claimed[d] = f
+        else:
+            still.append(f)
+    remaining = still
+
+    # 3) trivial single-disc case
+    if len(discs) == 1 and len(remaining) == 1 and 1 not in claimed:
+        claimed[1] = remaining.pop(0)
+
+    if not synthetic:
+        # 4) unique track-count match among unclaimed discs
+        if remaining and len(claimed) < len(discs):
+            counts = {d: len(paths) for d, paths in discs.items()
+                      if d not in claimed}
+            still = []
+            for f in remaining:
+                tc = info[f][1]
+                cands = [d for d, n in counts.items() if n == tc] if tc else []
+                if len(cands) == 1 and cands[0] not in claimed:
+                    claimed[cands[0]] = f
+                    counts.pop(cands[0])
+                else:
+                    still.append(f)
+            remaining = still
+
+        # 5) unique INDEX start-time match (image-style cue sheets whose
+        #    FILE references no longer exist on disk)
+        if remaining and len(claimed) < len(discs):
+            tol = float(config.get("discs_toc_tolerance_s", TOC_TOLERANCE_S)) if config else TOC_TOLERANCE_S
+            margin = float(config.get("discs_toc_unique_margin_s", TOC_UNIQUE_MARGIN_S)) if config else TOC_UNIQUE_MARGIN_S
+            durs = {}
+            for d, paths in discs.items():
+                if d in claimed:
+                    continue
+                seq = _audio_durations(paths)
+                if seq:
+                    durs[d] = seq
+            for f in remaining:
+                starts = info[f][2]
+                if len(starts) < 2:
+                    continue
+                scored = sorted(
+                    (max(abs((starts[k + 1] - starts[k]) - seq[k])
+                         for k in range(len(starts) - 1)), d)
+                    for d, seq in durs.items()
+                    if len(seq) == len(starts)
+                    and _cue_matches_disc(starts, seq, tol)
+                )
+                if not scored:
+                    continue
+                unique = (len(scored) == 1
+                          or scored[1][0] - scored[0][0] >= margin)
+                if unique and scored[0][1] not in claimed:
+                    claimed[scored[0][1]] = f
+                    durs.pop(scored[0][1], None)
+
+    for d, f in sorted(claimed.items()):
+        src = os.path.join(album_dir, f)
+        dst = os.path.join(album_dir, _disc_expected_name(pattern, d, ".cue"))
+        if dst == src:
+            continue
+        # exists() is case-insensitive on Windows: only skip when dst is a
+        # DIFFERENT file; a case-variant of src must still rename.
+        if os.path.exists(dst) and os.path.normcase(dst) != os.path.normcase(src):
+            continue
+        _rename(src, dst, notes)
     if log_fn and notes:
         for old, new in notes:
             log_fn(f"cue: {old} -> {new}")
@@ -512,11 +657,13 @@ def rename_logs_for_discs(album_dir, discs=None, log_fn=None, config=None):
                     durations.pop(d, None)
 
     for d, f in sorted(claimed.items()):
+        src = os.path.join(album_dir, f)
         dst = os.path.join(album_dir, _disc_expected_name(pattern, d, ".log"))
-        if os.path.normcase(dst) == os.path.normcase(os.path.join(album_dir, f)):
+        if dst == src:
             continue
-        if not os.path.exists(dst):
-            _rename(os.path.join(album_dir, f), dst, notes)
+        if os.path.exists(dst) and os.path.normcase(dst) != os.path.normcase(src):
+            continue
+        _rename(src, dst, notes)
     if log_fn and notes:
         for old, new in notes:
             log_fn(f"log: {old} -> {new}")
@@ -597,11 +744,13 @@ def rename_accurip_for_discs(album_dir, discs=None, log_fn=None, config=None):
             # For .accurip, we don't have TOC, so use file content's track count? Skip TOC matching for accurip
             continue
     for d, f in sorted(claimed.items()):
+        src = os.path.join(album_dir, f)
         dst = os.path.join(album_dir, _disc_expected_name(pattern, d, ".accurip"))
-        if os.path.normcase(dst) == os.path.normcase(os.path.join(album_dir, f)):
+        if dst == src:
             continue
-        if not os.path.exists(dst):
-            _rename(os.path.join(album_dir, f), dst, notes)
+        if os.path.exists(dst) and os.path.normcase(dst) != os.path.normcase(src):
+            continue
+        _rename(src, dst, notes)
     if log_fn and notes:
         for old, new in notes:
             log_fn(f"accurip: {old} -> {new}")

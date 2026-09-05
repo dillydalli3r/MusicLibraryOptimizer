@@ -5,9 +5,11 @@ per their API etiquette. RYM has no public API — links are user-supplied
 URLs stored as tags, but we validate/parse them here.
 """
 import asyncio
+import json
 import re
 import threading
 import time
+import uuid
 
 import httpx
 
@@ -407,3 +409,112 @@ def parse_rym_album_url(url):
     if RYM_RE.match(url):
         return url
     return None
+
+# --------------------------------------------------------------------------- #
+# covers.musichoarders.xyz (COV) — album cover meta-search
+# --------------------------------------------------------------------------- #
+# COV aggregates cover art from streaming services and databases. Its search
+# endpoint is the same one the website's frontend calls: a POST that streams
+# newline-delimited JSON events (source/cover/count/done/error).
+COV_BASE = "https://covers.musichoarders.xyz"
+# The site's API gate rejects non-browser User-Agents (401), so COV
+# requests use a plain browser UA while MB/LRCLIB keep the app UA.
+COV_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+# The API allows at most 9 active sources per search; prefer high-quality
+# art sources first and fill up with whatever else is enabled.
+COV_SOURCE_PRIORITY = [
+    "qobuz", "applemusic", "tidal", "bandcamp", "deezer", "spotify",
+    "itunes", "discogs", "musicbrainz",
+]
+COV_MAX_SOURCES = 9
+COV_FALLBACK_SOURCES = [
+    "qobuz", "applemusic", "tidal", "bandcamp", "deezer", "spotify",
+    "itunes", "discogs", "musicbrainz",
+]
+
+_cov_sources_cache = {"at": 0.0, "ids": []}
+
+
+def _cov_sources(timeout=15.0):
+    """Enabled source ids from /api/info, cached for an hour."""
+    import time as _time
+    now = _time.time()
+    if _cov_sources_cache["ids"] and now - _cov_sources_cache["at"] < 3600:
+        return _cov_sources_cache["ids"]
+    try:
+        info = httpx.get(f"{COV_BASE}/api/info",
+                         headers={"User-Agent": COV_UA},
+                         timeout=timeout).json()
+        enabled = [s["id"] for s in info.get("sources", []) if s.get("enabled", True)]
+    except Exception:
+        enabled = list(COV_FALLBACK_SOURCES)
+    ordered = [s for s in COV_SOURCE_PRIORITY if s in enabled]
+    ordered += [s for s in enabled if s not in ordered]
+    ids = ordered[:COV_MAX_SOURCES]
+    if not ids:
+        ids = list(COV_FALLBACK_SOURCES)
+    _cov_sources_cache.update(at=now, ids=ids)
+    return ids
+
+
+def cover_search(artist, album, limit=40, timeout=60.0):
+    """Search COV for album covers. Returns a list of
+    {source, small, big, title, artist, tracks, url} dicts sorted by the
+    site's relevance order, capped at *limit*."""
+    if not artist and not album:
+        raise ValueError("artist or album is required")
+    body = {"country": "us", "sources": _cov_sources()}
+    if artist:
+        body["artist"] = artist
+    if album:
+        body["album"] = album
+    headers = {
+        "User-Agent": COV_UA,
+        "Referer": f"{COV_BASE}/",
+        "Origin": COV_BASE,
+        "X-Session": uuid.uuid4().hex,
+    }
+    results = []
+    with httpx.Client(timeout=httpx.Timeout(timeout, read=timeout)) as client:
+        with client.stream("POST", f"{COV_BASE}/api/search", json=body,
+                           headers=headers) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                line = (line or "").strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("type") != "cover":
+                    continue
+                rel = ev.get("releaseInfo") or {}
+                results.append({
+                    "source": ev.get("source"),
+                    "small": ev.get("smallCoverUrl"),
+                    "big": ev.get("bigCoverUrl"),
+                    "title": rel.get("title"),
+                    "artist": rel.get("artist"),
+                    "tracks": rel.get("tracks"),
+                    "url": rel.get("url"),
+                })
+                if len(results) >= limit:
+                    break
+    return results
+
+
+def fetch_image_bytes(url, timeout=60.0):
+    """Download an image URL (cover art hosts serve public CDN files) and
+    return (data, content_type). Only http(s) is allowed."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("invalid image url")
+    with httpx.Client(timeout=httpx.Timeout(timeout, read=timeout),
+                      follow_redirects=True) as client:
+        r = client.get(url, headers={"User-Agent": COV_UA,
+                                     "Referer": f"{COV_BASE}/"})
+        r.raise_for_status()
+        ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+        return r.content, ctype

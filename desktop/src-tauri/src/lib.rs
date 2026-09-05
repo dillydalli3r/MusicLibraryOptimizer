@@ -9,10 +9,17 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::Manager;
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, RunEvent};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
 use tauri_plugin_dialog::DialogExt;
 
 struct BackendState(Mutex<Option<Child>>);
+
+/// The tray's "Start on Login" checkbox, kept in managed state so the
+/// click handler can re-sync its visual with the registry after toggling.
+struct AutostartItem(Mutex<Option<CheckMenuItem<tauri::Wry>>>);
 
 const PORT: &str = "8000";
 
@@ -120,10 +127,95 @@ fn pick_folder(app: tauri::AppHandle) -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+/// Show and focus the main window (tray click / tray menu "Open").
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+fn sync_autostart_item(app: &tauri::AppHandle) {
+    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    if let Some(state) = app.try_state::<AutostartItem>() {
+        if let Some(item) = state.0.lock().unwrap().as_ref() {
+            let _ = item.set_checked(enabled);
+        }
+    }
+}
+
+fn toggle_autostart(app: &tauri::AppHandle) {
+    let autolaunch = app.autolaunch();
+    // Flip according to the registry (the source of truth), then re-sync
+    // the checkbox with whatever actually happened.
+    let result = if autolaunch.is_enabled().unwrap_or(false) {
+        autolaunch.disable()
+    } else {
+        autolaunch.enable()
+    };
+    if let Err(e) = result {
+        eprintln!("[mlo-desktop] autostart toggle failed: {e}");
+    }
+    sync_autostart_item(app);
+}
+
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let open_i = MenuItem::with_id(app, "open", "Open MusicLibraryOptimizer", true, None::<&str>)?;
+    let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
+    let autostart_i = CheckMenuItem::with_id(
+        app, "autostart", "Start on Login", true, autostart_on, None::<&str>,
+    )?;
+    let quit_i = MenuItem::with_id(app, "quit", "Quit (stop backend)", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[&open_i, &autostart_i, &PredefinedMenuItem::separator(app)?, &quit_i],
+    )?;
+
+    if let Some(state) = app.try_state::<AutostartItem>() {
+        *state.0.lock().unwrap() = Some(autostart_i);
+    }
+
+    let mut builder = TrayIconBuilder::with_id("main-tray")
+        .menu(&menu)
+        .tooltip("MusicLibraryOptimizer")
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => show_main_window(app),
+            "autostart" => toggle_autostart(app),
+            "quit" => {
+                // RunEvent::Exit stops the backend.
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    // Left click opens the window; the menu lives on right click.
+    builder = builder.show_menu_on_left_click(false);
+    builder.build(app)?;
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(BackendState(Mutex::new(None)))
+        .manage(AutostartItem(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![pick_folder])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -132,13 +224,31 @@ pub fn run() {
                 std::thread::sleep(Duration::from_secs(2));
                 spawn_backend(&handle);
             });
+            // The app opens to the tray: the main window starts hidden
+            // (visible: false in tauri.conf.json) and is shown from the
+            // tray icon / menu.
+            if let Err(e) = setup_tray(app.handle()) {
+                eprintln!("[mlo-desktop] tray setup failed: {e}");
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                stop_backend(&window.app_handle().clone());
+            // Closing the window hides it to the tray; the app keeps
+            // running (and the icon stays) until Quit is used.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running MusicLibraryOptimizer");
+        .build(tauri::generate_context!())
+        .expect("error while building MusicLibraryOptimizer")
+        .run(|app, event| match event {
+            // Stay alive in the tray when the last window goes away; only
+            // an explicit exit (Quit menu / process kill) ends the app.
+            RunEvent::ExitRequested { code: None, api, .. } => {
+                api.prevent_exit();
+            }
+            RunEvent::Exit => stop_backend(app),
+            _ => {}
+        });
 }
