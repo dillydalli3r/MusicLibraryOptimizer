@@ -48,6 +48,10 @@ def _init():
                     position INTEGER NOT NULL,
                     PRIMARY KEY (playlist_id, path)
                 );
+                CREATE TABLE IF NOT EXISTS likes (
+                    path TEXT PRIMARY KEY,
+                    liked_at REAL NOT NULL
+                );
                 """
             )
 
@@ -278,3 +282,29 @@ def _duration_of(path):
     except Exception:
         pass
     return 0.0
+
+# --------------------------------------------------------------------------- #
+# Liked tracks (heart)
+# --------------------------------------------------------------------------- #
+def list_likes():
+    with _conn() as c:
+        rows = c.execute("SELECT path FROM likes ORDER BY liked_at DESC").fetchall()
+        return [r["path"] for r in rows]
+
+
+def is_liked(path):
+    with _conn() as c:
+        return c.execute("SELECT 1 FROM likes WHERE path=?", (path,)).fetchone() is not None
+
+
+def toggle_like(path):
+    path = str(path or "").strip()
+    if not path:
+        raise ValueError("path required")
+    with _lock:
+        with _conn() as c:
+            if c.execute("SELECT 1 FROM likes WHERE path=?", (path,)).fetchone():
+                c.execute("DELETE FROM likes WHERE path=?", (path,))
+                return False
+            c.execute("INSERT INTO likes (path, liked_at) VALUES (?, ?)", (path, time.time()))
+            return True

@@ -368,6 +368,7 @@ DEFAULT_CONFIG = {
     "ai_base_url": "",
     "ai_api_key": "",
     "ai_model": "",
+    "ai_translate_lang": "en",
 
     # Managed beets tagging (Picard parity).
     "beets_locale": "en",

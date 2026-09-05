@@ -231,6 +231,7 @@ export default function SettingsPage() {
         { k: "ai_base_url", label: "Base URL (e.g. https://api.openai.com/v1)", type: "text" },
         { k: "ai_api_key", label: "API key", type: "text" },
         { k: "ai_model", label: "Model (e.g. gpt-4o-mini)", type: "text" },
+        { k: "ai_translate_lang", label: "Fullscreen player translation language (e.g. en, de)", type: "text" },
       ],
     },
     {

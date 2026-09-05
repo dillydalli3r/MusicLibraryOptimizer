@@ -323,6 +323,20 @@ export const api = {
     json<{ downloads: any[] }>(`${API}/soulseek/downloads`, undefined, 30000),
   soulseekImport: () =>
     json<{ ok: boolean; moved: string[] }>(`${API}/soulseek/import`, { method: "POST" }, 120000),
+
+  likes: () => json<{ paths: string[] }>(`${API}/likes`),
+  likeToggle: (path: string) =>
+    json<{ ok: boolean; liked: boolean }>(`${API}/likes/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }),
+  lyricsAiLines: (mode: "translate" | "transliterate", lines: string[]) =>
+    json<{ mode: string; lines: string[] }>(`${API}/lyrics/ai/lines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, lines }),
+    }, 180000),
   soulseekUser: (username: string) =>
     json<any>(`${API}/soulseek/user/${encodeURIComponent(username)}`, undefined, 30000),
 };

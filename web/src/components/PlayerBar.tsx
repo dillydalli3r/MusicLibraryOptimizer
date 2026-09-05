@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Heart, Maximize2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2 } from "lucide-react";
 import { api } from "../api";
-import { useStore } from "../store";
+import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
+import NowPlayingView from "./NowPlayingView";
 
 export default function PlayerBar() {
   const { queue, index, setIndex, playing, setPlaying, queueId } = useStore();
@@ -13,8 +15,23 @@ export default function PlayerBar() {
   const [loop, setLoop] = useState(false);
   const [vol, setVol] = useState(1);
   const [speed, setSpeed] = useState(1);
+  const [fullscreen, setFullscreen] = useState(false);
+  const qc = useQueryClient();
 
   const current = queue[index] ?? null;
+
+  const { data: likesData } = useQuery({ queryKey: ["likes"], queryFn: api.likes });
+  const liked = !!current && (likesData?.paths ?? []).includes(current.path);
+  const toggleLike = () => {
+    if (!current) return;
+    api
+      .likeToggle(current.path)
+      .then((r) => {
+        qc.invalidateQueries({ queryKey: ["likes"] });
+        toast(`${r.liked ? "Liked" : "Unliked"} — ${current.file.replace(/\.[^.]+$/, "")}`);
+      })
+      .catch((e) => toast(String(e)));
+  };
 
   // Reload + play whenever the queue identity or index changes (keyed on
   // queueId so a fresh queue at the same index still reloads).
@@ -178,6 +195,14 @@ export default function PlayerBar() {
         </button>
       </div>
 
+      <button
+        className={`p-2 rounded hover:bg-raise shrink-0 ${liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"}`}
+        onClick={toggleLike}
+        title={liked ? "Unlike" : "Like this track"}
+      >
+        <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
+      </button>
+
       <div className="flex items-center gap-2 text-xs text-zinc-400 flex-1 max-w-[460px]">
         <span className="w-10 text-right shrink-0">{fmtDuration(time)}</span>
         <input
@@ -211,6 +236,54 @@ export default function PlayerBar() {
           className="w-20 "
         />
       </div>
+
+      <button
+        className="p-2 rounded hover:bg-raise text-zinc-400 hover:text-white shrink-0"
+        onClick={() => setFullscreen(true)}
+        title="Fullscreen player with lyrics"
+      >
+        <Maximize2 className="h-4 w-4" />
+      </button>
+
+      {fullscreen && (
+        <NowPlayingView
+          current={current}
+          queuePos={queue.length > 1 ? `${index + 1}/${queue.length}` : ""}
+          playing={!!playing}
+          time={time}
+          duration={duration}
+          shuffle={shuffle}
+          loop={loop}
+          vol={vol}
+          liked={liked}
+          onTogglePlay={() => {
+            const a = audioRef.current;
+            if (!a) return;
+            if (playing) {
+              a.pause();
+              setPlaying(null);
+            } else {
+              a.play().catch(() => {});
+              setPlaying(current.path);
+            }
+          }}
+          onSeek={(t) => {
+            const a = audioRef.current;
+            if (!a) return;
+            a.currentTime = t;
+            setTime(t);
+          }}
+          onStep={step}
+          onToggleShuffle={() => setShuffle(!shuffle)}
+          onToggleLoop={() => setLoop(!loop)}
+          onVolume={(v) => {
+            setVol(v);
+            if (audioRef.current) audioRef.current.volume = v;
+          }}
+          onToggleLike={toggleLike}
+          onClose={() => setFullscreen(false)}
+        />
+      )}
     </div>
   );
 }

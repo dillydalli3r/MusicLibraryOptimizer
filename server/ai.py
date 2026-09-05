@@ -14,6 +14,7 @@ Two kinds of helpers:
   each line's slot, weighted by word length.
 """
 import math
+import os
 import re
 
 import httpx
@@ -175,3 +176,89 @@ def wordsync_lrc(lrc_text):
             cursor += share
         out.append(f"{_fmt_ts(t)} " + " ".join(pieces))
     return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# Line-aligned transforms for the fullscreen player: translation and
+# transliteration (romanization). Results are cached on disk per
+# (mode, language, content) so a track is only processed once.
+# --------------------------------------------------------------------------- #
+import hashlib
+
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
+                          "lyrics_ai_cache")
+
+XLIT_SYSTEM = (
+    "You romanize song lyrics. Convert every line from its original script "
+    "(e.g. Japanese kana/kanji, Cyrillic, Hangul, Hanbi, Arabic, Devanagari) "
+    "into Latin transliteration. Keep the same language, do NOT translate. "
+    "Keep the original line count and order: exactly one output line per "
+    "input line, same numbering. Output ONLY the transformed lines."
+)
+
+TRANSLATE_SYSTEM = (
+    "You translate song lyrics. Translate every line into the requested "
+    "target language. Keep the original line count and order: exactly one "
+    "output line per input line, same numbering. Keep it singable and "
+    "literal enough to follow along; do not add commentary. Output ONLY the "
+    "translated lines."
+)
+
+
+def _cache_path(mode, lang, lines):
+    h = hashlib.sha1(("|".join([mode, lang] + lines)).encode("utf-8")).hexdigest()
+    return os.path.join(_CACHE_DIR, f"{mode}-{lang}-{h[:20]}.json")
+
+
+def transform_lines(config, lines, mode, lang=""):
+    """Translate ('translate') or transliterate ('transliterate') lyric
+    lines, preserving line count. Disk-cached; raises ValueError when AI
+    is not configured."""
+    lines = [str(line) for line in lines]
+    if not lines:
+        return []
+    base, key, model = ai_config(config)
+    if not base or not model:
+        raise ValueError("AI is not configured — set base URL and model in Settings → AI")
+    if mode not in ("translate", "transliterate"):
+        raise ValueError(f"unknown mode: {mode}")
+    if not lang:
+        lang = str(config.get("ai_translate_lang") or "en").strip() or "en"
+
+    cache = _cache_path(mode, lang, lines)
+    try:
+        import json
+        with open(cache, "r", encoding="utf-8") as fh:
+            cached = json.load(fh)
+        if isinstance(cached, list) and len(cached) == len(lines):
+            return cached
+    except OSError:
+        pass
+
+    system = TRANSLATE_SYSTEM if mode == "translate" else XLIT_SYSTEM
+    out = []
+    import json
+    CHUNK = 40
+    for start in range(0, len(lines), CHUNK):
+        chunk = lines[start:start + CHUNK]
+        numbered = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(chunk))
+        user = numbered
+        if mode == "translate":
+            user = f"Target language: {lang}\n\n{numbered}"
+        text = ai_chat(config, system, user)
+        got = [re.sub(r"^\s*\d+\.\s*", "", ln).strip()
+               for ln in text.splitlines() if ln.strip()]
+        # line-count repair: the model must echo one line per input line
+        while len(got) < len(chunk):
+            got.append("")
+        if len(got) > len(chunk):
+            got = got[:len(chunk)]
+        out.extend(got)
+
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_cache_path(mode, lang, lines), "w", encoding="utf-8") as fh:
+            json.dump(out, fh, ensure_ascii=False)
+    except OSError:
+        pass
+    return out

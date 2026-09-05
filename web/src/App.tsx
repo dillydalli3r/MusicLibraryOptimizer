@@ -97,7 +97,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-bg text-zinc-100 flex flex-col">
+    <div className="h-screen overflow-hidden bg-bg text-zinc-100 flex flex-col">
       <header className="h-14 shrink-0 border-b border-border bg-panel flex items-center gap-3 px-4 sticky top-0 z-30">
         <div className="flex items-center gap-2">
           <span className="h-7 w-7 rounded-md bg-white text-black flex items-center justify-center shadow-sm">

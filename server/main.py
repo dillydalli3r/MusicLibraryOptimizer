@@ -709,6 +709,50 @@ def lyrics_embed(req: LyricsEmbedRequest):
     return {"ok": True}
 
 
+class LyricsAiLinesRequest(BaseModel):
+    mode: str  # "translate" | "transliterate"
+    lines: List[str] = []
+
+
+@app.post("/api/lyrics/ai/lines")
+async def lyrics_ai_lines(req: LyricsAiLinesRequest):
+    """Line-aligned translate / transliterate for the fullscreen player.
+    Results are cached on disk per (mode, language, content)."""
+    cfg = load_config()
+    from server import ai as ai_mod
+    try:
+        result = await asyncio.to_thread(
+            ai_mod.transform_lines, cfg, req.lines, req.mode,
+            str(cfg.get("ai_translate_lang") or "en"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"AI transform failed: {e}")
+    return {"mode": req.mode, "lines": result}
+
+
+class LikeToggleRequest(BaseModel):
+    path: str
+
+
+@app.get("/api/likes")
+def likes_list():
+    """Paths of all liked (hearted) tracks, newest first."""
+    return {"paths": pl_mod.list_likes()}
+
+
+@app.post("/api/likes/toggle")
+def likes_toggle(req: LikeToggleRequest):
+    p = os.path.normpath(req.path)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    try:
+        liked = pl_mod.toggle_like(p)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "liked": liked}
+
+
 class LyricsAiRequest(BaseModel):
     mode: str  # "clean" | "repair" | "wordsync"
     text: str = ""
