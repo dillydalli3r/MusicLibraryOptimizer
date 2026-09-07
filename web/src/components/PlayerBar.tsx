@@ -279,20 +279,18 @@ export default function PlayerBar() {
           )}
         </button>
 
-        <div className="min-w-0 w-52 shrink-0">
+        <div className="min-w-0 w-56 shrink-0" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
           {current ? (
             <>
               <div className="text-sm truncate font-semibold">{displayTitle}</div>
+              {/* bitrate · depth · rate get their own line so the readout
+                  never truncates against artist/album text */}
+              <div className="text-[10px] font-mono text-zinc-500 truncate min-h-[14px]" title="Codec · bitrate · bit depth · sample rate">
+                {techStr}
+              </div>
               <div className="text-[11px] text-zinc-500 truncate">
-                {[current.artist ?? current.albumPath.split("/").pop(), current.album]
-                  .filter(Boolean)
-                  .join(" · ")}
-                <span className="ml-2">{queue.length > 1 ? `${index + 1}/${queue.length}` : ""}</span>
-                {techStr && (
-                  <span className="ml-2 font-mono text-[10px] text-zinc-600" title="Bitrate · sample rate · bit depth">
-                    {techStr}
-                  </span>
-                )}
+                {[current.album ?? current.artist ?? current.albumPath.split("/").pop()].filter(Boolean).join(" · ")}
+                <span className="ml-2 font-mono text-[10px] text-zinc-600">{queue.length > 1 ? `${index + 1}/${queue.length}` : ""}</span>
               </div>
             </>
           ) : (

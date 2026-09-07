@@ -91,6 +91,9 @@ export default function AlbumPage() {
   if (isLoading || !data) return <div className="p-8 text-zinc-500">Loading album…</div>;
 
   const tracks = sortRows(data.tracks, sort);
+  // highest disc number across the album (filename fallback included) —
+  // drives the "N discs" note in the header and the Disc rows below
+  const maxDisc = data.tracks.reduce((m, t) => Math.max(m, t.discnumber ?? 1), 1);
   // One condensed verdict: grading problems OR a FAKE/Mix audit → FAIL.
   const verdictPass = !!data.pass && !auditFails(data.audit_summary);
   const issueEntries = Object.entries(data.issues ?? {});
@@ -365,6 +368,13 @@ export default function AlbumPage() {
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <MediaChip media={data.media} />
+            {/* disc count lives in the header too, so multi-disc albums
+                announce themselves before the tracklist */}
+            {maxDisc > 1 && (
+              <span className="text-xs text-zinc-500">
+                {maxDisc} disc{maxDisc === 1 ? "" : "s"}
+              </span>
+            )}
           </div>
           {issueEntries.length > 0 && (
             <div className="mt-2.5">
@@ -549,8 +559,8 @@ export default function AlbumPage() {
                 <Fragment key={g.disc ?? 0}>
                   {multiDisc && (
                     <tr className="bg-panel/60">
-                      <td colSpan={8} className="td text-[10px] uppercase tracking-wider text-zinc-500">
-                        Disc {g.disc ?? "?"}
+                      <td colSpan={8} className="td !py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                        Disc {g.disc ?? "—"}
                       </td>
                     </tr>
                   )}
