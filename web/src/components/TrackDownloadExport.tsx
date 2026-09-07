@@ -17,10 +17,12 @@ const BITRATES = [96, 128, 160, 192, 256, 320, 448, 500];
 
 /** "Download" keeps the original file as a browser download; "Export"
  * transcodes to the chosen codec/bitrate server-side and saves that. */
-export default function TrackDownloadExport({ path, title, compact }: {
+export default function TrackDownloadExport({ path, title, compact, iconOnly }: {
   path: string;
   title?: string;
   compact?: boolean;
+  /** Icon-only buttons (for the player bar) — labels live in the tooltips. */
+  iconOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [codec, setCodec] = useState("flac");
@@ -56,22 +58,30 @@ export default function TrackDownloadExport({ path, title, compact }: {
     }
   };
 
+  const btnCls = iconOnly
+    ? "p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white"
+    : "btn-ghost !py-1 text-xs";
+
   return (
-    <div className={compact ? "inline-flex items-center gap-1" : "flex items-center gap-1.5 flex-wrap"}>
+    <div className={compact || iconOnly ? "inline-flex items-center gap-1" : "flex items-center gap-1.5 flex-wrap"}>
       <button
-        className="btn-ghost !py-1 text-xs"
+        className={btnCls}
         onClick={downloadOriginal}
-        title="Save the original, untouched file in the browser"
+        title="Download — save the original, untouched file"
+        aria-label="Download"
       >
-        <Download className="h-3.5 w-3.5" /> Download
+        <Download className="h-4 w-4" />
+        {!iconOnly && " Download"}
       </button>
       <div className="relative">
         <button
-          className="btn-ghost !py-1 text-xs"
+          className={btnCls}
           onClick={() => setOpen(!open)}
-          title="Transcode and save as FLAC / MP3 / … with a chosen bitrate"
+          title="Export — transcode to FLAC / MP3 / … with a chosen bitrate"
+          aria-label="Export"
         >
-          <FileOutput className="h-3.5 w-3.5" /> Export
+          <FileOutput className="h-4 w-4" />
+          {!iconOnly && " Export"}
         </button>
         {open && (
           <div className="absolute z-50 right-0 mt-1 w-60 glass rounded-lg bg-zinc-950/95 border border-border shadow-2xl p-2.5 space-y-2">

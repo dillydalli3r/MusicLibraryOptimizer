@@ -150,11 +150,13 @@ export function LinkEditorButton({
   mode,
   paths,
   current,
+  iconOnly,
   onSaved,
 }: {
   mode: "artist" | "album" | "track";
   paths: string[];
   current?: Record<string, unknown>;
+  iconOnly?: boolean;
   onSaved?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -206,11 +208,13 @@ export function LinkEditorButton({
   return (
     <div className="relative">
       <button
-        className="btn-ghost !py-1.5 text-xs"
+        className={iconOnly ? "p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white" : "btn-ghost !py-1.5 text-xs"}
         onClick={() => setOpen(!open)}
         title="Paste MusicBrainz / RateYourMusic links"
+        aria-label="Links"
       >
-        <Link2 className="h-3.5 w-3.5" /> Links
+        <Link2 className="h-4 w-4" />
+        {!iconOnly && " Links"}
       </button>
       {open && (
         <>

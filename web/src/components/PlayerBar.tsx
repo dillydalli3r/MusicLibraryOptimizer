@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Disc3, Heart, Maximize2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2 } from "lucide-react";
+import { Disc3, Heart, ListPlus, Maximize2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
@@ -16,6 +16,7 @@ export default function PlayerBar() {
   const [loop, setLoop] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
+  const [plOpen, setPlOpen] = useState(false);
   const qc = useQueryClient();
 
   const current = queue[index] ?? null;
@@ -166,6 +167,37 @@ export default function PlayerBar() {
   const fmtSpeed = (s: number) =>
     s === 1 ? "1×" : `${s.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}×`;
 
+  const { data: playlists } = useQuery({
+    queryKey: ["playlists"],
+    queryFn: api.playlists,
+    enabled: plOpen,
+  });
+  const addToPlaylist = async (pid: number, name: string) => {
+    if (!current) return;
+    try {
+      await api.playlistAdd(pid, [current.path]);
+      toast(`Added “${displayTitle}” to ${name}`);
+      setPlOpen(false);
+      qc.invalidateQueries({ queryKey: ["playlists"] });
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+  const newPlaylistAndAdd = async () => {
+    if (!current) return;
+    const name = window.prompt("New playlist name");
+    if (!name?.trim()) return;
+    try {
+      const pl = await api.createPlaylist(name.trim(), "manual");
+      await api.playlistAdd(pl.id, [current.path]);
+      toast(`Added “${displayTitle}” to ${name.trim()}`);
+      setPlOpen(false);
+      qc.invalidateQueries({ queryKey: ["playlists"] });
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
   const step = (dir: 1 | -1) => {
     const n = queue.length;
     if (!n) return;
@@ -213,7 +245,7 @@ export default function PlayerBar() {
     // sits ABOVE the transport controls; the right cluster keeps like /
     // volume / fullscreen.
     <div className="shrink-0 px-3 pb-3 pt-1">
-    <div className="h-20 rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-4 px-4">
+    <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 px-4">
       <audio
         ref={audioRef}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
@@ -312,8 +344,46 @@ export default function PlayerBar() {
         </div>
       </div>
 
-      {/* keep the file: browser download of the original + transcode export */}
-      <TrackDownloadExport path={current.path} compact />
+      {/* right cluster: add to playlist · download/export · like · volume · fullscreen */}
+      <div className="relative">
+        <button
+          className={`p-2 rounded-lg hover:bg-raise shrink-0 ${plOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"}`}
+          onClick={() => setPlOpen(!plOpen)}
+          title="Add to playlist"
+          aria-label="Add to playlist"
+        >
+          <ListPlus className="h-4 w-4" />
+        </button>
+        {plOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setPlOpen(false)} />
+            <div className="absolute right-0 bottom-full mb-2 z-50 w-56 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-64 overflow-auto">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Add to playlist</div>
+              <button
+                className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-accent-soft"
+                onClick={newPlaylistAndAdd}
+              >
+                <ListPlus className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" /> New playlist…
+              </button>
+              {(playlists ?? []).map((p) => (
+                <button
+                  key={p.id}
+                  className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300 flex items-center justify-between gap-2"
+                  onClick={() => addToPlaylist(p.id, p.name)}
+                >
+                  <span className="truncate">{p.name}</span>
+                  <span className="text-[10px] text-zinc-600 shrink-0">{p.track_count}</span>
+                </button>
+              ))}
+              {(playlists ?? []).length === 0 && (
+                <div className="text-[10px] text-zinc-600 px-2 py-1">No playlists yet — create one above.</div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      <TrackDownloadExport path={current.path} iconOnly />
 
       <button
         className={`p-2 rounded-lg hover:bg-raise shrink-0 ${liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"}`}

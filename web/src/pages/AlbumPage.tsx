@@ -405,16 +405,18 @@ export default function AlbumPage() {
             />
             <span className="w-px h-5 bg-border mx-0.5" />
             <button
-              className="btn-primary"
+              className="btn-primary !p-2.5"
               onClick={() => playNow(queueTracks)}
               title="Play the album from the top"
+              aria-label="Play album"
             >
-              <Play className="h-4 w-4 fill-current" /> Play album
+              <Play className="h-4 w-4 fill-current" />
             </button>
             <LinkEditorButton
               mode="album"
               paths={data.tracks.map((t) => t.path)}
               current={(data.meta ?? {}) as Record<string, unknown>}
+              iconOnly
             />
             <FavHeart
               kind="album"
