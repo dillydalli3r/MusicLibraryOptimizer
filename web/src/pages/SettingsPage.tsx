@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Save, RotateCcw, Check } from "lucide-react";
+import { FolderOpen, Save, RotateCcw, Check, Eye, EyeOff } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 import { applyAccent } from "../App";
@@ -39,13 +39,16 @@ export default function SettingsPage() {
   // the group tables exist).
   const [q, setQ] = useState("");
   const searching = q.trim().length >= 2;
+  // which password fields are currently revealed
+  const [showPasswords, setShowPasswords] = useState<Set<string>>(new Set());
 
   // ---- script options (persisted to config; /api/run uses them as defaults) ----
   type CfgField =
     | { k: string; label: string; type: "bool" }
     | { k: string; label: string; type: "number"; min?: number; max?: number; step?: number }
     | { k: string; label: string; type: "select"; options: [string, string][] }
-    | { k: string; label: string; type: "text" };
+    | { k: string; label: string; type: "text" }
+    | { k: string; label: string; type: "password" };
   interface CfgGroup {
     title: string;
     blurb?: string;
@@ -273,7 +276,7 @@ export default function SettingsPage() {
       blurb: "Shares = your music folder. Downloads land in the download dir below; use the Soulseek page to search and download. Install slskd from the Dependencies tab.",
       fields: [
         { k: "soulseek_username", label: "Soulseek username", type: "text" },
-        { k: "soulseek_password", label: "Soulseek password", type: "text" },
+        { k: "soulseek_password", label: "Soulseek password", type: "password" },
         { k: "soulseek_description", label: "Profile description (shown to other users)", type: "text" },
         { k: "soulseek_listen_port", label: "Listen port", type: "number", min: 1024, max: 65535 },
         { k: "soulseek_web_port", label: "Web/API port", type: "number", min: 1024, max: 65535 },
@@ -653,6 +656,33 @@ export default function SettingsPage() {
                 value={String(scriptCfg[f.k] ?? "")}
                 onChange={(e) => setCfg(f.k, e.target.value)}
               />
+            </div>
+          ) : f.type === "password" ? (
+            <div className="flex items-center gap-2 w-full">
+              <span className="flex-1 min-w-0 truncate">{f.label}</span>
+              <div className="relative shrink-0">
+                <input
+                  className="input !w-32 !py-0.5 !pr-7 text-[11px]"
+                  type={showPasswords.has(f.k) ? "text" : "password"}
+                  value={String(scriptCfg[f.k] ?? "")}
+                  onChange={(e) => setCfg(f.k, e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200"
+                  title={showPasswords.has(f.k) ? "Hide password" : "Show password"}
+                  onClick={() =>
+                    setShowPasswords((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(f.k)) next.delete(f.k);
+                      else next.add(f.k);
+                      return next;
+                    })
+                  }
+                >
+                  {showPasswords.has(f.k) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </button>
+              </div>
             </div>
           ) : (
             <div className="flex items-center gap-2 w-full">

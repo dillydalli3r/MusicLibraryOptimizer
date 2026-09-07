@@ -6,10 +6,10 @@ import { api } from "../api";
 import { useStore } from "../store";
 import { useFavorites, useTrackLikes } from "../lib/favs";
 import { EmptyState } from "../components/Badges";
-import CoverImg from "../components/CoverImg";
+import AlbumCard from "../components/AlbumCard";
 import FavHeart from "../components/FavHeart";
 import { fmtDuration } from "./LibraryPage";
-import { albumRef, artistRef, artistMbid } from "../lib/refs";
+import { artistRef, artistMbid } from "../lib/refs";
 import type { Album, Artist, Playlist, Track } from "../types";
 
 const TABS = [
@@ -175,7 +175,6 @@ function LikedTracks() {
 function FavAlbums() {
   const { data: favs, isLoading } = useFavorites();
   const { albums } = useLibraryMaps();
-  const playNow = useStore((s) => s.playNow);
 
   const rows = useMemo(
     () =>
@@ -189,36 +188,15 @@ function FavAlbums() {
   if (!rows.length)
     return <EmptyState title="No favorite albums yet" hint="Heart an album on its page or in the library grid." />;
 
+  // Same card layout as the library grid (shared AlbumCard).
   return (
-    <div className="space-y-1">
-      {rows.map(({ album: al, artist: a }) => {
-        const artistName = displayArtist(al, a);
-        const q = (al.tracks ?? []).map((t) => ({
-          path: t.path, file: t.file, albumPath: al.path,
-          artist: artistName, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
-        }));
-        return (
-          <div key={al.path} className="group flex items-center gap-3 bg-card border border-border rounded-lg px-3 py-1.5 hover:border-accent/40 transition-colors">
-            <button
-              className="btn-ghost !px-1.5 !py-1 shrink-0 opacity-0 group-hover:opacity-100 transition-colors"
-              title="Play album"
-              onClick={() => q.length && playNow(q)}
-            >
-              <Play className="h-3.5 w-3.5" />
-            </button>
-            <CoverImg albumPath={al.path} coverFile={al.cover_file} wrapperClass="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0" />
-            <Link to={albumRef(al)} className="text-sm font-medium truncate hover:text-accent-soft min-w-0" title={al.meta?.ALBUM ?? al.path}>
-              {al.meta?.ALBUM ?? al.path.split("/").pop()}
-            </Link>
-            <span className="text-xs text-zinc-500 truncate">
-              {artistName}
-              {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}
-            </span>
-            <span className="text-xs text-zinc-600 ml-auto shrink-0">{al.track_count} tracks</span>
-            <FavHeart kind="album" id={al.path} mbid={al.meta?.MUSICBRAINZ_ALBUMID} iconClass="h-3.5 w-3.5" />
-          </div>
-        );
-      })}
+    <div
+      className="grid gap-x-4 gap-y-5"
+      style={{ gridTemplateColumns: "repeat(auto-fill, minmax(164px, 1fr))" }}
+    >
+      {rows.map(({ album: al, artist: a }) => (
+        <AlbumCard key={al.path} al={al} artistName={displayArtist(al, a)} />
+      ))}
     </div>
   );
 }

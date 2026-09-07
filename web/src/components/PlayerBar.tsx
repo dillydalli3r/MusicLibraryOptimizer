@@ -5,6 +5,7 @@ import { api } from "../api";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
 import NowPlayingView from "./NowPlayingView";
+import TrackDownloadExport from "./TrackDownloadExport";
 
 export default function PlayerBar() {
   const { queue, index, setIndex, playing, setPlaying, queueId, vol, setVol } = useStore();
@@ -212,7 +213,7 @@ export default function PlayerBar() {
     // sits ABOVE the transport controls; the right cluster keeps like /
     // volume / fullscreen.
     <div className="shrink-0 px-3 pb-3 pt-1">
-    <div className="h-[5.5rem] rounded-2xl border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-4 px-4">
+    <div className="h-20 rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-4 px-4">
       <audio
         ref={audioRef}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
@@ -220,7 +221,7 @@ export default function PlayerBar() {
       />
 
       <button
-        className="relative h-14 w-14 rounded-lg overflow-hidden border border-border bg-raise shrink-0 flex items-center justify-center hover:scale-[1.03] transition-transform"
+        className="relative h-16 w-16 rounded-lg overflow-hidden border border-border bg-raise shrink-0 flex items-center justify-center hover:scale-[1.03] transition-transform"
         onClick={() => setFullscreen(true)}
         title="Album art — click for the fullscreen player"
       >
@@ -310,6 +311,9 @@ export default function PlayerBar() {
           </button>
         </div>
       </div>
+
+      {/* keep the file: browser download of the original + transcode export */}
+      <TrackDownloadExport path={current.path} compact />
 
       <button
         className={`p-2 rounded-lg hover:bg-raise shrink-0 ${liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"}`}

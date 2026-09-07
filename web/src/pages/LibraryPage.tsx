@@ -10,10 +10,11 @@ import { toast, useStore } from "../store";
 import { sortRows, SortHeader, groupByDisc, type SortState } from "../lib/sort.tsx";
 import { gradeSliver, statusFor, auditFails } from "../lib/status";
 import { albumRef, trackRef, artistRef } from "../lib/refs";
-import { EmptyState, GradeBadge, MediaChip, AdvisoryBadge, mediaShort } from "../components/Badges";
+import { EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "../components/Badges";
 import { forceDict, loadForceSel } from "../lib/force";
 import CoverImg from "../components/CoverImg";
 import FavHeart from "../components/FavHeart";
+import AlbumCard from "../components/AlbumCard";
 import StatsPanel from "../components/StatsPanel";
 import TrackDetails from "../components/TrackDetails";
 import type { Album, Artist, Track } from "../types";
@@ -655,72 +656,15 @@ const toggleExpand = (path: string) =>
                   </div>
                 )}
                 {sec.albums.map((al) => {
-                  const st = statusFor(!!al.pass, al.audit_summary);
                   const sel = selection.albums.includes(al.path);
                   return (
-                    <div key={al.path} className={`group relative rounded-xl p-2 transition-colors ${sel ? "bg-accent/10 ring-1 ring-accent/30" : "hover:bg-panel/70"}`}>
-                      <div className="relative">
-                        <Link to={albumRef(al)} title="Open album page" className="block">
-                          <CoverImg
-                            albumPath={al.path}
-                            coverFile={al.cover_file}
-                            wrapperClass="aspect-square w-full rounded-xl shadow-lg ring-1 ring-black/40 overflow-hidden"
-                          />
-                        </Link>
-                        <div
-                          className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 rounded-md px-1 py-0.5"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input type="checkbox" checked={sel} onChange={() => toggleAlbum(al.path)} title="Select album" />
-                        </div>
-                        {(() => {
-                          const ms = mediaShort(al.media || al.meta?.MEDIA);
-                          return ms ? (
-                            <span
-                              className="absolute bottom-1.5 right-1.5 bg-black/65 text-zinc-200 text-[9px] font-semibold tracking-wide rounded px-1 py-0.5 border border-white/10"
-                              title={`Media: ${al.media || al.meta?.MEDIA}`}
-                            >
-                              {ms}
-                            </span>
-                          ) : null;
-                        })()}
-                        <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <FavHeart kind="album" id={al.path} mbid={al.meta?.MUSICBRAINZ_ALBUMID} className="!p-1.5 bg-black/60" iconClass="h-4 w-4" />
-                        </div>
-                        <button
-                          className="btn-primary absolute left-2 bottom-3 !rounded-lg !p-3 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-2xl"
-                          title="Play album"
-                          onClick={() =>
-                            useStore.getState().playNow(
-                              (al.tracks ?? []).map((t) => ({
-                                path: t.path, file: t.file, albumPath: al.path,
-                                artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
-                              }))
-                            )
-                          }
-                        >
-                          <Play className="h-4 w-4 fill-current" />
-                        </button>
-                      </div>
-                      <div className="mt-2 px-0.5">
-                        <Link
-                          to={albumRef(al)}
-                          className="text-sm font-medium truncate block hover:text-accent-soft"
-                          title={al.meta?.ALBUM ?? al.path}
-                        >
-                          {al.meta?.ALBUM ?? al.path.split("/").pop()}
-                        </Link>
-                        <div className="text-[11px] text-zinc-500 truncate flex items-center gap-1.5 mt-0.5">
-                          <span className={`h-1.5 w-1.5 rounded-full ${st.edge} inline-block shrink-0`} title={st.label} />
-                          <span className="truncate">
-                            {al.artist}
-                            {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}
-                            {al.meta?.ORIGINALDATE && String(al.meta.ORIGINALDATE).slice(0, 4) !== String(al.meta?.DATE ?? "").slice(0, 4)
-                              ? ` (orig. ${String(al.meta.ORIGINALDATE).slice(0, 4)})` : ""}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
+                    <AlbumCard
+                      key={al.path}
+                      al={al}
+                      selectable
+                      selected={sel}
+                      onSelect={toggleAlbum}
+                    />
                   );
                 })}
               </Fragment>

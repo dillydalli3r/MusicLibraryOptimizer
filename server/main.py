@@ -1969,6 +1969,51 @@ def soulseek_shares_refresh():
     return {"ok": ok, "message": "share index refreshed" if ok else "restart failed"}
 
 
+class SoulseekLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/soulseek/login")
+def soulseek_login(req: SoulseekLoginRequest):
+    """Save Soulseek credentials, restart slskd with them, and wait for the
+    network login. The Soulseek server registers brand-new usernames on
+    first login, so the same call covers signing in AND creating an
+    account; failure means the credentials were rejected (wrong password
+    for an existing account)."""
+    from server import soulseek
+
+    username = req.username.strip()
+    if not username or not req.password:
+        raise HTTPException(400, "username and password are required")
+    cfg = load_config()
+    cfg["soulseek_username"] = username
+    cfg["soulseek_password"] = req.password
+    save_config(cfg)
+
+    soulseek.restart()
+    deadline = time.time() + 25.0
+    logged_in = False
+    while time.time() < deadline:
+        try:
+            state = soulseek.server_state() or {}
+        except Exception:
+            state = {}
+        logged_in = bool(state.get("isLoggedIn"))
+        if logged_in:
+            break
+        time.sleep(1.0)
+    if logged_in:
+        _refresh_slskd_shares_soon()
+        return {"ok": True, "logged_in": True,
+                "message": f"Logged in to Soulseek as {username}"}
+    return {"ok": False, "logged_in": False,
+            "message": ("The Soulseek server did not accept these credentials "
+                        "— if this username already exists, the password may "
+                        "be wrong; otherwise try again in a minute (new "
+                        "accounts can take a moment to register)")}
+
+
 def _refresh_slskd_shares_soon():
     """Library changed (organize/import/remove) — refresh the slskd share
     index in the background so the network always sees the current paths."""

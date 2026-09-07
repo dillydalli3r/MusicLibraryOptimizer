@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Play, Power, RefreshCw, Search, User, Zap, Square, FileCheck2 } from "lucide-react";
+import { Download, Eye, EyeOff, Play, Power, RefreshCw, Search, User, Zap, Square, FileCheck2 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 import { EmptyState } from "../components/Badges";
@@ -140,6 +140,83 @@ function GroupBadges({ g }: { g: SlskGroup }) {
 /** Strip a MusicBrainz URL down to the bare release MBID. */
 const releaseMbid = (s: string) =>
   /(?:release\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(s.trim())?.[1] ?? "";
+
+/** Sign in to the Soulseek network (or register a brand-new username — the
+ * server creates accounts on first login). Shown whenever slskd is running
+ * but not logged in. */
+function LoginCard({ onDone }: { onDone: () => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const login = async () => {
+    if (!username.trim() || !password) {
+      toast("Enter a username and password");
+      return;
+    }
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await api.soulseekLogin(username.trim(), password);
+      setResult(r.message);
+      if (r.logged_in) {
+        toast(r.message);
+        onDone();
+      }
+    } catch (e) {
+      setResult(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-lg border border-amber-900/50 p-4">
+      <div className="text-xs font-semibold uppercase tracking-wider text-amber-300 mb-1.5">
+        Not logged in to Soulseek
+      </div>
+      <p className="text-[11px] text-zinc-500 mb-2.5">
+        Enter your Soulseek credentials to search, download and share. If the
+        username doesn't exist yet, the network registers it automatically on
+        first login — same button, no separate sign-up.
+      </p>
+      <div className="flex gap-2 flex-wrap">
+        <input
+          className="input w-52"
+          placeholder="Soulseek username"
+          value={username}
+          autoComplete="username"
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <div className="relative">
+          <input
+            className="input w-52 pr-9"
+            placeholder="Password"
+            type={showPw ? "text" : "password"}
+            value={password}
+            autoComplete="current-password"
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !busy && login()}
+          />
+          <button
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200"
+            onClick={() => setShowPw(!showPw)}
+            title={showPw ? "Hide password" : "Show password"}
+            type="button"
+          >
+            {showPw ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+        <button className="btn-primary" onClick={login} disabled={busy}>
+          {busy ? "Connecting…" : "Log in / create account"}
+        </button>
+      </div>
+      {result && <div className="text-[11px] text-zinc-400 mt-2">{result}</div>}
+    </div>
+  );
+}
 
 /** Live view of the auto-import job (search → log test → download → audit → import). */
 function AutoPanel({ initialMbid }: { initialMbid?: string }) {
@@ -460,6 +537,8 @@ export default function SoulseekPage() {
           <button className="btn-ghost" onClick={() => { refetchStatus(); refetchDownloads(); }}><RefreshCw className="h-4 w-4" /></button>
         </div>
       </div>
+
+      {running && status?.logged_in === false && <LoginCard onDone={refetchStatus} />}
 
       <AutoPanel initialMbid={releaseParam} />
 

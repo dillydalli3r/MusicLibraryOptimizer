@@ -360,6 +360,12 @@ export const api = {
     }, 240000),
   soulseekSharesRefresh: () =>
     json<{ ok: boolean; message: string }>(`${API}/soulseek/shares/refresh`, { method: "POST" }, 120000),
+  soulseekLogin: (username: string, password: string) =>
+    json<{ ok: boolean; logged_in: boolean; message: string }>(`${API}/soulseek/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    }, 90000),
   mbGenresWrite: (paths: string[], count?: number) =>
     json<{ ok: boolean; updated: number; genres: string[]; per_track: boolean }>(`${API}/mb/genres`, {
       method: "POST",

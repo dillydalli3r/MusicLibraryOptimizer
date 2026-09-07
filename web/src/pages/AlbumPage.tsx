@@ -337,14 +337,13 @@ export default function AlbumPage() {
               : data.meta?.DATE ?? "—"}
           </div>
           <div className="flex items-center gap-2 min-w-0">
-            {/* verdict dot (replaces the old PASS/FAIL badge) — click for the problems */}
+            <h1 className="text-3xl font-bold tracking-tight truncate">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
+            {/* verdict sits right of the title — click for the problems */}
             <button
               className={`h-2.5 w-2.5 rounded-full shrink-0 ${verdictPass ? "bg-emerald-400" : "bg-red-500"}`}
               title={verdictPass ? `Pass — ${data.grade_pct ?? "?"}% of checks` : `Fail — ${data.grade_pct ?? "?"}% · ${issueEntries.length} problem type(s)`}
               onClick={() => setIssuesOpen(!issuesOpen)}
             />
-            <h1 className="text-3xl font-bold tracking-tight truncate">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
-            <FavHeart kind="album" id={data.path} mbid={data.meta?.MUSICBRAINZ_ALBUMID} />
           </div>
           {/* artist opens the library's artist page */}
           <Link
@@ -361,9 +360,6 @@ export default function AlbumPage() {
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <MediaChip media={data.media} />
-            <span className="chip bg-zinc-800 text-zinc-400 border border-border">
-              {data.pass_count}/{data.total_checks} checks
-            </span>
           </div>
           {issueEntries.length > 0 && (
             <div className="mt-2.5">
@@ -395,7 +391,8 @@ export default function AlbumPage() {
               )}
             </div>
           )}
-          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+          {/* bottom action row: identity links + every primary button */}
+          <div className="mt-4 pt-3 border-t border-border/60 flex flex-wrap items-center gap-2">
             {/* exactly one MusicBrainz + one RateYourMusic link: prefer the
                 release over its release group */}
             <LinkChips
@@ -406,69 +403,75 @@ export default function AlbumPage() {
                 "RATEYOURMUSIC_ALBUM",
               ]}
             />
+            <span className="w-px h-5 bg-border mx-0.5" />
+            <button
+              className="btn-primary"
+              onClick={() => playNow(queueTracks)}
+              title="Play the album from the top"
+            >
+              <Play className="h-4 w-4 fill-current" /> Play album
+            </button>
+            <LinkEditorButton
+              mode="album"
+              paths={data.tracks.map((t) => t.path)}
+              current={(data.meta ?? {}) as Record<string, unknown>}
+            />
+            <FavHeart
+              kind="album"
+              id={data.path}
+              mbid={data.meta?.MUSICBRAINZ_ALBUMID}
+              className="!p-2 border border-border rounded-lg hover:!bg-raise"
+              iconClass="h-4 w-4"
+            />
+            <OverflowMenu
+              buttonTitle="All album actions"
+              sections={[
+                {
+                  items: [
+                    { label: "Play next", icon: ListStart, onClick: () => enqueue("next") },
+                    { label: "Add to queue", icon: ListPlus, onClick: () => enqueue("end") },
+                  ],
+                },
+                {
+                  title: "Album",
+                  items: [
+                    { label: "Import & link", icon: Wand2, onClick: () => navigate(`/import?album=${encodeURIComponent(data.path)}`) },
+                    { label: "Organize (naming script)", icon: FolderSync, onClick: organizeAlbum },
+                    { label: "Open folder", icon: FolderOpen, onClick: async () => { try { await api.openFolder(data.path); } catch (e) { toast(String(e)); } } },
+                    { label: "Stats", icon: BarChart3, onClick: () => setStatsOpen(true) },
+                  ],
+                },
+                {
+                  title: "Lyrics",
+                  items: [
+                    { label: lyricsBusy ? "Fetching…" : "Download missing (LRCLIB)", icon: CloudDownload, onClick: downloadLyricsAlbum, disabled: lyricsBusy },
+                    { label: aiSyncBusy ? "Syncing…" : "AI detect & sync", icon: Sparkles, onClick: aiSyncLyricsAlbum, disabled: aiSyncBusy },
+                  ],
+                },
+                {
+                  title: "Tags & scripts",
+                  items: [
+                    { label: beetsBusy ? "Beets…" : "Tag with beets", icon: Disc3, onClick: beetsTagAlbum, disabled: beetsBusy },
+                    { label: "Import genres (MusicBrainz)", icon: Sparkles, onClick: importGenres },
+                    { label: "Format lyrics", icon: FileMusic, onClick: () => runScripts([1]) },
+                    { label: "Format CUEs", icon: FileMusic, onClick: () => runScripts([2]) },
+                    { label: "Optimize FLACs", icon: FileMusic, onClick: () => runScripts([3]) },
+                    { label: "Process images", icon: FileMusic, onClick: () => runScripts([5]) },
+                    { label: "Audit", icon: ShieldCheck, onClick: () => runScripts([6]) },
+                    { label: "DR & ReplayGain", icon: FileMusic, onClick: () => runScripts([7]) },
+                    { label: "Auto tagging", icon: FileMusic, onClick: () => runScripts([8]) },
+                    { label: "Grade", icon: FileMusic, onClick: () => runScripts([4]) },
+                    { label: "Remux videos", icon: FileVideo, hidden: rawVideos.length === 0, onClick: convertVideos, disabled: remuxing },
+                  ],
+                },
+                {
+                  items: [
+                    { label: "Remove album (to trash)", icon: Trash2, danger: true, onClick: removeAlbum },
+                  ],
+                },
+              ]}
+            />
           </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <LinkEditorButton
-            mode="album"
-            paths={data.tracks.map((t) => t.path)}
-            current={(data.meta ?? {}) as Record<string, unknown>}
-          />
-          <button
-            className="btn-primary"
-            onClick={() => playNow(queueTracks)}
-            title="Play the album from the top"
-          >
-            <Play className="h-4 w-4 fill-current" /> Play album
-          </button>
-          <OverflowMenu
-            buttonTitle="All album actions"
-            sections={[
-              {
-                items: [
-                  { label: "Play next", icon: ListStart, onClick: () => enqueue("next") },
-                  { label: "Add to queue", icon: ListPlus, onClick: () => enqueue("end") },
-                ],
-              },
-              {
-                title: "Album",
-                items: [
-                  { label: "Import & link", icon: Wand2, onClick: () => navigate(`/import?album=${encodeURIComponent(data.path)}`) },
-                  { label: "Organize (naming script)", icon: FolderSync, onClick: organizeAlbum },
-                  { label: "Open folder", icon: FolderOpen, onClick: async () => { try { await api.openFolder(data.path); } catch (e) { toast(String(e)); } } },
-                  { label: "Stats", icon: BarChart3, onClick: () => setStatsOpen(true) },
-                ],
-              },
-              {
-                title: "Lyrics",
-                items: [
-                  { label: lyricsBusy ? "Fetching…" : "Download missing (LRCLIB)", icon: CloudDownload, onClick: downloadLyricsAlbum, disabled: lyricsBusy },
-                  { label: aiSyncBusy ? "Syncing…" : "AI detect & sync", icon: Sparkles, onClick: aiSyncLyricsAlbum, disabled: aiSyncBusy },
-                ],
-              },
-              {
-                title: "Tags & scripts",
-                items: [
-                  { label: beetsBusy ? "Beets…" : "Tag with beets", icon: Disc3, onClick: beetsTagAlbum, disabled: beetsBusy },
-                  { label: "Import genres (MusicBrainz)", icon: Sparkles, onClick: importGenres },
-                  { label: "Format lyrics", icon: FileMusic, onClick: () => runScripts([1]) },
-                  { label: "Format CUEs", icon: FileMusic, onClick: () => runScripts([2]) },
-                  { label: "Optimize FLACs", icon: FileMusic, onClick: () => runScripts([3]) },
-                  { label: "Process images", icon: FileMusic, onClick: () => runScripts([5]) },
-                  { label: "Audit", icon: ShieldCheck, onClick: () => runScripts([6]) },
-                  { label: "DR & ReplayGain", icon: FileMusic, onClick: () => runScripts([7]) },
-                  { label: "Auto tagging", icon: FileMusic, onClick: () => runScripts([8]) },
-                  { label: "Grade", icon: FileMusic, onClick: () => runScripts([4]) },
-                  { label: "Remux videos", icon: FileVideo, hidden: rawVideos.length === 0, onClick: convertVideos, disabled: remuxing },
-                ],
-              },
-              {
-                items: [
-                  { label: "Remove album (to trash)", icon: Trash2, danger: true, onClick: removeAlbum },
-                ],
-              },
-            ]}
-          />
         </div>
         </div>
       </div>
