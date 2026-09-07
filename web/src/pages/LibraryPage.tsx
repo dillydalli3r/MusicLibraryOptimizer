@@ -10,6 +10,7 @@ import { toast, useStore } from "../store";
 import { sortRows, SortHeader, groupByDisc, type SortState } from "../lib/sort.tsx";
 import { gradeSliver, statusFor, auditFails } from "../lib/status";
 import { albumRef, trackRef, artistRef } from "../lib/refs";
+import { fmtTech } from "../lib/fmt";
 import { EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "../components/Badges";
 import { forceDict, loadForceSel } from "../lib/force";
 import CoverImg from "../components/CoverImg";
@@ -1021,7 +1022,7 @@ const toggleExpand = (path: string) =>
                       {trackCols.includes("grade") && <td className="td"><GradeBadge pass={!!tr.grade_pass && !auditFails(tr.audit)} score={null} audit={tr.audit} size="sm" /></td>}
                       {trackCols.includes("advisory") && <td className="td"><AdvisoryBadge value={tr.tags.ITUNESADVISORY} /></td>}
                       {trackCols.includes("duration") && <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>}
-                      {trackCols.includes("bitrate") && <td className="td text-zinc-500">{tr.tech.bitrate ? `${tr.tech.codec ? tr.tech.codec + " · " : ""}${Math.round(tr.tech.bitrate / 1000)}k` : "—"}</td>}
+                      {trackCols.includes("bitrate") && <td className="td text-zinc-500">{fmtTech(tr.tech) || "—"}</td>}
                       {trackCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{tr.tags.SOURCE ?? "—"}</td>}
                     </tr>
                   );

@@ -4,6 +4,7 @@ import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBa
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
+import { fmtTech } from "../lib/fmt";
 import NowPlayingView from "./NowPlayingView";
 import LyricsSidebar from "./LyricsSidebar";
 import TrackDownloadExport from "./TrackDownloadExport";
@@ -47,20 +48,10 @@ export default function PlayerBar() {
   });
   const displayTitle =
     current?.title || currentTags?.tags?.TITLE || (current ? current.file.replace(/\.[^.]+$/, "") : "");
-  // Audio tech summary for the now playing bar: "FLAC · 1022 kbps · 16 bit · 44.1 kHz"
-  const t = currentTags?.tech as
-    | { bitrate?: number; sample_rate?: number; bits_per_sample?: number; codec?: string }
-    | undefined;
-  const techStr = t
-    ? [
-        t.codec ?? null,
-        t.bitrate ? `${Math.round(t.bitrate / 1000)} kbps` : null,
-        t.bits_per_sample ? `${Math.round(t.bits_per_sample)} bit` : null,
-        t.sample_rate ? `${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
+  // Condensed audio tech readout for beside the title: "FLAC · 1022k · 16/44.1"
+  const techStr = fmtTech(currentTags?.tech as
+    | { codec?: string; bitrate?: number; bits_per_sample?: number; sample_rate?: number }
+    | undefined);
   const [thumbFailed, setThumbFailed] = useState(false);
   useEffect(() => setThumbFailed(false), [current?.path]);
   const stepRef = useRef<(dir: 1 | -1) => void>(() => {});
@@ -311,17 +302,18 @@ export default function PlayerBar() {
   // something is playing; idle just disables the transport and shows a hint.
   return (
     <div className="shrink-0 px-3 pb-3 pt-1">
-      <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 px-4">
+      <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 pr-4">
         <audio
           ref={audioRef}
           onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
           onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
         />
 
-        {/* left: cover art (or placeholder) + title block */}
+        {/* left: cover art, flush with the bar's left edge (full bar height,
+            square; the bar's own margin keeps it off the screen edge) */}
         <button
-          className={`relative h-16 w-16 rounded-lg overflow-hidden border border-border bg-raise shrink-0 flex items-center justify-center ${
-            idle ? "cursor-default" : "hover:scale-[1.03] transition-transform"
+          className={`relative self-stretch aspect-square rounded-l-[5px] overflow-hidden bg-raise shrink-0 flex items-center justify-center ${
+            idle ? "cursor-default" : "group/cover"
           }`}
           onClick={() => !idle && setFullscreen(true)}
           title={idle ? "Nothing playing" : "Album art — click for the fullscreen player"}
@@ -332,7 +324,7 @@ export default function PlayerBar() {
               src={api.coverUrl(current.albumPath)}
               alt=""
               onError={() => setThumbFailed(true)}
-              className="h-full w-full object-cover"
+              className="h-full w-full object-cover group-hover/cover:scale-[1.04] transition-transform"
             />
           ) : (
             <Disc3 className={`h-5 w-5 ${idle ? "text-zinc-700" : "text-zinc-600"}`} />
@@ -342,15 +334,16 @@ export default function PlayerBar() {
         <div className="min-w-0 w-56 shrink-0" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
           {current ? (
             <>
-              <div className="text-sm truncate font-semibold">{displayTitle}</div>
-              {/* bitrate · depth · rate get their own line so the readout
-                  never truncates against artist/album text */}
-              <div className="text-[10px] font-mono text-zinc-500 truncate min-h-[14px]" title="Codec · bitrate · bit depth · sample rate">
-                {techStr}
+              <div className="flex items-baseline gap-2 min-w-0">
+                <span className="text-sm truncate font-semibold">{displayTitle}</span>
+                {techStr && (
+                  <span className="text-[10px] font-mono text-zinc-500 truncate shrink-0" title="Codec · bitrate · bit depth/sample rate">
+                    {techStr}
+                  </span>
+                )}
               </div>
-              <div className="text-[11px] text-zinc-500 truncate">
-                {[current.album ?? current.artist ?? current.albumPath.split("/").pop()].filter(Boolean).join(" · ")}
-              </div>
+              <div className="text-[11px] text-zinc-500 truncate">{current.album ?? "—"}</div>
+              <div className="text-[11px] text-zinc-500 truncate">{current.artist ?? current.albumPath.split("/").pop()}</div>
             </>
           ) : (
             <>

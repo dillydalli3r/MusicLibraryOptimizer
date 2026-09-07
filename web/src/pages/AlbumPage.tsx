@@ -16,6 +16,7 @@ import StatsPanel from "../components/StatsPanel";
 import TrackDetails from "../components/TrackDetails";
 import { SortHeader, sortRows, toggleSort, groupByDisc, type SortState } from "../lib/sort.tsx";
 import { toast, useStore } from "../store";
+import { fmtTech } from "../lib/fmt";
 import { fmtDuration } from "./LibraryPage";
 import type { Track } from "../types";
 
@@ -668,9 +669,7 @@ export default function AlbumPage() {
                 <td className="td text-zinc-500 max-w-[180px] truncate">{tr.tags.GENRE ?? "—"}</td>
                 <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>
                 <td className="td text-zinc-500">
-                  {tr.tech.bitrate ? `${(tr.tech as any).codec ? (tr.tech as any).codec + " · " : ""}${Math.round(tr.tech.bitrate / 1000)} kbps` : "—"}
-                  {tr.tech.bits_per_sample ? ` · ${Math.round(tr.tech.bits_per_sample)} bit` : ""}
-                  {tr.tech.sample_rate ? ` · ${(tr.tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz` : ""}
+                  {tr.tech.bitrate || tr.tech.bits_per_sample ? fmtTech(tr.tech) : "—"}
                 </td>
               </tr>
                   ))}

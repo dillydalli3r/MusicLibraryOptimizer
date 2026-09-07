@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
+import { fmtTech } from "../lib/fmt";
 import CoverImg from "./CoverImg";
 import { SubtitledVideo } from "./SubtitledVideo";
 import { parsePlayerLrc, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
@@ -546,18 +547,8 @@ export default function NowPlayingView(p: Props) {
   const upNextLabel = upNext
     ? `${upNext.title || upNext.file.replace(/\.[^.]+$/, "")}${upNext.artist ? ` — ${upNext.artist}` : ""}`
     : "";
-  // Codec + bitrate / bit depth / frequency, shown with the song title
-  // ("FLAC · 973 kbps · 16 bit · 44.1 kHz") — bit depth always precedes rate.
-  const techStr = tech
-    ? [
-        tech.codec ?? null,
-        tech.bitrate ? `${Math.round(tech.bitrate / 1000)} kbps` : null,
-        tech.bits_per_sample ? `${Math.round(tech.bits_per_sample)} bit` : null,
-        tech.sample_rate ? `${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
+  // Condensed audio tech summary under the title: "FLAC · 973k · 16/44.1"
+  const techStr = fmtTech(tech);
 
   const VolIcon = vol <= 0 ? VolumeX : vol < 0.5 ? Volume1 : Volume2;
 

@@ -11,9 +11,13 @@ function fmtTech(tech: Track["tech"]): string {
     const s = Math.round(tech.length % 60);
     parts.push(`${m}:${String(s).padStart(2, "0")}`);
   }
-  if (tech.bitrate) parts.push(`${Math.round(tech.bitrate / 1000)} kbps`);
-  if (tech.bits_per_sample) parts.push(`${Math.round(tech.bits_per_sample)} bit`);
-  if (tech.sample_rate) parts.push(`${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
+  if (tech.bitrate) parts.push(`${Math.round(tech.bitrate / 1000)}k`);
+  if (tech.bits_per_sample && tech.sample_rate) {
+    parts.push(`${Math.round(tech.bits_per_sample)}/${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`);
+  } else {
+    if (tech.bits_per_sample) parts.push(`${Math.round(tech.bits_per_sample)} bit`);
+    if (tech.sample_rate) parts.push(`${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
+  }
   if (tech.channels) parts.push(tech.channels === 1 ? "mono" : tech.channels === 2 ? "stereo" : `${tech.channels} ch`);
   return parts.join(" · ");
 }

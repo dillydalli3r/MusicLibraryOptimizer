@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { ExternalLink, Save, Play, Disc3, ListPlus, ListStart, ListMusic, ShieldCheck, ImageUp, Clapperboard, Search, FolderOpen } from "lucide-react";
 import { api } from "../api";
+import { fmtTech } from "../lib/fmt";
 import { LinkChips, LinkEditorButton } from "../components/Links";
 import { SubtitledVideo } from "../components/SubtitledVideo";
 import { useStore, toast } from "../store";
@@ -265,7 +266,7 @@ export default function TrackPage() {
             <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Audio</div>
             <div className="grid grid-cols-2 gap-2 text-sm text-zinc-400">
               <div>Duration <span className="text-zinc-200">{tech.length ? `${Math.floor(tech.length / 60)}:${String(Math.floor(tech.length % 60)).padStart(2, "0")}` : "—"}</span></div>
-              <div>Bitrate <span className="text-zinc-200">{tech.bitrate ? `${tech.codec ? tech.codec + " · " : ""}${Math.round(tech.bitrate / 1000)} kbps` : "—"}</span></div>
+              <div>Bitrate <span className="text-zinc-200">{fmtTech(tech) || "—"}</span></div>
               <div>Bit depth <span className="text-zinc-200">{tech.bits_per_sample ?? "—"}</span></div>
               <div>Sample rate <span className="text-zinc-200">{tech.sample_rate ? `${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz` : "—"}</span></div>
               <div>Channels <span className="text-zinc-200">{tech.channels ?? "—"}</span></div>
