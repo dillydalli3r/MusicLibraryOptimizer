@@ -7,7 +7,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .audio import AudioFile
 from .config import should_write_audio_tag
 from .lyrics import _lrc_for, _canonical_lyrics, format_lyrics_text
-from .lyrics_xlit import XLIT_SIDECAR, ai_ready, non_latin_ratio, primary_translation_lang
+from .lyrics_xlit import (
+    XLIT_SIDECAR, ai_ready, needs_translation, needs_transliteration,
+    primary_translation_lang,
+)
 from .cue import canonical_cue_text
 from .naming import DEFAULT_NAMING_SCRIPT
 from .paths import AUDIO_EXTS, IMAGE_EXTS, LIB_AUDIO_EXTS, get_sidecar_cover_path
@@ -1284,27 +1287,37 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         # Settings → AI, so a library without lyric transforms configured is
         # never penalized. Latin-script lyrics are their own transliteration
         # (romanizing Spanish would be a no-op) and always pass the xlit check.
-        if (embedded or lrc) and cfg.get("grade_check_xlit", True) \
-                and cfg.get("lyrics_xlit_enabled", True) and ai_ready(cfg):
-            xsrc = str(lyr) if embedded else None
-            if xsrc is None and lrc:
+        # Transliteration / translation compliance — graded only when the
+        # transforms are actually NEEDED for the configured reader locale
+        # (script 15's own rule): non-Latin lyrics in a script the reader
+        # doesn't read need romanization; lyrics whose script differs from
+        # the locale's script need a translation. Same-script pairs (French
+        # → en) can't be told apart from the target language offline, so
+        # they are never demanded here.
+        _xlit_src = None
+        if (embedded or lrc) and ai_ready(cfg):
+            _xlit_src = str(lyr) if embedded else None
+            if _xlit_src is None and lrc:
                 try:
                     with open(_lrc_for(ap), "r", encoding="utf-8",
                               errors="replace") as _f:
-                        xsrc = _f.read()
+                        _xlit_src = _f.read()
                 except OSError:
-                    xsrc = None
-            if xsrc and non_latin_ratio(xsrc) >= 0.15:
-                total_checks += 1
-                has_xlit = bool(str(af.get_tag("TRANSLITERATION") or "").strip()) \
-                    or os.path.isfile(os.path.splitext(ap)[0] + XLIT_SIDECAR)
-                if not has_xlit:
-                    failed_checks += 1
-                    add_issue("No transliteration for non-Latin lyrics "
-                              "(run Lyrics Translate script)", basename)
-                    track["issues"].append("LYRICS")
-        if (embedded or lrc) and cfg.get("grade_check_trans", True) \
-                and cfg.get("lyrics_translate_enabled", True) and ai_ready(cfg):
+                    _xlit_src = None
+        if _xlit_src and cfg.get("grade_check_xlit", True) \
+                and cfg.get("lyrics_xlit_enabled", True) \
+                and needs_transliteration(_xlit_src, cfg):
+            total_checks += 1
+            has_xlit = bool(str(af.get_tag("TRANSLITERATION") or "").strip()) \
+                or os.path.isfile(os.path.splitext(ap)[0] + XLIT_SIDECAR)
+            if not has_xlit:
+                failed_checks += 1
+                add_issue("No transliteration for non-Latin lyrics "
+                          "(run Lyrics Translate script)", basename)
+                track["issues"].append("LYRICS")
+        if _xlit_src and cfg.get("grade_check_trans", True) \
+                and cfg.get("lyrics_translate_enabled", True) \
+                and needs_translation(_xlit_src, cfg):
             lang = primary_translation_lang(cfg)
             total_checks += 1
             has_trans = bool(str(af.get_tag("TRANSLATION") or "").strip()) \

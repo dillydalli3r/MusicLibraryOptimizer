@@ -803,18 +803,64 @@ class LyricsAiLinesRequest(BaseModel):
 @app.post("/api/lyrics/ai/lines")
 async def lyrics_ai_lines(req: LyricsAiLinesRequest):
     """Line-aligned translate / transliterate for the fullscreen player.
-    Results are cached on disk per (mode, language, content)."""
+    Applies the same need-based gating as script 15 so the AI is never
+    asked for transforms that would come back empty or duplicated:
+    Latin-script lyrics are never romanized, a strongly-English song with
+    an English target isn't "translated", blank lines pass through for
+    free, and self-identical translations are reported as skipped instead
+    of rendered as duplicate lines. Results are cached on disk per
+    (mode, language, content)."""
     cfg = load_config()
+    from mlo.lyrics_xlit import (
+        _same_essence, looks_english, needs_transliteration,
+        primary_translation_lang,
+    )
     from server import ai as ai_mod
+
+    lines = list(req.lines or [])
+    if req.mode == "transliterate" and not needs_transliteration(
+            "\n".join(lines), cfg):
+        return {"mode": req.mode, "lines": [], "skipped": "script"}
+
+    # blank lines never reach the AI — they pass through, alignment kept
+    idx_map: list = []
+    bodies: list = []
+    for i, ln in enumerate(lines):
+        if str(ln).strip():
+            idx_map.append(i)
+            bodies.append(ln)
+    if not bodies:
+        return {"mode": req.mode, "lines": [""] * len(lines), "skipped": "blank"}
+
+    lang = primary_translation_lang(cfg)
+    if req.mode == "translate" and looks_english("\n".join(bodies)):
+        return {"mode": req.mode, "lines": [], "skipped": "same-language"}
+
     try:
         result = await asyncio.to_thread(
-            ai_mod.transform_lines, cfg, req.lines, req.mode,
-            str(cfg.get("ai_translate_lang") or "en"))
+            ai_mod.transform_lines, cfg, bodies, req.mode, lang)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(502, f"AI transform failed: {e}")
-    return {"mode": req.mode, "lines": result}
+
+    out = [""] * len(lines)
+    for pos, i in enumerate(idx_map):
+        out[i] = result[pos] if pos < len(result) else lines[i]
+
+    if req.mode == "translate":
+        # a line whose "translation" equals its source would render as a
+        # duplicate — blank it; if EVERY line came back identical the whole
+        # request is reported skipped.
+        kept = 0
+        for pos, i in enumerate(idx_map):
+            if _same_essence(out[i], lines[i]):
+                out[i] = ""
+            else:
+                kept += 1
+        if not kept:
+            return {"mode": req.mode, "lines": [], "skipped": "identity"}
+    return {"mode": req.mode, "lines": out}
 
 
 class LikeToggleRequest(BaseModel):

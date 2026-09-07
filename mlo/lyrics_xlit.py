@@ -83,6 +83,108 @@ def non_latin_ratio(text):
     return letters / total if total else 0.0
 
 
+# Native script of the common non-Latin language codes (everything else is
+# read in Latin script). Used to decide whether romanization is meaningful
+# for the reader: a ja reader doesn't need Japanese lyrics romanized, an en
+# reader does — regardless of what language the song is in.
+_SCRIPT_BY_LANG = {
+    "ja": "japanese", "zh": "han", "ko": "hangul",
+    "ru": "cyrillic", "uk": "cyrillic", "bg": "cyrillic", "sr": "cyrillic",
+    "mk": "cyrillic", "be": "cyrillic",
+    "ar": "arabic", "fa": "arabic", "ur": "arabic",
+    "he": "hebrew", "hi": "devanagari", "th": "thai", "el": "greek",
+    "ka": "georgian", "hy": "armenian",
+}
+
+
+def lang_script(lang):
+    """Script family of a language code (default: latin)."""
+    return _SCRIPT_BY_LANG.get(str(lang or "").strip().lower().split("-")[0], "latin")
+
+
+def dominant_script(text):
+    """The script family carrying most of the text's letters."""
+    counts: dict = {}
+    for ch in str(text or ""):
+        if not ch.isalpha():
+            continue
+        name = unicodedata.name(ch, "")
+        if "KATAKANA" in name or "HIRAGANA" in name:
+            key = "japanese"
+        elif "HANGUL" in name:
+            key = "hangul"
+        elif "CJK" in name or "IDEOGRAPH" in name:
+            key = "han"
+        elif "CYRILLIC" in name:
+            key = "cyrillic"
+        elif "ARABIC" in name:
+            key = "arabic"
+        elif "HEBREW" in name:
+            key = "hebrew"
+        elif "DEVANAGARI" in name:
+            key = "devanagari"
+        elif "THAI" in name:
+            key = "thai"
+        elif "GEORGIAN" in name:
+            key = "georgian"
+        elif "ARMENIAN" in name:
+            key = "armenian"
+        elif "GREEK" in name:
+            key = "greek"
+        elif "LATIN" in name:
+            key = "latin"
+        else:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return "latin"
+    return max(counts, key=lambda k: counts[k])
+
+
+def needs_transliteration(text, cfg):
+    """True when romanized lyrics are worth generating for this reader.
+
+    The rule is script-based, driven by the configured locale (the primary
+    translation target language): lyrics whose script is not Latin AND
+    differs from the locale's own script need romanization. Japanese lyrics
+    for a ja reader add nothing (their script matches); lyrics already in
+    Latin script can't be romanized further."""
+    if non_latin_ratio(text) < _LATIN_THRESHOLD:
+        return False
+    src = dominant_script(text)
+    if src == "latin":
+        return False
+    return lang_script(primary_translation_lang(cfg)) != src
+
+
+def needs_translation(text, cfg):
+    """True when the reader plausibly needs a translation: the lyrics'
+    dominant script differs from the locale's script. (Same-script pairs
+    like French → en can't be told apart from English offline — script 15
+    still translates them via the AI's own identity filter, but grading
+    never demands what can't be detected.)"""
+    return dominant_script(text) != lang_script(primary_translation_lang(cfg))
+
+
+_EN_STOPWORDS = frozenset(
+    "the be to of and a in that have i it for not on with he as you do at this but his by from they we say her she "
+    "or an will my one all would there their what so up out if about who get which go me when make can like time "
+    "no just him know take people into year your good some could them see other than then now look only come its "
+    "over think also back after use two how our work first well way even new want because any these give day most "
+    "us are is was were been am dont isnt wasnt cant didnt im thats thats".split()
+)
+
+
+def looks_english(text, threshold=0.28):
+    """Cheap stopword-based English detector — enough to refuse an
+    English→English translation request before it reaches the AI."""
+    words = re.findall(r"[A-Za-z']+", str(text or ""))
+    if len(words) < 12:
+        return False
+    hits = sum(1 for w in words if w.lower() in _EN_STOPWORDS)
+    return hits / len(words) >= threshold
+
+
 def _same_essence(a, b):
     """True when two lyric texts are the same words ignoring case, spacing
     and punctuation — an AI "translation" that matches its source line for
@@ -258,8 +360,10 @@ def run_lyrics_xlit(config):
                         os.path.splitext(path)[0] + XLIT_SIDECAR)
                     if not force and (existing or has_sidecar):
                         pass  # already stored — keep it
-                    elif non_latin_ratio(text) < _LATIN_THRESHOLD:
-                        # Latin-script lyrics romanize to themselves.
+                    elif not needs_transliteration(text, config):
+                        # Already romanized, or already in the reader's own
+                        # script (a ja reader doesn't need ja lyrics in
+                        # romaji) — generating it would be a no-op.
                         stats["latin_skipped"] += 1
                     else:
                         xlit, ok = _apply(config, text, "transliterate")

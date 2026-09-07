@@ -8,8 +8,7 @@ import { api } from "../api";
 import { toast, useStore } from "../store";
 import CoverImg from "./CoverImg";
 import { SubtitledVideo } from "./SubtitledVideo";
-import { parseLrc, type LrcLine } from "./LyricsViewer";
-import type { Playlist } from "../types";
+import { parseLrc, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
 
 const XLIT_KEY = "mlo.np.xlit";
 const TRANS_KEY = "mlo.np.trans";
@@ -70,6 +69,19 @@ const INACTIVE_SCALE = { sm: 0.88, md: 0.84, lg: 0.8 } as const;
  * styled — only synced lines get the active/inactive treatment. */
 const LINE_BLUR = "blur-[2px] opacity-60 hover:blur-none hover:opacity-100 transition-[opacity,filter] duration-300";
 
+/** parseLrc plus the clickable [00:00.00] leader: LRC parsing drops blank
+ * lines, which leaves songs with an instrumental intro no top target —
+ * synthesize one whenever the first real line arrives late. Both the
+ * player's lines and the stored-transform seeding go through this, so
+ * their line indexes always stay aligned. */
+function parsePlayerLrc(text: string): LrcLine[] {
+  const parsed = parseLrc(text);
+  if (parsed.length && parsed[0].time > 0.35) {
+    parsed.unshift({ ts: "[00:00.00]", time: 0, text: "" });
+  }
+  return parsed;
+}
+
 export default function NowPlayingView(p: Props) {
   const { vol, setVol } = useStore();
   // Transliteration + translation default ON: script 15 stores the
@@ -95,6 +107,7 @@ export default function NowPlayingView(p: Props) {
   const [tags, setTags] = useState<Record<string, string> | null>(null);
   const [tech, setTech] = useState<{ bitrate?: number; sample_rate?: number; bits_per_sample?: number; codec?: string } | null>(null);
   const [lyricsText, setLyricsText] = useState<string | null>(null);
+  const [lyricsFor, setLyricsFor] = useState<string | null>(null);
   const [transforms, setTransforms] = useState<Record<string, string[]>>({});
   const inFlight = useRef<Set<string>>(new Set());
   const lineRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -252,12 +265,13 @@ export default function NowPlayingView(p: Props) {
   // Stored transforms (script 15 tags / .romaji.lrc / .<lang>.lrc sidecars)
   // arrive with the same payload and are parsed exactly like the original
   // lyrics, so their lines stay 1:1 with `plainLines` without re-alignment.
+  // While the next track's payload loads, the PREVIOUS track's lyrics stay
+  // rendered (dimmed, no highlight): resetting to empty first is what made
+  // the cover jump sizes / flash to the middle on next / previous.
   useEffect(() => {
     let dead = false;
     setTags(null);
     setTech(null);
-    setLyricsText(null);
-    setTransforms({});
     setSmoothTime(0);
     inFlight.current.clear();
     api
@@ -267,19 +281,23 @@ export default function NowPlayingView(p: Props) {
         setTags(t.tags ?? {});
         setTech((t.tech as typeof tech) ?? null);
         setLyricsText(typeof t.lyrics === "string" ? t.lyrics : null);
+        setLyricsFor(p.current.path);
         const seeded: Record<string, string[]> = {};
         const splitStored = (s: string): string[] =>
           /\[\d{1,2}:\d{1,2}/.test(s)
-            ? parseLrc(s).map((l) => l.text)
+            ? parsePlayerLrc(s).map((l) => l.text)
             : s.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
         if (typeof t.lyrics_xlit === "string" && t.lyrics_xlit.trim())
           seeded.transliterate = splitStored(t.lyrics_xlit);
         if (typeof t.lyrics_trans === "string" && t.lyrics_trans.trim())
           seeded.translate = splitStored(t.lyrics_trans);
-        if (Object.keys(seeded).length) setTransforms((prev) => ({ ...prev, ...seeded }));
+        setTransforms(seeded);
       })
       .catch(() => {
-        if (!dead) setTags({});
+        if (!dead) {
+          setTags({});
+          setLyricsFor(p.current.path);
+        }
       });
     return () => {
       dead = true;
@@ -288,11 +306,19 @@ export default function NowPlayingView(p: Props) {
   }, [p.current.path]);
 
   const instrumental = (tags?.INSTRUMENTAL ?? "").toString().trim() === "1";
+  // The lyrics on screen belong to `lyricsFor`; until the new track's
+  // payload arrives they are stale — kept for layout stability, dimmed,
+  // never highlighted and never sent to the AI.
+  const staleLyrics = lyricsFor !== p.current.path;
   const lines: LrcLine[] = useMemo(
-    () => (lyricsText && !instrumental ? parseLrc(lyricsText) : []),
+    () => (lyricsText && !instrumental ? parsePlayerLrc(lyricsText) : []),
     [lyricsText, instrumental]
   );
-  const hasLyrics = !!lyricsText?.trim() && !instrumental;
+  // Layout (cover sizing, pane presence) follows the on-screen lyrics even
+  // while stale so next/previous never reflows the whole view; AI work only
+  // ever runs on fresh lyrics.
+  const layoutHasLyrics = !!lyricsText?.trim() && !instrumental;
+  const hasLyrics = layoutHasLyrics && !staleLyrics;
   const plainLines = useMemo(() => {
     if (!hasLyrics) return [];
     if (lines.length) return lines.map((l) => l.text);
@@ -310,7 +336,7 @@ export default function NowPlayingView(p: Props) {
   // aiReady === null means the config probe is still running — hold off so
   // we never fire a request that's destined to fail (and spin forever).
   useEffect(() => {
-    if (aiReady === null || !aiReady) return;
+    if (aiReady === null || !aiReady || staleLyrics) return;
     const modes = [
       ...(showXlit ? ["transliterate"] : []),
       ...(showTrans ? ["translate"] : []),
@@ -337,20 +363,35 @@ export default function NowPlayingView(p: Props) {
 
   // ---- active line ---------------------------------------------------------
   const activeLine = useMemo(() => {
+    if (staleLyrics) return -1; // old lyrics against the new song's clock
     let idx = -1;
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].time <= dispTime + 0.02) idx = i;
       else break;
     }
     return idx;
-  }, [lines, dispTime]);
+  }, [lines, dispTime, staleLyrics]);
 
   // While the pointer rests on the lyrics the reader owns the pane: the
   // auto-center pauses (it would otherwise scroll the hovered line away)
   // and resumes on leave, re-centering on the active line.
   const [lyricsHover, setLyricsHover] = useState(false);
 
-  const lastLineRef = useRef(-2);
+  // Seek vs glide: a real jump of the song clock (>1.2s between frames)
+  // marks a SEEK — the pane snaps to the new position. Everything else
+  // (normal line steps, resuming after hover, clicking a lyric line)
+  // glides. Clicking a line also moves the audio clock, so it sets a short
+  // glide window that wins over the seek mark: navigating by lyric line
+  // should stay animated even at song start.
+  const seekMarkRef = useRef(0);
+  const glideMarkRef = useRef(0);
+  const prevDispRef = useRef(-1);
+  useEffect(() => {
+    const prev = prevDispRef.current;
+    prevDispRef.current = dispTime;
+    if (prev >= 0 && Math.abs(dispTime - prev) > 1.2) seekMarkRef.current = Date.now();
+  }, [dispTime]);
+
   useEffect(() => {
     if (activeLine < 0 || lyricsHover) return;
     // Center the active line INSIDE the lyrics scroller only. scrollIntoView
@@ -360,25 +401,19 @@ export default function NowPlayingView(p: Props) {
     const c = lyricsScrollRef.current;
     const el = lineRefs.current[activeLine];
     if (!c || !el) return;
-    const prev = lastLineRef.current;
-    lastLineRef.current = activeLine;
-    // A seek (or track change) moves the active line by more than one step:
-    // snap there instantly. Animating a long distance both looks broken and
-    // gets restarted by every following line change mid-flight — the classic
-    // jumpy-scroll. Adjacent steps still glide.
-    const jumped = prev < -1 || Math.abs(activeLine - prev) > 1;
+    const now = Date.now();
+    const animate = now - glideMarkRef.current < 1500 || now - seekMarkRef.current > 600;
     const top =
       el.getBoundingClientRect().top -
       c.getBoundingClientRect().top +
       c.scrollTop -
       c.clientHeight / 2 +
       el.clientHeight / 2;
-    c.scrollTo({ top: Math.max(0, top), behavior: jumped ? "auto" : "smooth" });
+    c.scrollTo({ top: Math.max(0, top), behavior: animate ? "smooth" : "auto" });
   }, [activeLine, lyricsHover]);
 
   // New track → rewind the lyrics pane to the top.
   useEffect(() => {
-    lastLineRef.current = -2;
     lyricsScrollRef.current?.scrollTo({ top: 0 });
   }, [p.current.path]);
 
@@ -469,7 +504,14 @@ export default function NowPlayingView(p: Props) {
         className={`py-2 ${synced ? "cursor-pointer" : ""} ${
           isActive ? "opacity-100" : synced ? LINE_BLUR : ""
         }`}
-        onClick={synced ? () => p.onSeek(l.time) : undefined}
+        onClick={
+          synced
+            ? () => {
+                glideMarkRef.current = Date.now();
+                p.onSeek(l.time);
+              }
+            : undefined
+        }
         title={synced ? "Click to seek" : undefined}
       >
         {/* One layout for every state: the line block is laid out at the
@@ -706,12 +748,12 @@ export default function NowPlayingView(p: Props) {
         </div>
 
         {/* main area */}
-        <div className={`flex-1 min-h-0 flex flex-col lg:flex-row items-center gap-8 px-8 pb-4 overflow-clip ${hasLyrics ? "" : "lg:justify-center"}`}>
+        <div className={`flex-1 min-h-0 flex flex-col lg:flex-row items-center gap-8 px-8 pb-4 overflow-clip ${layoutHasLyrics ? "" : "lg:justify-center"}`}>
           {/* left column: cover, track/album/artist, all playback controls —
               centered as a group inside the full column height */}
           <div
             className={`flex flex-col items-center justify-center gap-4 shrink-0 min-w-0 ${
-              hasLyrics ? "lg:w-[42%] lg:h-full" : ""
+              layoutHasLyrics ? "lg:w-[42%] lg:h-full" : ""
             }`}
           >
             {videoPath ? (
@@ -736,7 +778,7 @@ export default function NowPlayingView(p: Props) {
                 <CoverImg
                   albumPath={p.current.albumPath}
                   coverFile={coverFile}
-                  wrapperClass={`relative rounded-2xl shadow-2xl border border-white/10 bg-raise overflow-hidden ${hasLyrics ? "w-64 h-64 lg:w-[min(24rem,42vh)] lg:h-[min(24rem,42vh)]" : "w-72 h-72 lg:w-[min(30rem,52vh)] lg:h-[min(30rem,52vh)]"}`}
+                  wrapperClass={`relative rounded-2xl shadow-2xl border border-white/10 bg-raise overflow-hidden ${layoutHasLyrics ? "w-64 h-64 lg:w-[min(24rem,42vh)] lg:h-[min(24rem,42vh)]" : "w-72 h-72 lg:w-[min(30rem,52vh)] lg:h-[min(30rem,52vh)]"}`}
                 />
               </div>
             )}
@@ -880,12 +922,16 @@ export default function NowPlayingView(p: Props) {
           {/* lyrics column — plain, no panel, hugging the right edge; flex-1
               below lg so it can't overflow the viewport (h-full there would
               double-count with the cover block and clip the bottom half
-              outside the scroll pane) */}
-          {hasLyrics && (
+              outside the scroll pane). While the next track's lyrics load,
+              the previous ones stay on screen dimmed instead of collapsing
+              the layout (which flashed the cover to the middle). */}
+          {layoutHasLyrics && (
             <div className="flex-1 min-h-0 w-full lg:h-full flex flex-col max-w-3xl lg:max-w-none lg:flex-none lg:w-[56%] lg:ml-auto">
               <div
                 ref={lyricsScrollRef}
-                className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 no-scrollbar"
+                className={`flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 no-scrollbar transition-opacity duration-300 ${
+                  staleLyrics ? "opacity-50" : "opacity-100"
+                }`}
                 style={{ zoom: lyricZoom }}
                 onMouseEnter={() => setLyricsHover(true)}
                 onMouseLeave={() => setLyricsHover(false)}
