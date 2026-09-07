@@ -46,10 +46,13 @@ function hexToRgbTriplet(hex?: string | null): [number, number, number] | null {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+// Size steps are deliberately close together: the active line reads slightly
+// larger than the rest, and the translation/transliteration sub-lines sit
+// just under the main line instead of shrinking into fine print.
 const LYRIC_SIZES = {
-  sm: { line: "text-base", active: "text-xl", word: "text-base", xlit: "text-[11px]" },
-  md: { line: "text-xl", active: "text-[2rem]", word: "text-xl", xlit: "text-xs" },
-  lg: { line: "text-2xl", active: "text-[2.8rem]", word: "text-2xl", xlit: "text-sm" },
+  sm: { line: "text-[15px]", active: "text-[17px]", word: "text-[15px]", xlit: "text-[13px]" },
+  md: { line: "text-xl", active: "text-[1.5rem]", word: "text-xl", xlit: "text-[17px]" },
+  lg: { line: "text-2xl", active: "text-[2.1rem]", word: "text-2xl", xlit: "text-xl" },
 } as const;
 
 /** Ease for the active line's growth — slow out, no snap. */
@@ -445,6 +448,13 @@ export default function NowPlayingView(p: Props) {
     // for synced lyrics, which is where word timings exist).
     const replaced = !!xlit && xlit.trim() !== "" && xlit.trim() !== l.text.trim();
     const primary = replaced ? xlit : l.text;
+    // A "translation" that repeats the line it sits under (English lyrics
+    // "translated" to English) adds nothing — skip those sub-lines.
+    const essence = (s: string) => s.toLowerCase().replace(/[\W_]+/g, "");
+    const transDup = !!trans && (
+      essence(trans) === essence(l.text) ||
+      (replaced && essence(trans) === essence(xlit))
+    );
     return (
       <div
         key={i}
@@ -477,7 +487,7 @@ export default function NowPlayingView(p: Props) {
               })
             : primary}
         </div>
-        {trans && <div className={`${size.xlit} text-accent-soft/70 mt-0.5 leading-snug`}>{trans}</div>}
+        {trans && !transDup && <div className={`${size.xlit} text-accent-soft/70 mt-0.5 leading-snug`}>{trans}</div>}
       </div>
     );
   };

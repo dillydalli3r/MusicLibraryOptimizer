@@ -83,6 +83,16 @@ def non_latin_ratio(text):
     return letters / total if total else 0.0
 
 
+def _same_essence(a, b):
+    """True when two lyric texts are the same words ignoring case, spacing
+    and punctuation — an AI "translation" that matches its source line for
+    line (English → English) is a no-op, not a translation. Compared on the
+    whole text; translations that only mirror some lines still differ enough
+    to be worth keeping."""
+    norm = lambda s: re.sub(r"[\W_]+", "", str(s or "").lower())
+    return norm(a) == norm(b) and bool(norm(a))
+
+
 def translation_langs(cfg):
     """Configured translation target languages, e.g. ["en"] or ["en","de"].
     Falls back to the fullscreen player's single ``ai_translate_lang``."""
@@ -268,6 +278,13 @@ def run_lyrics_xlit(config):
                                 af.get_tag("TRANSLATION"), path, lang, sidecars):
                             continue
                         trans, ok = _apply(config, text, "translate", lang)
+                        if ok and _same_essence(trans, text):
+                            # The "translation" came back identical to the
+                            # source (e.g. English → English): storing it
+                            # would just duplicate every line in the player.
+                            stats["translation_identity_skipped"] = (
+                                stats.get("translation_identity_skipped", 0) + 1)
+                            continue
                         if ok:
                             if lang == langs[0]:
                                 # The tag carries the primary language; extra
