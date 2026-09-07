@@ -581,9 +581,9 @@ export default function AlbumPage() {
               <SortHeader label="#" sort={sort} sortKey="tracknumber" onSort={(k) => setSort(toggleSort(sort, k))} className="w-14" />
               <th className="th w-10"></th>
               <SortHeader label="Title" sort={sort} sortKey="tags.TITLE" onSort={(k) => setSort(toggleSort(sort, k))} />
-              <SortHeader label="Genre" sort={sort} sortKey="tags.GENRE" onSort={(k) => setSort(toggleSort(sort, k))} />
-              <SortHeader label="Dur" sort={sort} sortKey="tech.length" onSort={(k) => setSort(toggleSort(sort, k))} />
-              <SortHeader label="Bitrate" sort={sort} sortKey="tech.bitrate" onSort={(k) => setSort(toggleSort(sort, k))} />
+              <SortHeader label="Genre" sort={sort} sortKey="tags.GENRE" onSort={(k) => setSort(toggleSort(sort, k))} className="w-[16%]" />
+              <SortHeader label="Dur" sort={sort} sortKey="tech.length" onSort={(k) => setSort(toggleSort(sort, k))} className="w-16" />
+              <SortHeader label="Bitrate" sort={sort} sortKey="tech.bitrate" onSort={(k) => setSort(toggleSort(sort, k))} className="w-[22%]" />
             </tr>
           </thead>
           <tbody>

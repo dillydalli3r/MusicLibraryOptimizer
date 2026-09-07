@@ -67,6 +67,18 @@ interface Col {
   sortKey: string;
 }
 
+/** Column widths for the fixed table layout: percentages compress with
+ * the window; "album" has no width and absorbs whatever is left. */
+const ALBUM_COL_W: Record<string, string> = {
+  album: "w-auto",
+  artist: "w-[16%]",
+  year: "w-[7%]",
+  tracks: "w-[7%]",
+  grade: "w-[10%]",
+  media: "w-[10%]",
+  source: "w-[13%]",
+};
+
 const ALBUM_COLS: Col[] = [
   { id: "album", label: "Album", sortKey: "meta.ALBUM" },
   { id: "artist", label: "Artist", sortKey: "artist" },
@@ -77,12 +89,34 @@ const ALBUM_COLS: Col[] = [
   { id: "source", label: "Source", sortKey: "source_summary" },
 ];
 
+const ARTIST_COL_W: Record<string, string> = {
+  albums: "w-[12%]",
+  tracks: "w-[12%]",
+  checks: "w-[12%]",
+  grade: "w-[16%]",
+};
+
 const ARTIST_COLS: Col[] = [
   { id: "albums", label: "Albums", sortKey: "aggregate.album_count" },
   { id: "tracks", label: "Tracks", sortKey: "aggregate.track_count" },
   { id: "checks", label: "Checks", sortKey: "aggregate.grade_pct" },
   { id: "grade", label: "Grade", sortKey: "aggregate.grade_pct" },
 ];
+
+const TRACK_COL_W: Record<string, string> = {
+  num: "w-12",
+  title: "w-auto",
+  artist: "w-[13%]",
+  album: "w-[13%]",
+  year: "w-[6%]",
+  genre: "w-[11%]",
+  media: "w-[8%]",
+  grade: "w-[7%]",
+  advisory: "w-[8%]",
+  duration: "w-[7%]",
+  bitrate: "w-[10%]",
+  source: "w-[10%]",
+};
 
 const TRACK_COLS: Col[] = [
   { id: "num", label: "#", sortKey: "tracknumber" },
@@ -816,11 +850,13 @@ const toggleExpand = (path: string) =>
                         onChange={() => setSelection({ albums: allAlbumsSelected ? [] : sortedAlbums.map((a) => a.path) })} />
                     </th>
                   )}
-                  <th className="th w-12"></th>
+                  <th className="th w-10"></th>
+                  <th className="th w-14"></th>
                   {ALBUM_COLS.filter((c) => albumCols.includes(c.id)).map((c) => (
-                    <SortHeader key={c.id} label={c.label} sort={albumSort} sortKey={c.sortKey} onSort={setAlbumSort} />
+                    <SortHeader key={c.id} label={c.label} sort={albumSort} sortKey={c.sortKey} onSort={setAlbumSort}
+                      className={ALBUM_COL_W[c.id] ?? ""} />
                   ))}
-                  <th className="th text-right">Actions</th>
+                  <th className="th w-24 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -871,8 +907,10 @@ const toggleExpand = (path: string) =>
                         onChange={() => setSelection({ artists: allArtistsSelected ? [] : sortedArtists.map((a) => a.path) })} />
                     </th>
                   )}
+                  <th className="th">Artist</th>
                   {ARTIST_COLS.filter((c) => artistCols.includes(c.id)).map((c) => (
-                    <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort} />
+                    <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort}
+                      className={ARTIST_COL_W[c.id] ?? "w-[14%]"} />
                   ))}
                 </tr>
               </thead>
@@ -922,7 +960,8 @@ const toggleExpand = (path: string) =>
                     </th>
                   )}
                   {TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) => (
-                    <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort} />
+                    <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort}
+                      className={TRACK_COL_W[c.id] ?? ""} />
                   ))}
                 </tr>
               </thead>
@@ -1109,10 +1148,10 @@ function AlbumRowGroup({
                   <th className="th w-10">#</th>
                   <th className="th w-10"></th>
                   <th className="th">Title</th>
-                  <th className="th">Genre</th>
-                  <th className="th">Grade</th>
-                  <th className="th">Advisory</th>
-                  <th className="th">Dur</th>
+                  <th className="th w-[16%]">Genre</th>
+                  <th className="th w-14">Grade</th>
+                  <th className="th w-14">Advisory</th>
+                  <th className="th w-16">Dur</th>
                 </tr>
               </thead>
               <tbody>

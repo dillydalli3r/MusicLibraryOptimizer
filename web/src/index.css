@@ -155,6 +155,18 @@ body {
   @apply hover:bg-white/[0.06] transition-colors cursor-pointer;
 }
 
+/* Tables auto-resize with the window: a fixed layout compresses columns
+   instead of pushing the page wide, and clipped content ellipsizes. */
+table {
+  table-layout: fixed;
+}
+table th,
+table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ------------------------------------------------------------------ */
 /* Now-playing ambience: animated color orbs behind the fullscreen     */
 /* player, tinted with the cover's dominant color (Apple Music /       */
