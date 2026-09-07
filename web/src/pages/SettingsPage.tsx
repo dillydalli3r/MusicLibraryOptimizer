@@ -32,8 +32,13 @@ export default function SettingsPage() {
   const [namingScript, setNamingScript] = useState(DEFAULT_NAMING_SCRIPT);
   const [shortFolderNames, setShortFolderNames] = useState(false);
   const [accent, setAccent] = useState<string>(() => localStorage.getItem("mlo.accent") ?? "mono");
-  const [defaultView, setDefaultView] = useState<string>(() => localStorage.getItem("mlo.defaultView") ?? "albums");
+  const [defaultView, setDefaultView] = useState<string>(() => localStorage.getItem("mlo.defaultView.v2") ?? "grid");
   const [loaded, setLoaded] = useState(false);
+  // Settings search: matches field labels/keys across every tab; picking a
+  // result jumps straight to the tab that owns it (computed below, after
+  // the group tables exist).
+  const [q, setQ] = useState("");
+  const searching = q.trim().length >= 2;
 
   // ---- script options (persisted to config; /api/run uses them as defaults) ----
   type CfgField =
@@ -45,11 +50,15 @@ export default function SettingsPage() {
     title: string;
     blurb?: string;
     fields: CfgField[];
+    presets?: { name: string; values: Record<string, string> }[];
   }
   const CFG_GROUPS: CfgGroup[] = [
     {
-      title: "FLACs (script 3)",
+      title: "FLACs & lossless sources (script 3)",
+      blurb: "Re-encodes FLACs at the target level and converts uncompressed sources (WAV/AIFF/APE/WV/SHN) to FLAC losslessly.",
       fields: [
+        { k: "optimize_convert_lossless", label: "Convert WAV/AIFF/APE/WV to FLAC", type: "bool" },
+        { k: "lossless_remove_original", label: "Remove original after verified conversion", type: "bool" },
         { k: "flac_level", label: "Compression level", type: "number", min: 0, max: 8 },
         { k: "add_seektables", label: "Add seektables", type: "bool" },
         { k: "flac_preserve_picture", label: "Preserve embedded picture", type: "bool" },
@@ -204,7 +213,10 @@ export default function SettingsPage() {
         { k: "grade_include_log", label: "Allow LOG files", type: "bool" },
         { k: "grade_include_lrc", label: "Allow LRC files", type: "bool" },
         { k: "grade_include_accurip", label: "Allow .accurip files", type: "bool" },
+        { k: "grade_include_video", label: "Allow remuxed videos (MKV)", type: "bool" },
         { k: "grade_include_other", label: "Allow other files", type: "bool" },
+        { k: "grade_check_raw_video", label: "Fail un-remuxed videos (VOB/AVI...)", type: "bool" },
+        { k: "grade_check_lossless_source", label: "Fail uncompressed sources (WAV...)", type: "bool" },
         { k: "grade_log_score_threshold", label: "Log score threshold", type: "number", min: 0, max: 100 },
         { k: "grade_check_log_checksum", label: "Check log checksum", type: "bool" },
         { k: "grade_check_accuraterip", label: "Check AccurateRip", type: "bool" },
@@ -214,23 +226,34 @@ export default function SettingsPage() {
     },
     {
       title: "Videos (script 11)",
-      blurb: "Lossless remux: any video container → MP4. Video stream is copied when MP4-compatible (h264/hevc/mpeg4/av1/vp9); all audio streams are re-encoded to FLAC (lossless).",
+      blurb: "Lossless remux: any video container → MKV with the video copied bit-exact and every audio stream re-encoded to FLAC (lossless, level below). Captions/subtitles are always kept and verified — never removed. If the muxer refuses the video codec, H.264 is a last-resort fallback. The original (e.g. the .VOB) is removed after a verified remux.",
       fields: [
-        { k: "video_reencode_incompatible", label: "Re-encode incompatible video to H.264", type: "bool" },
+        { k: "video_reencode_incompatible", label: "Allow H.264 video fallback (last resort)", type: "bool" },
         { k: "video_crf", label: "H.264 CRF (lower = better)", type: "number", min: 0, max: 51 },
         { k: "video_preset", label: "H.264 preset", type: "select", options: [["ultrafast","ultrafast"],["superfast","superfast"],["veryfast","veryfast"],["faster","faster"],["fast","fast"],["medium","medium"],["slow","slow"],["slower","slower"],["veryslow","veryslow"]] },
         { k: "video_flac_level", label: "FLAC compression (0-8)", type: "number", min: 0, max: 8 },
         { k: "video_remove_original", label: "Remove original after verified remux", type: "bool" },
-        { k: "video_process_mp4", label: "Also normalize MP4s without FLAC audio", type: "bool" },
+        { k: "video_process_mp4", label: "Also re-mux MP4s into MKV", type: "bool" },
       ],
     },
     {
       title: "AI-assisted lyrics",
-      blurb: "Any OpenAI-compatible chat endpoint (OpenAI, OpenRouter, LM Studio, llama.cpp…). Powers the lyrics editor's AI clean/repair actions.",
+      blurb: "Any OpenAI-compatible chat endpoint — Google Gemini (OpenAI-compatible endpoint, key from AI Studio), OpenAI, OpenRouter, LM Studio, llama.cpp. Powers AI lyrics clean/repair and the fullscreen player's translation + transliteration.",
+      presets: [
+        { name: "Google Gemini", values: { ai_base_url: "https://generativelanguage.googleapis.com/v1beta/openai", ai_model: "gemini-3.5-flash-lite" } },
+        { name: "OpenAI", values: { ai_base_url: "https://api.openai.com/v1", ai_model: "gpt-4o-mini" } },
+        { name: "OpenRouter", values: { ai_base_url: "https://openrouter.ai/api/v1", ai_model: "openai/gpt-4o-mini" } },
+        { name: "Ollama (local)", values: { ai_base_url: "http://localhost:11434/v1", ai_model: "llama3.2" } },
+        { name: "LM Studio (local)", values: { ai_base_url: "http://localhost:1234/v1", ai_model: "local-model" } },
+      ],
       fields: [
-        { k: "ai_base_url", label: "Base URL (e.g. https://api.openai.com/v1)", type: "text" },
+        { k: "ai_base_url", label: "Base URL", type: "text" },
         { k: "ai_api_key", label: "API key", type: "text" },
-        { k: "ai_model", label: "Model (e.g. gpt-4o-mini)", type: "text" },
+        { k: "ai_model", label: "Model (e.g. gemini-3.5-flash-lite)", type: "text" },
+        { k: "lyrics_xlit_enabled", label: "Transliteration enabled (script 15)", type: "bool" },
+        { k: "lyrics_translate_enabled", label: "Translation enabled (script 15)", type: "bool" },
+        { k: "lyrics_translation_langs", label: "Translation languages (comma separated, e.g. en,de)", type: "text" },
+        { k: "lyrics_xlit_sidecars", label: "Write .romaji.lrc / .<lang>.lrc sidecars", type: "bool" },
         { k: "ai_translate_lang", label: "Fullscreen player translation language (e.g. en, de)", type: "text" },
       ],
     },
@@ -258,11 +281,30 @@ export default function SettingsPage() {
         { k: "soulseek_down_limit", label: "Download speed limit (kB/s, 0 = unlimited)", type: "number", min: 0, max: 100000 },
         { k: "soulseek_download_dir", label: "Download dir (blank = <music folder>/.mlo_downloads)", type: "text" },
         { k: "soulseek_autostart", label: "Start slskd with the app backend", type: "bool" },
+        { k: "soulseek_share_library", label: "Share the music folder on the network", type: "bool" },
       ],
     },
     {
-      title: "Beets tagging",
-      blurb: "Managed beets import with Picard-parity behaviors: MusicBrainz matching, locale alias translations, WORK/MOVEMENT from work relationships, and release-type capitalization (EP uppercased). Files are organized by your naming script via the mlo_dir path hook.",
+      title: "Auto-import (MusicBrainz → Soulseek)",
+      blurb: "Search terms are templates of release fields (artist album year date country catalognumber barcode label). CD rips are found by catalog number, digital media by title + year; every disc's .log must reach the score threshold before the album downloads.",
+      fields: [
+        { k: "soulseek_auto_cd_queries", label: "CD query templates (; separated)", type: "text" },
+        { k: "soulseek_auto_digital_queries", label: "Digital query templates (; separated)", type: "text" },
+        { k: "soulseek_auto_log_min_score", label: "Min .log score (0–100)", type: "number", min: 0, max: 100 },
+        { k: "soulseek_auto_complete_ratio", label: "Required track completeness (0.5–1)", type: "number", min: 0.5, max: 1, step: 0.05 },
+      ],
+    },
+    {
+      title: "Import & tag cleanup",
+      blurb: "Genre importing from MusicBrainz and tag hygiene applied while optimizing.",
+      fields: [
+        { k: "mb_genre_count", label: "Genres imported per release (MusicBrainz)", type: "number", min: 1, max: 10 },
+        { k: "strip_unknown_tags", label: "Remove non-canonical tags on optimize (script 10)", type: "bool" },
+      ],
+    },
+    {
+      title: "Beets tagging (script 14)",
+      blurb: "Managed beets import with Picard-parity behaviors: MusicBrainz matching, locale alias translations, WORK/MOVEMENT from work relationships, and release-type capitalization (EP uppercased). Files are organized by your naming script via the mlo_dir path hook. Runs as part of Run All; skipped quietly when beets isn't installed.",
       fields: [
         { k: "beets_locale", label: "Preferred locale for aliases (e.g. en, ja, de)", type: "text" },
         { k: "beets_translations", label: "Translate titles/names to preferred locale", type: "bool" },
@@ -289,6 +331,8 @@ export default function SettingsPage() {
     { k: "grade_check_lyrics", label: "Lyrics present", type: "bool" },
     { k: "grade_check_lyrics_format", label: "Lyrics format", type: "bool" },
     { k: "grade_check_sidecar_cover", label: "Sidecar cover", type: "bool" },
+    { k: "grade_check_mb_links", label: "MusicBrainz links (album/artist/track)", type: "bool" },
+    { k: "grade_check_rym_links", label: "RateYourMusic links (album/artist/track)", type: "bool" },
     { k: "grade_check_media", label: "MEDIA tag", type: "bool" },
     { k: "grade_check_source", label: "SOURCE tag", type: "bool" },
     { k: "grade_check_album_tags", label: "Album-level tags", type: "bool" },
@@ -301,6 +345,11 @@ export default function SettingsPage() {
     { k: "grade_check_cover", label: "Cover present", type: "bool" },
     { k: "grade_check_cue_format", label: "CUE format", type: "bool" },
     { k: "grade_check_disallowed", label: "Disallowed files", type: "bool" },
+    { k: "grade_check_extra_images", label: "Extra artwork (images not tied to a track)", type: "bool" },
+    { k: "grade_check_xlit", label: "Transliteration (script 15)", type: "bool" },
+    { k: "grade_check_trans", label: "Translation (script 15)", type: "bool" },
+    { k: "grade_check_naming", label: "Naming script paths", type: "bool" },
+    { k: "grade_check_key_bpm", label: "Key & BPM tags", type: "bool" },
   ];
   const ALL_CFG_KEYS = [...CFG_GROUPS.flatMap((g) => g.fields), ...GRADE_CHECK_KEYS].map((f) => f.k);
   const [scriptCfg, setScriptCfg] = useState<Record<string, unknown>>({});
@@ -310,7 +359,7 @@ export default function SettingsPage() {
   const [previewing, setPreviewing] = useState(false);
   const [rawConfig, setRawConfig] = useState("{}");
   const [tab, setTab] = useState("general");
-  const [runAll, setRunAll] = useState<number[]>([11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10, 12]);
+  const [runAll, setRunAll] = useState<number[]>([11, 14, 1, 2, 8, 13, 12, 3, 5, 9, 6, 4, 7, 10]);
   const [beetsBusy, setBeetsBusy] = useState(false);
   const { data: beetsStatus, refetch: refetchBeets } = useQuery({
     queryKey: ["beetsStatus"],
@@ -332,9 +381,11 @@ export default function SettingsPage() {
 
   const RUN_ALL_SCRIPTS: { id: number; label: string }[] = [
     { id: 11, label: "Video Remux" },
+    { id: 14, label: "Beets Tag" },
     { id: 1, label: "Lyrics" },
     { id: 2, label: "CUEs" },
     { id: 8, label: "AutoTag" },
+    { id: 13, label: "Lyrics Fetch" },
     { id: 3, label: "FLACs" },
     { id: 5, label: "Images" },
     { id: 9, label: "AccurateRip" },
@@ -345,15 +396,34 @@ export default function SettingsPage() {
     { id: 12, label: "Key & BPM" },
   ];
 
+  // Every per-script force switch. They also live in their own script tab;
+  // both places bind to the same config keys, and the master toggle below
+  // flips them all at once.
+  const FORCE_KEYS: { k: string; label: string }[] = [
+    { k: "force_lyrics", label: "1 · Lyrics re-format" },
+    { k: "force_cue", label: "2 · CUE re-format" },
+    { k: "force_reencode_flac", label: "3 · FLAC re-encode" },
+    { k: "force_reencode_images", label: "5 · Image re-process" },
+    { k: "force_audit", label: "6 · Re-audit" },
+    { k: "force_dr_replaygain", label: "7 · DR / ReplayGain re-run" },
+    { k: "force_auto_tag", label: "8 · AutoTag re-run" },
+    { k: "force_accurip", label: "9 · AccurateRip re-generate" },
+    { k: "force_audiometa", label: "12 · Key & BPM re-analysis" },
+    { k: "force_xlit", label: "15 · Lyrics xlit/translate re-run" },
+  ];
+
   const NAV: { id: string; label: string; section?: string }[] = [
     { id: "general", label: "General" },
     { id: "appearance", label: "Appearance" },
-    { id: "naming", label: "File naming" },
-    { id: "ai", label: "AI" },
-    { id: "beets", label: "Beets" },
-    { id: "soulseek", label: "Soulseek" },
-    { id: "deps", label: "Dependencies" },
-    { id: "flac", label: "FLACs", section: "Scripts" },
+    { id: "naming", label: "Naming" },
+    { id: "tagwrites", label: "Tagging" },
+    { id: "grading", label: "Grading" },
+    { id: "ai", label: "AI", section: "Integrations" },
+    { id: "beets", label: "Beets", section: "Integrations" },
+    { id: "soulseek", label: "Soulseek", section: "Integrations" },
+    { id: "autoimport", label: "Auto-import", section: "Integrations" },
+    { id: "deps", label: "Dependencies", section: "Integrations" },
+    { id: "flac", label: "FLACs & lossless", section: "Scripts" },
     { id: "images", label: "Images", section: "Scripts" },
     { id: "lyrics", label: "Lyrics & CUEs", section: "Scripts" },
     { id: "dr", label: "DR / ReplayGain", section: "Scripts" },
@@ -363,8 +433,7 @@ export default function SettingsPage() {
     { id: "cdrips", label: "CD Rips", section: "Scripts" },
     { id: "videos", label: "Videos", section: "Scripts" },
     { id: "audiometa", label: "Key & BPM", section: "Scripts" },
-    { id: "tagwrites", label: "Tag writes", section: "Scripts" },
-    { id: "grading", label: "Grading", section: "Scripts" },
+    { id: "importtags", label: "Import & tags", section: "Scripts" },
   ];
 
   const runPreview = async () => {
@@ -407,7 +476,7 @@ export default function SettingsPage() {
       )
     );
     setRawConfig(JSON.stringify(config, null, 2));
-    setRunAll(Array.isArray(config.run_all_order) ? config.run_all_order.map(Number).filter((n) => n >= 1 && n <= 11) : [11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10]);
+    setRunAll(Array.isArray(config.run_all_order) ? config.run_all_order.map(Number).filter((n) => n >= 1 && n <= 15) : [11, 14, 1, 2, 8, 13, 15, 12, 3, 5, 9, 6, 4, 7, 10]);
     setLoaded(true);
   }, [config, loaded]);
 
@@ -419,7 +488,7 @@ export default function SettingsPage() {
 
   const pickDefaultView = (v: string) => {
     setDefaultView(v);
-    localStorage.setItem("mlo.defaultView", v);
+    localStorage.setItem("mlo.defaultView.v2", v);
   };
 
   const pickNative = async () => {
@@ -480,20 +549,50 @@ export default function SettingsPage() {
       setWorkerLimit(Number(parsed.worker_limit ?? workerLimit));
       setNamingScript(String(parsed.naming_script ?? "") || namingScript);
       setShortFolderNames(!!parsed.short_folder_names);
-      setRunAll(Array.isArray(parsed.run_all_order) ? parsed.run_all_order.map(Number).filter((n: number) => n >= 1 && n <= 11) : runAll);
+      setRunAll(Array.isArray(parsed.run_all_order) ? parsed.run_all_order.map(Number).filter((n: number) => n >= 1 && n <= 15) : runAll);
       toast("Raw config applied — click Save all settings to persist");
     } catch (e) {
       toast("Invalid JSON: " + String(e));
     }
   };
 
-  const GROUP_BY_TAB: Record<string, CfgGroup> = {
-    flac: CFG_GROUPS[0], images: CFG_GROUPS[1], lyrics: CFG_GROUPS[2],
-    dr: CFG_GROUPS[3], audit: CFG_GROUPS[4], autotag: CFG_GROUPS[5],
-    accurip: CFG_GROUPS[6], tagwrites: CFG_GROUPS[7], grading: CFG_GROUPS[8],
-    cdrips: CFG_GROUPS[9], videos: CFG_GROUPS[10], ai: CFG_GROUPS[11],
-    audiometa: CFG_GROUPS[12], beets: CFG_GROUPS[14], soulseek: CFG_GROUPS[13],
-  };
+  // Tab → group, matched by title (robust against group reordering).
+  const GROUP_BY_TAB: Record<string, CfgGroup> = Object.fromEntries(
+    [
+      ["flac", "FLACs"], ["images", "Images"], ["lyrics", "Lyrics & CUEs"],
+      ["dr", "DR / ReplayGain"], ["audit", "Audit"], ["autotag", "AutoTag"],
+      ["accurip", "AccurateRip"], ["tagwrites", "Tag writes"],
+      ["grading", "Grading"], ["cdrips", "CD Rips"], ["videos", "Videos"],
+      ["ai", "AI-assisted"], ["audiometa", "Key & BPM"], ["beets", "Beets tagging"],
+      ["soulseek", "Soulseek (managed slskd)"], ["autoimport", "Auto-import"],
+      ["importtags", "Import & tag cleanup"],
+    ].map(([tab, prefix]) => [
+      tab,
+      CFG_GROUPS.find((g) => g.title.toLowerCase().startsWith(String(prefix).toLowerCase())),
+    ])
+  ) as Record<string, CfgGroup>;
+
+  const searchHits = (() => {
+    if (!searching) return [] as { tab: string; group: string; field: string }[];
+    const needle = q.trim().toLowerCase();
+    const hits: { tab: string; group: string; field: string }[] = [];
+    const tabFor = (title: string) =>
+      Object.entries(GROUP_BY_TAB).find(([, g]) => g?.title === title)?.[0] ?? "";
+    for (const g of CFG_GROUPS) {
+      const tab = tabFor(g.title);
+      for (const f of g.fields) {
+        if (f.label.toLowerCase().includes(needle) || f.k.toLowerCase().includes(needle)) {
+          hits.push({ tab, group: g.title, field: f.label });
+        }
+      }
+    }
+    for (const c of GRADE_CHECK_KEYS) {
+      if (c.label.toLowerCase().includes(needle) || c.k.toLowerCase().includes(needle)) {
+        hits.push({ tab: "grading", group: "Grading checks", field: c.label });
+      }
+    }
+    return hits.slice(0, 24);
+  })();
 
   const [encoderTags, setEncoderTags] = useState<Record<string, Record<string, boolean>>>({});
   const toggleEncoder = (fmt: string, field: string, on: boolean) =>
@@ -525,9 +624,9 @@ export default function SettingsPage() {
   };
 
   const renderFields = (fields: CfgField[]) => (
-    <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-1.5">
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-6 gap-y-2.5 mt-2">
       {fields.map((f) => (
-        <label key={f.k} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+        <label key={f.k} className="flex items-center gap-2 text-[13px] text-zinc-300 cursor-pointer select-none">
           {f.type === "bool" ? (
             <>
               <input type="checkbox" checked={!!scriptCfg[f.k]} onChange={(e) => setCfg(f.k, e.target.checked)} />
@@ -575,21 +674,55 @@ export default function SettingsPage() {
   );
 
   return (
-    <div className="p-6 max-w-5xl">
-      <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+    <div className="p-6">
+      <div className="flex items-end justify-between gap-4 flex-wrap">
+        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+        <div className="relative w-full max-w-md">
+          <input
+            className="input !py-1.5 text-sm w-full"
+            placeholder="Search settings… (e.g. cover, lyrics, catalog)"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {searching && (
+            <div className="absolute z-30 left-0 right-0 top-full mt-1 glass rounded-lg bg-zinc-950/95 border border-border shadow-2xl max-h-80 overflow-auto p-1.5">
+              {searchHits.length === 0 && (
+                <div className="px-2.5 py-2 text-xs text-zinc-500">No settings match “{q.trim()}”.</div>
+              )}
+              {searchHits.map((h, i) => (
+                <button
+                  key={i}
+                  className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-white/10"
+                  onClick={() => {
+                    if (h.tab) setTab(h.tab);
+                    setQ("");
+                  }}
+                >
+                  <div className="text-xs text-zinc-200">{h.field}</div>
+                  <div className="text-[10px] text-zinc-500">{h.group}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="flex gap-6 mt-4">
         <nav className="w-44 shrink-0 space-y-0.5 sticky top-20 self-start max-h-[calc(100vh-120px)] overflow-auto pr-1">
-          {NAV.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => setTab(n.id)}
-              className={`w-full text-left px-3 py-1.5 rounded-md text-xs transition-colors ${
-                tab === n.id ? "bg-raise text-white border border-accent/40" : "text-zinc-400 hover:text-white hover:bg-panel border border-transparent"
-              }`}
-            >
-              {n.label}
-            </button>
+          {NAV.map((n, i) => (
+            <div key={n.id}>
+              {n.section && (i === 0 || NAV[i - 1].section !== n.section) && (
+                <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-zinc-600 first:pt-0">{n.section}</div>
+              )}
+              <button
+                onClick={() => setTab(n.id)}
+                className={`w-full text-left px-3 py-1.5 rounded-md text-xs transition-colors ${
+                  tab === n.id ? "bg-raise text-white border border-accent/40" : "text-zinc-400 hover:text-white hover:bg-panel border border-transparent"
+                }`}
+              >
+                {n.label}
+              </button>
+            </div>
           ))}
         </nav>
 
@@ -628,9 +761,11 @@ export default function SettingsPage() {
                   Show sidecar files (cue/log/lrc/accurip) in library
                 </label>
               </div>
-              <div>
-                <span className="text-xs text-zinc-500 uppercase">Run All — scripts in order</span>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-1.5">
+              <details className="bg-zinc-950/40 rounded-lg border border-border px-3 py-2">
+                <summary className="text-xs font-medium cursor-pointer text-zinc-400 select-none">
+                  Run All — scripts in order ({runAll.length} enabled)
+                </summary>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-2">
                   {RUN_ALL_SCRIPTS.map((s) => (
                     <label key={s.id} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
                       <input
@@ -646,7 +781,41 @@ export default function SettingsPage() {
                   ))}
                 </div>
                 <div className="text-[10px] text-zinc-600 mt-1">The Run All button executes them in this order.</div>
-              </div>
+              </details>
+              <details className="bg-zinc-950/40 rounded-lg border border-border px-3 py-2">
+                <summary className="text-xs font-medium cursor-pointer text-zinc-400 select-none">
+                  Force options — re-run scripts even when up to date
+                </summary>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none mt-2 font-medium">
+                  <input
+                    type="checkbox"
+                    checked={FORCE_KEYS.every((f) => !!scriptCfg[f.k])}
+                    onChange={(e) =>
+                      setScriptCfg((c) => {
+                        const next = { ...c };
+                        for (const f of FORCE_KEYS) next[f.k] = e.target.checked;
+                        return next;
+                      })
+                    }
+                  />
+                  Force every script (ignore all &ldquo;already done&rdquo; skips)
+                </label>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mt-1.5">
+                  {FORCE_KEYS.map((f) => (
+                    <label key={f.k} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={!!scriptCfg[f.k]}
+                        onChange={(e) => setCfg(f.k, e.target.checked)}
+                      />
+                      {f.label}
+                    </label>
+                  ))}
+                </div>
+                <div className="text-[10px] text-zinc-600 mt-1">
+                  Forced scripts redo work even when output already looks up to date. Each toggle also appears in its script tab; the Run All button has its own one-shot Force switch.
+                </div>
+              </details>
             </div>
           )}
 
@@ -661,7 +830,7 @@ export default function SettingsPage() {
                       key={a.id}
                       title={a.name}
                       onClick={() => pickAccent(a.id)}
-                      className="h-8 w-8 rounded-full border-2 flex items-center justify-center transition-transform hover:scale-110"
+                      className="h-8 w-8 rounded-lg border-2 flex items-center justify-center transition-transform hover:scale-110"
                       style={{
                         backgroundColor: a.color,
                         borderColor: accent === a.id ? "#fff" : "#3f3f46",
@@ -675,11 +844,60 @@ export default function SettingsPage() {
               <label className="block">
                 <span className="text-xs text-zinc-500 uppercase">Default library view</span>
                 <select className="input mt-1" value={defaultView} onChange={(e) => pickDefaultView(e.target.value)}>
-                  <option value="albums">Albums</option>
+                  <option value="grid">Grid (cover browse)</option>
+                  <option value="compact">Compact (grading status)</option>
+                  <option value="albums">Albums table</option>
                   <option value="artists">Artists</option>
                   <option value="tracks">Tracks</option>
                 </select>
               </label>
+
+              <div className="pt-2 border-t border-border">
+                <span className="text-xs text-zinc-500 uppercase">Player &amp; lyrics display</span>
+                <div className="space-y-2.5 mt-2">
+                  <label className="flex items-center justify-between gap-3 text-xs text-zinc-300">
+                    <span>Fullscreen lyrics size</span>
+                    <select
+                      className="input !w-28 !py-1"
+                      value={localStorage.getItem("mlo.np.size") ?? "md"}
+                      onChange={(e) => localStorage.setItem("mlo.np.size", e.target.value)}
+                    >
+                      <option value="sm">Small</option>
+                      <option value="md">Medium</option>
+                      <option value="lg">Large</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center justify-between gap-3 text-xs text-zinc-300 cursor-pointer">
+                    <span>Karaoke word highlight (vs. whole-line)</span>
+                    <input
+                      type="checkbox"
+                      defaultChecked={localStorage.getItem("mlo.np.karaoke") !== "0"}
+                      onChange={(e) => localStorage.setItem("mlo.np.karaoke", e.target.checked ? "1" : "0")}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 text-xs text-zinc-300 cursor-pointer">
+                    <span>Animated background in fullscreen player</span>
+                    <input
+                      type="checkbox"
+                      defaultChecked={localStorage.getItem("mlo.np.orbs") !== "0"}
+                      onChange={(e) => localStorage.setItem("mlo.np.orbs", e.target.checked ? "1" : "0")}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 text-xs text-zinc-300">
+                    <span>Default lyrics save target</span>
+                    <select
+                      className="input !w-40 !py-1"
+                      value={localStorage.getItem("mlo.lyricsSaveTarget") ?? "embedded"}
+                      onChange={(e) => localStorage.setItem("mlo.lyricsSaveTarget", e.target.value)}
+                    >
+                      <option value="embedded">Embedded tag</option>
+                      <option value="sidecar">.lrc sidecar</option>
+                      <option value="both">Tag + .lrc</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="text-[10px] text-zinc-600 mt-2">Stored per browser, like the accent color.</div>
+              </div>
             </div>
           )}
 
@@ -786,6 +1004,21 @@ export default function SettingsPage() {
             <div className="bg-card rounded-lg border border-border p-4 space-y-3">
               <div className="text-xs font-bold text-zinc-300">{GROUP_BY_TAB[tab].title}</div>
               {GROUP_BY_TAB[tab].blurb && <div className="text-[10px] text-zinc-600">{GROUP_BY_TAB[tab].blurb}</div>}
+              {!!GROUP_BY_TAB[tab].presets?.length && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-zinc-600">Presets:</span>
+                  {GROUP_BY_TAB[tab].presets!.map((pr) => (
+                    <button
+                      key={pr.name}
+                      className="chip text-[10px] border border-white/15 bg-white/5 text-zinc-400 hover:text-white"
+                      title={`Fill base URL + model for ${pr.name} (your API key is kept)`}
+                      onClick={() => Object.entries(pr.values).forEach(([k, v]) => setCfg(k, v))}
+                    >
+                      {pr.name}
+                    </button>
+                  ))}
+                </div>
+              )}
               {renderFields(GROUP_BY_TAB[tab].fields)}
               {tab === "beets" && (
                 <div className="pt-2 border-t border-border space-y-2">

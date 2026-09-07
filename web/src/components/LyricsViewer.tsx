@@ -129,6 +129,15 @@ export default function LyricsViewer({
   const [keysMenu, setKeysMenu] = useState(false);
   const [capturing, setCapturing] = useState<LyricsAction | null>(null);
   const [keys, setKeys] = useState(() => loadLyricsKeys());
+  // Where the host page's Save writes: embedded tag, .lrc sidecar, or both.
+  const [saveTarget, setSaveTarget] = useState<"embedded" | "sidecar" | "both">(
+    () => (localStorage.getItem("mlo.lyricsSaveTarget") as "embedded" | "sidecar" | "both") ?? "embedded"
+  );
+  // Timestamp precision used on save — 2 or 3 decimals (persisted).
+  const [dec, setDec] = useState<number>(() => {
+    const v = Number(localStorage.getItem("mlo.lyricsDecimals"));
+    return v === 2 || v === 3 ? v : decimals;
+  });
   const historyRef = useRef<LrcLine[][]>([]);
   const pendingWords = useRef<{ idx: number; parts: string[]; times: number[]; done: number } | null>(null);
   const [searchHits, setSearchHits] = useState<{ id: number; artist: string; track: string; duration?: number }[] | null>(null);
@@ -158,7 +167,7 @@ export default function LyricsViewer({
     lineRefs.current[activeLine]?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [activeLine, playing]);
 
-  const emit = (ls: LrcLine[]) => onChange(serializeLrc(ls, decimals));
+  const emit = (ls: LrcLine[]) => onChange(serializeLrc(ls, dec));
 
   /** Every mutating path goes through commit() so Undo works. */
   const commit = (next: LrcLine[]) => {
@@ -179,11 +188,21 @@ export default function LyricsViewer({
     setSelIdx((s) => Math.min(s, Math.max(0, prev.length - 1)));
   };
 
+  /** Keep ELRC word stamps alive across a text edit: when the edited text
+   * still tokenizes into the same number of words, re-map the old timings
+   * onto the new tokens instead of dropping them. */
+  const remapWords = (l: LrcLine, newText: string): LrcWord[] | undefined => {
+    if (!l.words?.length) return undefined;
+    const tokens = newText.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length !== l.words.length) return undefined;
+    return l.words.map((w, i) => ({ ...w, text: tokens[i] }));
+  };
+
   const updateLine = (i: number, patch: Partial<LrcLine>) => {
     const next = lines.map((l, j) => {
       if (j !== i) return l;
-      // manual text edits take over from ELRC word timestamps
-      if ("text" in patch) return { ...l, ...patch, words: undefined };
+      // manual text edits keep word timings when the token count still matches
+      if ("text" in patch) return { ...l, ...patch, words: remapWords(l, patch.text ?? "") };
       return { ...l, ...patch };
     });
     commit(next);
@@ -207,7 +226,7 @@ export default function LyricsViewer({
   const shiftAll = (delta: number) => {
     const next = lines.map((l) => {
       const time = Math.max(0, l.time + delta);
-      const out: LrcLine = { ...l, time, ts: fmtTs(time, decimals) };
+      const out: LrcLine = { ...l, time, ts: fmtTs(time, dec) };
       if (out.words?.length) out.words = out.words.map((w) => ({ ...w, time: Math.max(0, w.time + delta) }));
       return out;
     });
@@ -291,7 +310,7 @@ export default function LyricsViewer({
     const t = Math.max(0, audio.currentTime - 0.05);
     const target = activeLine >= 0 ? activeLine : selIdx;
     const idx = Math.min(target, Math.max(0, lines.length - 1));
-    const next = lines.map((l, j) => (j === idx ? { ...l, time: t, ts: fmtTs(t, decimals) } : l));
+    const next = lines.map((l, j) => (j === idx ? { ...l, time: t, ts: fmtTs(t, dec) } : l));
     commit(next);
     setSelIdx((s) => Math.min(s + 1, Math.max(0, lines.length - 1)));
     setPlayTime(t);
@@ -370,7 +389,7 @@ export default function LyricsViewer({
     setAiBusy(mode);
     try {
       if (mode === "wordsync") {
-        const res = await api.lyricsAi("wordsync", serializeLrc(lines, decimals));
+        const res = await api.lyricsAi("wordsync", serializeLrc(lines, dec));
         const parsed = parseLrc(res.result);
         commit(parsed);
         toast(`Word-synced ${parsed.filter((l) => l.words?.length).length}/${parsed.length} lines (ELRC)`);
@@ -408,13 +427,35 @@ export default function LyricsViewer({
         } catch {
           /* no candidates is fine — the LLM still gets the raw text */
         }
-        const source = rawMode ? raw : serializeLrc(lines, decimals);
+        const source = rawMode ? raw : serializeLrc(lines, dec);
         const res = await api.lyricsAi("repair", source, { artist, track, candidates: candidates.slice(0, 400) });
         const parsed = parseLrc(res.result);
         if (parsed.length) commit(parsed);
         setRaw(res.result);
         toast(parsed.length ? `Repaired — ${parsed.length} lines` : "AI repair returned no timed lines (see raw)");
       }
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  /** Detect lyrics for this track (LRCLIB + AI match verification) and sync
+   * them — the AI aligns existing unsynced wording to the matched timestamps
+   * when the track already carries lyrics. Falls back server-side to
+   * deterministic alignment when AI is not configured. */
+  const detectAndSync = async () => {
+    setAiMenu(false);
+    setAiBusy("detect");
+    try {
+      const text = rawMode ? raw : serializeLrc(lines, dec);
+      const res = await api.lyricsAiSync(path, text.trim() ? text : undefined);
+      if (!res.lrc?.trim()) {
+        toast("No lyrics detected for this track");
+        return;
+      }
+      applyImport(res.lrc, `Detect & sync (${res.source})`);
     } catch (e) {
       toast(String(e));
     } finally {
@@ -502,6 +543,35 @@ export default function LyricsViewer({
           <button className="btn-ghost !py-1 text-xs" onClick={importFromLrclib} disabled={loading}>
             <CloudDownload className="h-3.5 w-3.5" /> LRCLIB
           </button>
+          {onSave && (
+            <select
+              className="input !py-1 !px-1.5 text-xs w-auto"
+              value={saveTarget}
+              title="Where the Save button writes lyrics"
+              onChange={(e) => {
+                const v = e.target.value as "embedded" | "sidecar" | "both";
+                setSaveTarget(v);
+                localStorage.setItem("mlo.lyricsSaveTarget", v);
+              }}
+            >
+              <option value="embedded">Save → tag</option>
+              <option value="sidecar">Save → .lrc</option>
+              <option value="both">Save → tag + .lrc</option>
+            </select>
+          )}
+          <select
+            className="input !py-1 !px-1.5 text-xs w-auto"
+            value={dec}
+            title="Timestamp precision used when saving"
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setDec(v);
+              localStorage.setItem("mlo.lyricsDecimals", String(v));
+            }}
+          >
+            <option value={2}>2 dec</option>
+            <option value={3}>3 dec</option>
+          </select>
           <div className="relative">
             <button className="btn-ghost !py-1 text-xs" onClick={() => setAiMenu(!aiMenu)} disabled={!!aiBusy}>
               <Sparkles className="h-3.5 w-3.5" />
@@ -509,6 +579,10 @@ export default function LyricsViewer({
             </button>
             {aiMenu && (
               <div className="absolute right-0 top-full mt-1 z-30 bg-zinc-900 border border-border rounded-lg shadow-xl p-1 w-64">
+                <button className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-panel flex items-center gap-2" onClick={detectAndSync}>
+                  <CloudDownload className="h-3.5 w-3.5 text-accent" />
+                  <span>Detect &amp; sync lyrics<span className="block text-zinc-500 text-[10px]">LRCLIB match + LLM alignment (offline fallback)</span></span>
+                </button>
                 <button className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-panel flex items-center gap-2" onClick={() => runAi("wordsync")}>
                   <Wand2 className="h-3.5 w-3.5 text-accent" />
                   <span>Word-sync lines → ELRC<span className="block text-zinc-500 text-[10px]">deterministic, offline</span></span>
@@ -563,7 +637,7 @@ export default function LyricsViewer({
             className="btn-ghost !py-1 text-xs"
             onClick={() => {
               setRawMode(!rawMode);
-              setRaw(serializeLrc(lines, decimals));
+              setRaw(serializeLrc(lines, dec));
             }}
           >
             {rawMode ? "Lines" : "Raw"}
@@ -724,7 +798,7 @@ export default function LyricsViewer({
       <div className="mt-1.5 text-[10px] text-zinc-600">
         {keys.stampLine} stamps the <b>line being sung</b> and advances · {keys.stampWord} stamps word-by-word (ELRC) ·
         {" "}{keys.playPause} play/pause · {keys.seekBack}/{keys.seekForward} seek · click <Keyboard className="inline h-3 w-3" /> to rebind ·
-        ▶ seeks to a line · timestamps format to {decimals} decimals on save
+        ▶ seeks to a line · timestamps format to {dec} decimals on save
       </div>
     </div>
   );

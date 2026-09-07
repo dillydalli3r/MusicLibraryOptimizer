@@ -6,6 +6,7 @@ export interface QueueTrack {
   albumPath: string;
   artist?: string;
   album?: string;
+  title?: string; // TITLE tag — the player bar must never fall back to the file name while the tag exists
 }
 
 interface Store {
@@ -19,6 +20,8 @@ interface Store {
   setPlaying: (p: string | null) => void;
   queue: QueueTrack[];
   setQueue: (q: QueueTrack[]) => void;
+  /** Append to the queue without restarting the current track. */
+  queueAdd: (tracks: QueueTrack[], position?: "next" | "end") => void;
   index: number;
   setIndex: (i: number) => void;
   queueId: number; // bumped on every queue replacement — player reloads even
@@ -42,6 +45,19 @@ interface Store {
   toggleAlbum: (p: string) => void;
   toggleArtist: (p: string) => void;
   clearSelection: () => void;
+  /** App-wide playback volume (0-1) — shared by the player bar and the
+   * fullscreen player, persisted across reloads. */
+  vol: number;
+  setVol: (v: number) => void;
+}
+
+const VOL_KEY = "mlo.vol";
+
+function initialVol(): number {
+  const raw = localStorage.getItem(VOL_KEY);
+  if (raw === null || raw === "") return 1;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 1;
 }
 
 export const useStore = create<Store>((set) => ({
@@ -55,6 +71,18 @@ export const useStore = create<Store>((set) => ({
   setPlaying: (playing) => set({ playing }),
   queue: [],
   setQueue: (queue) => set((st) => ({ queue, queueId: st.queueId + 1 })),
+  // Deliberately does NOT bump queueId: the player reloads audio on queueId
+  // changes, and appending "next"/"end" must not interrupt the playing track.
+  queueAdd: (tracks, position = "end") =>
+    set((st) => {
+      if (!tracks.length) return {};
+      if (position === "next" && st.index < st.queue.length) {
+        const queue = [...st.queue];
+        queue.splice(st.index + 1, 0, ...tracks);
+        return { queue };
+      }
+      return { queue: [...st.queue, ...tracks] };
+    }),
   index: 0,
   setIndex: (index) => set({ index }),
   queueId: 0,
@@ -96,6 +124,11 @@ export const useStore = create<Store>((set) => ({
       return { selection: { ...st.selection, artists } };
     }),
   clearSelection: () => set({ selection: { tracks: [], albums: [], artists: [] } }),
+  vol: initialVol(),
+  setVol: (vol) => {
+    localStorage.setItem(VOL_KEY, String(vol));
+    set({ vol });
+  },
 }));
 
 export function toast(msg: string) {

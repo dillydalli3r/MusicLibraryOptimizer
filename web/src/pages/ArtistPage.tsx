@@ -1,10 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { useState } from "react";
-import { Music2, ExternalLink, BarChart3 } from "lucide-react";
+import { Music2, BarChart3 } from "lucide-react";
 import { api } from "../api";
-import { AuditBadge, EmptyState, GradeBadge, ScoreRing } from "../components/Badges";
+import { LinkChips, LinkEditorButton } from "../components/Links";
+import { EmptyState, GradeBadge, ScoreRing } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
+import FavHeart from "../components/FavHeart";
+import { albumRef, artistMbid } from "../lib/refs";
+import { auditFails } from "../lib/status";
 import StatsPanel from "../components/StatsPanel";
 import { useStore } from "../store";
 
@@ -25,18 +29,29 @@ export default function ArtistPage() {
     a.tracks.map((t) => ({
       path: t.path, file: t.file, albumPath: a.path,
       artist: a.album_artist || data.display_name || data.name,
-      album: a.meta?.ALBUM ?? undefined,
+      album: a.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
     }))
   );
+  // Identity links for this artist: MBID from any album's album-artist tag,
+  // RYM artist URL from any track that carries one.
+  const artistTags = {
+    MUSICBRAINZ_ARTISTID: artistMbid(data) ?? "",
+    RATEYOURMUSIC_ARTIST:
+      data.albums.flatMap((a) => a.tracks.map((t) => t.tags?.RATEYOURMUSIC_ARTIST ?? ""))
+        .find((v) => v) ?? "",
+  };
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl">
+    <div className="p-6 space-y-6">
       <div className="flex items-start gap-5">
         <div className="h-24 w-24 rounded-xl bg-gradient-to-br from-accent/40 to-indigo-700/40 border border-border flex items-center justify-center shrink-0">
           <Music2 className="h-10 w-10 text-zinc-400" />
         </div>
         <div className="flex-1 min-w-0">
-          <h1 className="text-3xl font-bold tracking-tight">{data.display_name || data.name}</h1>
+          <div className="flex items-center gap-2 min-w-0">
+            <h1 className="text-3xl font-bold tracking-tight truncate">{data.display_name || data.name}</h1>
+            <FavHeart kind="artist" id={data.path} mbid={artistMbid(data)} />
+          </div>
           {data.display_name && data.display_name !== data.name && (
             <div className="text-xs text-zinc-600 mt-0.5">{data.name}</div>
           )}
@@ -44,16 +59,20 @@ export default function ArtistPage() {
             <span>
               {data.aggregate.album_count} albums · {data.aggregate.track_count} tracks
             </span>
-            <AuditBadge audit={data.aggregate.audit_summary} />
-            <GradeBadge pass={(data.aggregate.grade_pct ?? 0) >= 100} score={data.aggregate.grade_pct} />
+            <GradeBadge
+              pass={(data.aggregate.grade_pct ?? 0) >= 100 && !auditFails(data.aggregate.audit_summary)}
+              score={data.aggregate.grade_pct}
+              audit={data.aggregate.audit_summary}
+            />
           </div>
-          <div className="mt-2 inline-flex items-center gap-1 text-xs text-zinc-500">
-            <ExternalLink className="h-3 w-3" /> MusicBrainz / RYM links live on the tracks — set them via Import & link
+          <div className="mt-2 flex items-center gap-1.5">
+            <LinkChips tags={artistTags} />
           </div>
         </div>
         <button className="btn-primary" onClick={() => playNow(allTracks)}>
           Play all
         </button>
+        <LinkEditorButton mode="artist" paths={allTracks.map((t) => t.path)} current={artistTags} />
         <button className="btn-ghost" onClick={() => setStatsOpen(true)}>
           <BarChart3 className="h-4 w-4" /> Stats
         </button>
@@ -82,15 +101,14 @@ export default function ArtistPage() {
             />
             <ScoreRing pct={al.grade_pct} size={40} />
             <div className="flex-1 min-w-0">
-              <Link to={`/album/${encodeURIComponent(al.path)}`} className="font-semibold hover:text-accent-soft">
+              <Link to={albumRef(al)} className="font-semibold hover:text-accent-soft">
                 {al.meta?.ALBUM ?? al.path.split("/").pop()}
               </Link>
               <div className="text-xs text-zinc-500 mt-0.5">
                 {al.meta?.DATE ?? "—"} · {al.media} · {al.track_count} tracks
               </div>
             </div>
-            <AuditBadge audit={al.audit_summary} />
-            <GradeBadge pass={al.pass} score={al.grade_pct} />
+            <GradeBadge pass={!!al.pass && !auditFails(al.audit_summary)} score={al.grade_pct} audit={al.audit_summary} />
           </div>
         ))}
       </div>

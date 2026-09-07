@@ -16,6 +16,18 @@ export default {
         sans: ["Inter", "Segoe UI", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "Consolas", "monospace"],
       },
+      // Monochrome-style softness: the default radii are nudged up so every
+      // card / popover / cover across the app reads rounder without having
+      // to touch each component's classes.
+      borderRadius: {
+        sm: "5px",
+        DEFAULT: "6px",
+        md: "9px",
+        lg: "13px",
+        xl: "17px",
+        "2xl": "22px",
+        "3xl": "28px",
+      },
     },
   },
   plugins: [],

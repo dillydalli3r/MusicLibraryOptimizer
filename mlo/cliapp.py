@@ -22,6 +22,7 @@ from .grader import run_grade_library
 from .images import run_process_images
 from .loudness import run_calc_dr_replaygain
 from .lyrics import run_format_lyrics
+from .lyrics_fetch import run_fetch_lyrics
 from .accurip import run_generate_accurip
 from .audiometa import run_analyze_audiometa
 from .format_all import run_format_all
@@ -36,6 +37,37 @@ USER_INSTALL_DIR = os.path.expandvars(
     r"%LocalAppData%\Programs\Music Library Optimizer")
 SYSTEM_INSTALL_DIR = r"C:\Program Files\Music Library Optimizer"
 
+def _run_beets_tagging(config):
+    """Beets tagging lives with the server integration (vendored beets +
+    managed config). Imported lazily so the plain CLI still works when the
+    server package isn't on sys.path."""
+    try:
+        from server.beetscfg import run_beets_tagging
+    except Exception:
+        from .stats import new_stats
+        from .ui import Color, c, log, print_header
+        print_header("Beets Tagging (MusicBrainz)")
+        log(c("beets tagging needs the server package — run from the repo "
+              "checkout, or use Run All in the web app.", Color.YELLOW))
+        return new_stats()
+    return run_beets_tagging(config)
+
+
+def _run_lyrics_xlit(config):
+    """Script 15 wrapper: AI transforms need the server AI client (httpx),
+    so import lazily exactly like the beets runner above."""
+    try:
+        from .lyrics_xlit import run_lyrics_xlit
+    except Exception:
+        from .stats import new_stats
+        from .ui import Color, c, log, print_header
+        print_header("Lyrics Translate/Transliterate")
+        log(c("script 15 needs the 'httpx' package (server install).",
+              Color.YELLOW))
+        return new_stats()
+    return run_lyrics_xlit(config)
+
+
 SCRIPTS = {
     "lyrics": (1, "Format Lyrics", run_format_lyrics),
     "cues": (2, "Format CUEs", run_format_cues),
@@ -49,6 +81,9 @@ SCRIPTS = {
     "formatall": (10, "Format All", run_format_all),
     "remux": (11, "Video Remux", run_remux_videos),
     "audiometa": (12, "Key & BPM", run_analyze_audiometa),
+    "fetchlyrics": (13, "Fetch Lyrics", run_fetch_lyrics),
+    "beets": (14, "Beets Tagging", _run_beets_tagging),
+    "xlit": (15, "Lyrics Translate/Transliterate", _run_lyrics_xlit),
 }
 
 
@@ -369,7 +404,7 @@ def _resolve_script_ids(spec):
                     ids.append(sid)
             else:
                 print(c(f"Unknown script '{part}'. Use 1-{len(SCRIPTS)} or "
-                        "lyrics/cues/flac/grade/images/audit/dr/autotag/accurip/formatall/remux.",
+                        "lyrics/cues/flac/grade/images/audit/dr/autotag/accurip/formatall/remux/audiometa/fetchlyrics/beets.",
                         Color.RED))
                 return None, None
     return ids, f"RUN {spec.upper()}"

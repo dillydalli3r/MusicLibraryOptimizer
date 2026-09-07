@@ -1,8 +1,49 @@
-import { X, ShieldCheck, CircleAlert } from "lucide-react";
+import { X, ShieldCheck, CircleAlert, Info } from "lucide-react";
 import type { Track } from "../types";
 import { AuditBadge, GradeBadge } from "./Badges";
+import TrackDownloadExport from "./TrackDownloadExport";
 
-/** Per-track grading + audit detail modal (checks, values, verdicts). */
+function fmtTech(tech: Track["tech"]): string {
+  const parts: string[] = [];
+  if ((tech as { codec?: string }).codec) parts.push((tech as { codec?: string }).codec!);
+  if (tech.length) {
+    const m = Math.floor(tech.length / 60);
+    const s = Math.round(tech.length % 60);
+    parts.push(`${m}:${String(s).padStart(2, "0")}`);
+  }
+  if (tech.bitrate) parts.push(`${Math.round(tech.bitrate / 1000)} kbps`);
+  if (tech.bits_per_sample) parts.push(`${Math.round(tech.bits_per_sample)} bit`);
+  if (tech.sample_rate) parts.push(`${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
+  if (tech.channels) parts.push(tech.channels === 1 ? "mono" : tech.channels === 2 ? "stereo" : `${tech.channels} ch`);
+  return parts.join(" · ");
+}
+
+const INFO_ROWS: { key: string; label: string }[] = [
+  { key: "ARTIST", label: "Artist" },
+  { key: "ALBUMARTIST", label: "Album artist" },
+  { key: "ALBUM", label: "Album" },
+  { key: "TRACKNUMBER", label: "Track #" },
+  { key: "DISCNUMBER", label: "Disc #" },
+  { key: "DATE", label: "Date" },
+  { key: "ORIGINALDATE", label: "Original date" },
+  { key: "GENRE", label: "Genre" },
+  { key: "MEDIA", label: "Media" },
+  { key: "SOURCE", label: "Source" },
+  { key: "RELEASETYPE", label: "Release type" },
+  { key: "RELEASECOUNTRY", label: "Country" },
+  { key: "LABEL", label: "Label" },
+  { key: "CATALOGNUMBER", label: "Catalog #" },
+  { key: "COMPOSER", label: "Composer" },
+  { key: "LYRICIST", label: "Lyricist" },
+  { key: "REMIXER", label: "Remixer" },
+  { key: "COPYRIGHT", label: "Copyright" },
+  { key: "ISRC", label: "ISRC" },
+  { key: "MUSICBRAINZ_TRACKID", label: "MB recording" },
+  { key: "MUSICBRAINZ_ALBUMID", label: "MB release" },
+];
+
+/** Per-track song info + grading/audit detail modal (metadata, credits,
+ * tech, lyrics, checks, verdicts). */
 export default function TrackDetails({
   track,
   albumPath,
@@ -14,8 +55,12 @@ export default function TrackDetails({
 }) {
   const issues: string[] = track.issues ?? [];
   const values = track.values ?? {};
+  const tags = track.tags ?? {};
   const checkRows = Object.entries(values).filter(([k]) => !["GENRE", "ITUNESADVISORY", "INSTRUMENTAL", "MEDIA", "SOURCE"].includes(k));
   const failKeys = new Set(issues.map((i) => i.toUpperCase()));
+  const infoRows = INFO_ROWS.filter(({ key }) => tags[key as keyof typeof tags]);
+  const tech = fmtTech(track.tech ?? {});
+  const lyricsState = track.lyrics_embedded ? "embedded" : track.lyrics_lrc ? ".lrc sidecar" : "missing";
 
   return (
     <div className="fixed inset-0 z-40 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
@@ -32,6 +77,38 @@ export default function TrackDetails({
         </div>
 
         <div className="p-5 space-y-4">
+          {/* ---- song info: metadata & credits ---- */}
+          <div>
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">
+              <Info className="h-3.5 w-3.5" /> Song info
+            </div>
+            {tech && <div className="text-[11px] font-mono text-zinc-500 mb-1.5">{tech}</div>}
+            <div className="rounded-md border border-border overflow-hidden">
+              <table className="w-full text-xs">
+                <tbody>
+                  <tr>
+                    <td className="px-2 py-1 text-zinc-500 w-28 align-top">Title</td>
+                    <td className="px-2 py-1 text-zinc-200">{track.tags?.TITLE ?? track.file}</td>
+                  </tr>
+                  {infoRows.map(({ key, label }) => (
+                    <tr key={key}>
+                      <td className="px-2 py-1 text-zinc-500 align-top">{label}</td>
+                      <td className="px-2 py-1 text-zinc-200 break-all">{String(tags[key as keyof typeof tags])}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td className="px-2 py-1 text-zinc-500">Lyrics</td>
+                    <td className="px-2 py-1 text-zinc-200">{lyricsState}</td>
+                  </tr>
+                  <tr>
+                    <td className="px-2 py-1 text-zinc-500 align-top">Path</td>
+                    <td className="px-2 py-1 text-zinc-200 break-all">{track.path ?? albumPath}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <GradeBadge pass={!issues.length} score={issues.length ? 0 : 100} />
             <AuditBadge audit={track.audit} />
@@ -45,6 +122,8 @@ export default function TrackDetails({
               <span className="chip bg-raise border border-border text-zinc-300">CS {track.checksum_status}</span>
             )}
           </div>
+
+          <TrackDownloadExport path={track.path} title={track.tags?.TITLE ?? track.file} />
 
           {issues.length > 0 && (
             <div>
@@ -86,9 +165,7 @@ export default function TrackDetails({
 
           <div className="grid grid-cols-2 gap-2 text-xs text-zinc-400">
             <div>Sidecar cover <span className="text-zinc-200">{track.sidecar_cover ? "yes" : "no"}</span></div>
-            <div>Lyrics <span className="text-zinc-200">{track.lyrics_embedded ? "embedded" : ""}{track.lyrics_lrc ? " .lrc" : ""}{!track.lyrics_embedded && !track.lyrics_lrc ? "missing" : ""}</span></div>
             <div>Unreadable <span className="text-zinc-200">{track.unreadable ? "yes" : "no"}</span></div>
-            <div>Path <span className="text-zinc-200 truncate block max-w-[180px]">{track.path ?? albumPath}</span></div>
           </div>
         </div>
       </div>

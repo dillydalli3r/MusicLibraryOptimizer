@@ -52,8 +52,27 @@ def _init():
                     path TEXT PRIMARY KEY,
                     liked_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS favorites (
+                    kind TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (kind, key)
+                );
                 """
             )
+            # MusicBrainz identity columns — added in-place so existing
+            # databases keep working. Entries with an MBID survive file
+            # moves: reads resolve the current path from the MBID and
+            # re-point the stored path (self-healing).
+            for stmt in (
+                "ALTER TABLE likes ADD COLUMN mbid TEXT",
+                "ALTER TABLE favorites ADD COLUMN mbid TEXT",
+                "ALTER TABLE playlist_tracks ADD COLUMN mbid TEXT",
+            ):
+                try:
+                    c.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass  # column already exists
 
 
 _init()
@@ -76,6 +95,7 @@ def list_playlists():
 
 
 def get_playlist(pid):
+    from server import mbresolve
     with _conn() as c:
         r = c.execute("SELECT * FROM playlists WHERE id=?", (pid,)).fetchone()
         if r is None:
@@ -83,10 +103,26 @@ def get_playlist(pid):
         item = dict(r)
         item["filter"] = json.loads(item.pop("filter_json")) if item.get("filter_json") else None
         rows = c.execute(
-            "SELECT path FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (pid,)
+            "SELECT path, mbid FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (pid,)
         ).fetchall()
-        item["tracks"] = [x["path"] for x in rows]
-        return item
+    tracks = []
+    updates = []
+    for x in rows:
+        path = x["path"]
+        mbid = x["mbid"] or ""
+        cur = mbresolve.heal_row("track", path, mbid)
+        if mbid and cur and os.path.normpath(cur) != os.path.normpath(path):
+            updates.append((cur, path))
+            path = cur
+        tracks.append(path.replace("\\", "/"))
+    if updates:
+        with _lock:
+            with _conn() as c:
+                for new, old in updates:
+                    c.execute("UPDATE playlist_tracks SET path=? WHERE playlist_id=? AND path=?",
+                              (new, pid, old))
+    item["tracks"] = tracks
+    return item
 
 
 def create_playlist(name, kind="manual", filter_spec=None):
@@ -102,23 +138,35 @@ def create_playlist(name, kind="manual", filter_spec=None):
 
 def rename_playlist(pid, name):
     with _conn() as c:
-        c.execute("UPDATE playlists SET name=?, updated=? WHERE id=?", (name, time.time(), pid))
-        return c.rowcount > 0
+        cur = c.execute("UPDATE playlists SET name=?, updated=? WHERE id=?", (name, time.time(), pid))
+        return cur.rowcount > 0
 
 
 def delete_playlist(pid):
     with _lock:
         with _conn() as c:
             c.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (pid,))
-            c.execute("DELETE FROM playlists WHERE id=?", (pid,))
-            return c.rowcount > 0
+            cur = c.execute("DELETE FROM playlists WHERE id=?", (pid,))
+            # rowcount lives on the cursor, not the connection
+            return cur.rowcount > 0
 
 
 # --------------------------------------------------------------------------- #
 # Manual playlist tracks
 # --------------------------------------------------------------------------- #
+def _mbid_for(path):
+    """Recording MBID for a library track path ("" when untagged)."""
+    try:
+        from server import mbresolve
+        return mbresolve.track_mbid_for(path)
+    except Exception:
+        return ""
+
+
 def add_tracks(pid, paths, position=None):
-    """Append (or insert at position) track paths, deduplicating."""
+    """Append (or insert at position) track paths, deduplicating. The
+    track's MusicBrainz recording ID is stored alongside the path so the
+    entry survives later reorganizations."""
     with _lock:
         with _conn() as c:
             existing = {r["path"] for r in c.execute(
@@ -131,14 +179,14 @@ def add_tracks(pid, paths, position=None):
                                  (pid,)).fetchone()[0]
                 start = base + 1
                 for i, p in enumerate(new):
-                    c.execute("INSERT INTO playlist_tracks (playlist_id, path, position) VALUES (?,?,?)",
-                              (pid, p, start + i))
+                    c.execute("INSERT INTO playlist_tracks (playlist_id, path, position, mbid) VALUES (?,?,?,?)",
+                              (pid, p, start + i, _mbid_for(p)))
             else:
                 c.execute("UPDATE playlist_tracks SET position = position + ? WHERE playlist_id=? AND position >= ?",
                           (len(new), pid, position))
                 for i, p in enumerate(new):
-                    c.execute("INSERT INTO playlist_tracks (playlist_id, path, position) VALUES (?,?,?)",
-                              (pid, p, position + i))
+                    c.execute("INSERT INTO playlist_tracks (playlist_id, path, position, mbid) VALUES (?,?,?,?)",
+                              (pid, p, position + i, _mbid_for(p)))
             c.execute("UPDATE playlists SET updated=? WHERE id=?", (time.time(), pid))
             return len(new)
 
@@ -147,10 +195,13 @@ def set_order(pid, paths):
     """Replace the entire ordering with `paths` (reorder / full replace)."""
     with _lock:
         with _conn() as c:
+            known = {r["path"]: (r["mbid"] or "") for r in c.execute(
+                "SELECT path, mbid FROM playlist_tracks WHERE playlist_id=?", (pid,))}
             c.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (pid,))
             for i, p in enumerate(paths):
-                c.execute("INSERT INTO playlist_tracks (playlist_id, path, position) VALUES (?,?,?)",
-                          (pid, p, i))
+                mbid = known.get(p) or _mbid_for(p)
+                c.execute("INSERT INTO playlist_tracks (playlist_id, path, position, mbid) VALUES (?,?,?,?)",
+                          (pid, p, i, mbid))
             c.execute("UPDATE playlists SET updated=? WHERE id=?", (time.time(), pid))
 
 
@@ -242,34 +293,89 @@ def set_smart_filter(pid, filter_spec):
 # .m3u8 export / import
 # --------------------------------------------------------------------------- #
 def export_m3u8(pid):
-    """Render a playlist as an .m3u8 string (EXTM3U + EXTINF lines)."""
+    """Render a playlist as an .m3u8 string.
+
+    Each entry carries its tagged title and — when known — the track's
+    MusicBrainz recording MBID in an ``#MLO-MBID:`` comment, so re-import
+    (or another app honoring the convention) can follow the recording even
+    after the library has been reorganized."""
     pl = get_playlist(pid)
     if pl is None:
         return None
+    with _conn() as c:
+        rows = {r["path"]: (r["mbid"] or "") for r in c.execute(
+            "SELECT path, mbid FROM playlist_tracks WHERE playlist_id=?", (pid,))}
     lines = ["#EXTM3U"]
     for path in pl["tracks"]:
         dur = _duration_of(path)
-        title = os.path.splitext(os.path.basename(path))[0]
+        title = ""
+        try:
+            from mlo.audio import AudioFile
+            af = AudioFile(path)
+            if af.audio is not None:
+                artist = str(af.get_tag("ARTIST") or "").strip()
+                t = str(af.get_tag("TITLE") or "").strip()
+                if t:
+                    title = f"{artist} - {t}" if artist else t
+        except Exception:
+            pass
+        title = title or os.path.splitext(os.path.basename(path))[0]
         lines.append(f"#EXTINF:{dur:.0f},{title}")
-        lines.append(path.replace("\\", "/"))
+        norm = path.replace("\\", "/")
+        mbid = rows.get(path) or rows.get(norm) or ""
+        if mbid:
+            lines.append(f"#MLO-MBID:{mbid}")
+        lines.append(norm)
     return "\n".join(lines) + "\n"
 
 
 def import_m3u8(name, content, base_dir=None):
-    """Parse .m3u8 content into a new manual playlist. Returns playlist id."""
-    paths = []
+    """Parse .m3u8 content into a new manual playlist. Returns playlist id.
+
+    Relative paths resolve against base_dir; ``#MLO-MBID:`` comments attach
+    the recording MBID to each entry so the playlist survives moves."""
+    from server import mbresolve
+
     base_dir = base_dir or ""
+    found = []           # paths that exist right now
+    mbids = []           # parallel MBID list ("" when unknown)
+    missing_by_mbid = []  # lines whose file is gone but carry an MBID
+    pending_mbid = ""
     for line in content.splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
+        if not line:
+            continue
+        if line.startswith("#MLO-MBID:"):
+            pending_mbid = line.split(":", 1)[1].strip()
+            continue
+        if line.startswith("#"):
             continue
         p = line
         if not os.path.isabs(p):
             p = os.path.join(base_dir, p)
         if os.path.isfile(p):
-            paths.append(os.path.normpath(p))
+            found.append(os.path.normpath(p))
+            mbids.append(pending_mbid)
+        elif pending_mbid:
+            missing_by_mbid.append(pending_mbid)
+        pending_mbid = ""
     pid = create_playlist(name, kind="manual")
-    add_tracks(pid, paths)
+    add_tracks(pid, found)
+    # stamp explicit MBIDs + heal vanished paths via the tag index
+    with _lock:
+        with _conn() as c:
+            for p, mbid in zip(found, mbids):
+                if mbid:
+                    c.execute("UPDATE playlist_tracks SET mbid=? WHERE playlist_id=? AND path=?",
+                              (mbid, pid, p))
+            for mbid in missing_by_mbid:
+                healed = mbresolve.heal_row("track", "", mbid)
+                if healed and os.path.isfile(healed):
+                    maxpos = c.execute(
+                        "SELECT COALESCE(MAX(position),-1)+1 FROM playlist_tracks WHERE playlist_id=?",
+                        (pid,)).fetchone()[0]
+                    c.execute("INSERT INTO playlist_tracks (playlist_id, path, position, mbid) VALUES (?,?,?,?)",
+                              (pid, healed, maxpos, mbid))
     return pid
 
 
@@ -287,9 +393,27 @@ def _duration_of(path):
 # Liked tracks (heart)
 # --------------------------------------------------------------------------- #
 def list_likes():
+    """Paths of all liked tracks, newest first, forward-slash normalized.
+
+    Rows that carry a MusicBrainz recording ID resolve against the live
+    library first: if the file moved, the stored path is re-pointed so the
+    like survives reorganizations.
+    """
+    from server import mbresolve
+    out = []
     with _conn() as c:
-        rows = c.execute("SELECT path FROM likes ORDER BY liked_at DESC").fetchall()
-        return [r["path"] for r in rows]
+        rows = c.execute("SELECT path, mbid FROM likes ORDER BY liked_at DESC").fetchall()
+    for r in rows:
+        path = r["path"]
+        mbid = (r["mbid"] if "mbid" in r.keys() else None) or ""
+        cur = mbresolve.heal_row("track", path, mbid)
+        if mbid and cur and os.path.normpath(cur) != os.path.normpath(path):
+            with _lock:
+                with _conn() as c2:
+                    c2.execute("UPDATE likes SET path=? WHERE path=?", (cur, path))
+            path = cur
+        out.append(path.replace("\\", "/"))
+    return out
 
 
 def is_liked(path):
@@ -297,7 +421,7 @@ def is_liked(path):
         return c.execute("SELECT 1 FROM likes WHERE path=?", (path,)).fetchone() is not None
 
 
-def toggle_like(path):
+def toggle_like(path, mbid=None):
     path = str(path or "").strip()
     if not path:
         raise ValueError("path required")
@@ -306,5 +430,76 @@ def toggle_like(path):
             if c.execute("SELECT 1 FROM likes WHERE path=?", (path,)).fetchone():
                 c.execute("DELETE FROM likes WHERE path=?", (path,))
                 return False
-            c.execute("INSERT INTO likes (path, liked_at) VALUES (?, ?)", (path, time.time()))
+            c.execute(
+                "INSERT INTO likes (path, liked_at, mbid) VALUES (?, ?, ?)",
+                (path, time.time(), str(mbid or "").strip() or None),
+            )
+            return True
+
+
+# --------------------------------------------------------------------------- #
+# Favorite albums / artists / playlists (sidebar Favorites section)
+# --------------------------------------------------------------------------- #
+FAV_KINDS = ("album", "artist", "playlist")
+
+
+def list_favorites():
+    """Favorites per kind, newest first, keyed by current path (or playlist
+    id as a string). Response keys are plural (albums/artists/playlists) to
+    match the frontend contract; stored kinds are singular. Rows carrying a
+    MusicBrainz ID resolve against the live library and self-heal their
+    stored path after the files were reorganized."""
+    from server import mbresolve
+    plural = {"album": "albums", "artist": "artists", "playlist": "playlists"}
+    out = {p: [] for p in plural.values()}
+    seen = set()
+    with _conn() as c:
+        rows = c.execute("SELECT kind, key, mbid FROM favorites ORDER BY created_at DESC").fetchall()
+    for r in rows:
+        kind = r["kind"]
+        p = plural.get(kind)
+        if not p:
+            continue
+        key = r["key"]
+        mbid = r["mbid"] or ""
+        if kind in ("album", "artist"):
+            cur = mbresolve.heal_row(kind, key, mbid)
+            if mbid and cur and os.path.normpath(cur) != os.path.normpath(key):
+                with _lock:
+                    with _conn() as c2:
+                        c2.execute(
+                            "UPDATE favorites SET key=? WHERE kind=? AND key=?",
+                            (cur, kind, key),
+                        )
+                key = cur
+        key = key.replace("\\", "/")
+        # The same entity may exist under both separator variants; the
+        # healed path is canonical, so drop duplicates.
+        dedupe = f"{kind}:{os.path.normcase(key)}"
+        if dedupe in seen:
+            with _lock:
+                with _conn() as c2:
+                    c2.execute("DELETE FROM favorites WHERE kind=? AND key=?", (kind, r["key"]))
+            continue
+        seen.add(dedupe)
+        out[p].append(key)
+    return out
+
+
+def toggle_favorite(kind, key, mbid=None):
+    kind = str(kind or "").strip().lower()
+    key = str(key or "").strip()
+    if kind not in FAV_KINDS:
+        raise ValueError("kind must be one of: " + ", ".join(FAV_KINDS))
+    if not key:
+        raise ValueError("key required")
+    with _lock:
+        with _conn() as c:
+            if c.execute("SELECT 1 FROM favorites WHERE kind=? AND key=?", (kind, key)).fetchone():
+                c.execute("DELETE FROM favorites WHERE kind=? AND key=?", (kind, key))
+                return False
+            c.execute(
+                "INSERT INTO favorites (kind, key, created_at, mbid) VALUES (?, ?, ?, ?)",
+                (kind, key, time.time(), str(mbid or "").strip() or None),
+            )
             return True

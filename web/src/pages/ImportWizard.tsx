@@ -728,6 +728,7 @@ export default function ImportWizard() {
           RELEASETYPE: release?.release_type || null,
           RELEASECOUNTRY: release?.country || null,
           CATALOGNUMBER: release?.catalog_number || null,
+          LABEL: release?.label || null,
         };
       }
       await api.mbAssign(writes);
@@ -1013,7 +1014,7 @@ const finish = async () => {
           <div key={s} className="flex items-center gap-1.5 shrink-0">
             <button
               onClick={() => i < step && setStep(i)}
-              className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs transition-colors ${
                 i === step
                   ? "bg-accent on-accent"
                   : i < step

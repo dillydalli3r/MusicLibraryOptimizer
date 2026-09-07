@@ -60,6 +60,12 @@ TAG_MAP = {
         "flac": "CATALOGNUMBER", "mp3": ("TXXX", "CATALOGNUMBER"),
         "mp4": ("freeform", "com.apple.iTunes", "CATALOGNUMBER"),
     },
+    # Record label (Picard writes "LABEL"; beets writes the same vorbis /
+    # TXXX / MP4 freeform keys, so both tagging paths stay interchangeable).
+    "LABEL": {
+        "flac": "LABEL", "mp3": ("TXXX", "LABEL"),
+        "mp4": ("freeform", "com.apple.iTunes", "LABEL"),
+    },
     "TRACKTOTAL": {
         "flac": "TRACKTOTAL", "mp3": ("TXXX", "TRACKTOTAL"),
         "mp4": ("freeform", "com.apple.iTunes", "TRACKTOTAL"),
@@ -82,6 +88,14 @@ TAG_MAP = {
     },
     "COMPOSER": {
         "flac": "COMPOSER", "mp3": ("TCOM", None), "mp4": "\xa9wrt",
+    },
+    "LYRICIST": {
+        "flac": "LYRICIST", "mp3": ("TEXT", None),
+        "mp4": ("freeform", "com.apple.iTunes", "LYRICIST"),
+    },
+    "REMIXER": {
+        "flac": "REMIXER", "mp3": ("TPE4", None),
+        "mp4": ("freeform", "com.apple.iTunes", "REMIXER"),
     },
     "COMMENT": {
         "flac": "COMMENT", "mp3": ("COMM", None), "mp4": "\xa9cmt",
@@ -115,6 +129,17 @@ TAG_MAP = {
     },
     "LYRICS": {
         "flac": "LYRICS", "mp3": ("USLT", None), "mp4": "\xa9lyr",
+    },
+    # Line-aligned lyric transforms (script 15): the romanized original and
+    # the translated lyrics stored next to the main LYRICS tag. Freeform
+    # TXXX / iTunes atoms because no standard ID3/MP4 frame exists for them.
+    "TRANSLITERATION": {
+        "flac": "TRANSLITERATION", "mp3": ("TXXX", "TRANSLITERATION"),
+        "mp4": ("freeform", "com.apple.iTunes", "TRANSLITERATION"),
+    },
+    "TRANSLATION": {
+        "flac": "TRANSLATION", "mp3": ("TXXX", "TRANSLATION"),
+        "mp4": ("freeform", "com.apple.iTunes", "TRANSLATION"),
     },
     "GENRE": {
         "flac": "GENRE",

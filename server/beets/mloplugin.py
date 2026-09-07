@@ -170,6 +170,7 @@ def _item_naming_vars(item):
         "releasecountry": _first(item.country) or "",
         "media": _first(item.media) or "",
         "catalognumber": _first(item.catalognum) or "",
+        "label": _first(item.label) or "",
         "discnumber": str(item.disc or 1),
         "disctotal": str(item.disctotal or ""),
         "tracknumber": str(item.track or ""),

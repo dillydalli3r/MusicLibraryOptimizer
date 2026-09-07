@@ -1,6 +1,8 @@
 """Lossless FLAC re-encoding via the reference flac.exe toolchain."""
+import json
 import os
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .containers import (
@@ -14,6 +16,203 @@ from .stats import (
     _collect_targets, worker_count,
 )
 from .ui import print_header, log, c, Color, log_file_result
+
+# Lossless but uncompressed (or externally compressed) sources that script 3
+# converts to FLAC so the whole library is losslessly compressed. ffmpeg
+# decodes all of them; tags are copied from ffprobe metadata.
+LOSSLESS_SOURCE_EXTS = (".wav", ".aif", ".aiff", ".ape", ".wv", ".shn")
+
+# ffprobe metadata key -> semantic tag name (uppercased for Vorbis comments).
+_FFPROBE_TAG_MAP = {
+    "title": "TITLE",
+    "artist": "ARTIST",
+    "album": "ALBUM",
+    "album_artist": "ALBUMARTIST",
+    "date": "DATE",
+    "genre": "GENRE",
+    "track": "TRACKNUMBER",
+    "disc": "DISCNUMBER",
+    "composer": "COMPOSER",
+    "comment": "COMMENT",
+    "publisher": "PUBLISHER",
+    "copyright": "COPYRIGHT",
+    "isrc": "ISRC",
+    "bpm": "BPM",
+    "initialkey": "INITIALKEY",
+    "media": "MEDIA",
+    "source": "SOURCE",
+    "catalognumber": "CATALOGNUMBER",
+    "musicbrainz_trackid": "MUSICBRAINZ_TRACKID",
+    "musicbrainz_albumid": "MUSICBRAINZ_ALBUMID",
+    "musicbrainz_artistid": "MUSICBRAINZ_ARTISTID",
+    "musicbrainz_albumartistid": "MUSICBRAINZ_ALBUMARTISTID",
+    "replaygain_track_gain": "REPLAYGAIN_TRACK_GAIN",
+    "replaygain_track_peak": "REPLAYGAIN_TRACK_PEAK",
+    "replaygain_album_gain": "REPLAYGAIN_ALBUM_GAIN",
+    "replaygain_album_peak": "REPLAYGAIN_ALBUM_PEAK",
+}
+
+
+def _ffprobe_tags(ffprobe_exe, path):
+    """Metadata dict from ffprobe (lowercase keys) or {}."""
+    try:
+        proc = run_tool(
+            [ffprobe_exe, "-v", "error", "-print_format", "json",
+             "-show_format", path],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=30,
+        )
+        data = json.loads(proc.stdout or "{}")
+        return (data.get("format") or {}).get("tags") or {}
+    except Exception:
+        return {}
+
+
+def _convert_lossless_source(args):
+    """Convert one WAV/AIFF/APE/WV/SHN file to FLAC, losslessly.
+
+    ffmpeg decodes (handles every extension in LOSSLESS_SOURCE_EXTS) and
+    encodes FLAC at the configured level; tags are copied from ffprobe
+    metadata; metaflac then strips unwanted blocks and writes this
+    pipeline's ENCODER identity tags. The original is removed only after a
+    verified conversion when lossless_remove_original is set.
+    Returns (filename, ok, message, bytes_removed, bytes_added).
+    """
+    (
+        ffmpeg_exe, ffprobe_exe, metaflac_exe, filepath,
+        flac_level, target_version, enabled, config,
+    ) = args
+    filename = os.path.basename(filepath)
+    # Forward slashes: ffmpeg's demuxer probing is cleaner with them (VOB
+    # phantom streams) and every Windows tool accepts them.
+    filepath = str(filepath).replace("\\", "/")
+    dest = os.path.splitext(filepath)[0] + ".flac"
+    if os.path.exists(dest):
+        return (filename, False, "skipped (same-stem FLAC exists)", 0, 0)
+
+    try:
+        src_probe = run_tool(
+            [ffprobe_exe, "-v", "error", "-print_format", "json",
+             "-show_format", filepath],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=30,
+        )
+        src_dur = float((json.loads(src_probe.stdout or "{}")
+                         .get("format") or {}).get("duration") or 0)
+    except Exception:
+        src_dur = 0.0
+
+    fd, tmp = tempfile.mkstemp(
+        prefix=".conv_", suffix=".flac", dir=os.path.dirname(filepath) or ".")
+    os.close(fd)
+    try:
+        cmd = [ffmpeg_exe, "-y", "-v", "error", "-nostdin", "-i", filepath,
+               "-map", "0:a:0", "-c:a", "flac",
+               "-compression_level", str(flac_level), "-f", "flac", tmp]
+        try:
+            proc = run_tool(cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=60 * 60)
+        except Exception as e:
+            return (filename, False, f"ffmpeg failed: {e}", 0, 0)
+        if proc.returncode != 0:
+            err = "; ".join((proc.stderr or "").strip().splitlines()[-2:])
+            return (filename, False, f"convert failed: {err}", 0, 0)
+
+        # Verify duration before touching anything else.
+        if src_dur:
+            try:
+                out_probe = run_tool(
+                    [ffprobe_exe, "-v", "error", "-print_format", "json",
+                     "-show_format", tmp],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=30,
+                )
+                out_dur = float((json.loads(out_probe.stdout or "{}")
+                                 .get("format") or {}).get("duration") or 0)
+                if out_dur and abs(src_dur - out_dur) > max(1.0, 0.005 * src_dur):
+                    return (filename, False,
+                            f"duration changed ({src_dur:.2f}s -> {out_dur:.2f}s)", 0, 0)
+            except Exception:
+                pass
+
+        # Copy text tags from the source metadata.
+        try:
+            from .audio import AudioFile
+            out_af = AudioFile(tmp)
+            raw_tags = _ffprobe_tags(ffprobe_exe, filepath)
+            seen = set()
+            for k, v in raw_tags.items():
+                name = _FFPROBE_TAG_MAP.get(str(k).lower())
+                if not name or name in seen:
+                    continue
+                if v is None or not str(v).strip():
+                    continue
+                val = str(v).strip()
+                if name in ("TRACKNUMBER", "DISCNUMBER") and "/" in val:
+                    val = val.split("/")[0].strip()
+                if out_af.set_any_tag(name, val):
+                    seen.add(name)
+            # Unknown keys that look intentional (uppercase-able) pass through
+            for k, v in raw_tags.items():
+                name = str(k).upper().replace(" ", "_")
+                if (str(k).lower() in _FFPROBE_TAG_MAP or not name.replace("_", "").isalnum()
+                        or name in seen or not str(v or "").strip()):
+                    continue
+                if len(name) > 40:
+                    continue
+                out_af.set_any_tag(name, str(v).strip())
+                seen.add(name)
+        except Exception:
+            pass
+
+        # Strip unwanted blocks + write our encoder identity, matching the
+        # FLAC optimizer's output conventions.
+        if metaflac_exe:
+            try:
+                parts = ["PADDING", "CUESHEET", "APPLICATION", "SEEKTABLE"]
+                run_tool([metaflac_exe, "--dont-use-padding", "--remove",
+                          "--block-type=" + ",".join(parts), tmp],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                         text=True)
+            except Exception:
+                pass
+        try:
+            _write_flac_tags(tmp, flac_level, target_version, enabled)
+        except Exception:
+            pass
+
+        try:
+            out_size = os.path.getsize(tmp)
+        except OSError as e:
+            return (filename, False, f"cannot stat output: {e}", 0, 0)
+        if out_size == 0:
+            return (filename, False, "empty output", 0, 0)
+
+        try:
+            src_size = os.path.getsize(filepath)
+        except OSError:
+            src_size = 0
+        os.replace(tmp, dest)
+        tmp = None
+        b_rem = b_add = 0
+        if config.get("lossless_remove_original", True):
+            try:
+                os.remove(filepath)
+                b_rem = src_size
+            except OSError:
+                pass
+        b_add = out_size
+        return (filename, True,
+                f"{src_size // 1024} KB WAV/AIFF -> {out_size // 1024} KB FLAC",
+                b_rem, b_add)
+    except Exception as e:
+        return (filename, False, f"exception: {e}", 0, 0)
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 def _should_reencode_flac(filepath, target_quality, target_version, force,
                           enabled=None):
@@ -315,7 +514,6 @@ def run_optimize_flacs(config):
 
     if not flac_files:
         log("No FLAC files found.")
-        return stats
 
     workers = worker_count(config, default=os.cpu_count() or 1,
                           items=len(flac_files))
@@ -336,7 +534,8 @@ def run_optimize_flacs(config):
         for fp in flac_files
     ]
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    if args_list:
+      with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(_optimize_flac, a) for a in args_list]
         pbar = _make_pbar(len(futures), "FLAC")
 
@@ -380,6 +579,67 @@ def run_optimize_flacs(config):
 
         if pbar:
             pbar.close()
+
+    # ---- Lossless source conversion (WAV/AIFF/APE/WV/SHN -> FLAC) ----
+    if config.get("optimize_convert_lossless", True):
+        if targets is None:
+            conv_files = sorted(_walk_files(target, LOSSLESS_SOURCE_EXTS))
+        else:
+            conv_files = sorted(_collect_targets(targets, LOSSLESS_SOURCE_EXTS))
+        seen_conv = {}
+        for p in conv_files:
+            seen_conv.setdefault(os.path.normcase(p), p)
+        conv_files = sorted(seen_conv.values())
+
+        if conv_files:
+            ffmpeg_tool = (tools.get("ffmpeg") or {})
+            ffmpeg_exe = ffmpeg_tool.get("ffmpeg_exe")
+            ffprobe_exe = ffmpeg_tool.get("ffprobe_exe")
+            if not ffmpeg_exe or not ffprobe_exe:
+                log(c("WARNING: ffmpeg/ffprobe missing — lossless source conversion skipped.", Color.YELLOW))
+            else:
+                log(f"Converting {len(conv_files)} lossless source file(s) (WAV/AIFF/APE/WV/SHN) to FLAC…")
+                conv_args = [
+                    (
+                        ffmpeg_exe,
+                        ffprobe_exe,
+                        metaflac_exe,
+                        fp,
+                        flac_level,
+                        target_version,
+                        (config.get("encoder_tags") or {}).get("flac") or {},
+                        config,
+                    )
+                    for fp in conv_files
+                ]
+                conv_workers = worker_count(config, default=min(4, os.cpu_count() or 1),
+                                            items=len(conv_files))
+                conv_counts = {"ok": 0, "skip": 0, "fail": 0}
+                with ThreadPoolExecutor(max_workers=conv_workers) as ex:
+                    futures = [ex.submit(_convert_lossless_source, a) for a in conv_args]
+                    pbar2 = _make_pbar(len(futures), "Convert")
+                    for future in as_completed(futures):
+                        try:
+                            filename, ok, info, b_rem, b_add = future.result()
+                        except Exception as e:
+                            stats["error_count"] += 1
+                            stats["errors"].append(("<unknown convert>", str(e)))
+                            _pbar_update(pbar2, conv_counts, kind="fail")
+                            continue
+                        if ok:
+                            stats["total_scanned"] += 1
+                            stats["modified_count"] += 1
+                            stats["total_bytes_removed"] += b_rem
+                            stats["total_bytes_added"] += b_add
+                            log_file_result(filename, "ok", b_rem, b_add)
+                            _pbar_update(pbar2, conv_counts, kind="ok")
+                        else:
+                            stats["skipped_count"] += 1
+                            log_file_result(filename, "skip",
+                                            info=info.replace("skipped", "").strip(" ()"))
+                            _pbar_skip(pbar2, conv_counts)
+                    if pbar2:
+                        pbar2.close()
 
     return stats
 

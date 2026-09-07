@@ -1,6 +1,7 @@
 import { BarChart3, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { trackRef } from "../lib/refs";
 import type { TrackTags } from "../types";
 
 interface StatTrack {
@@ -196,7 +197,7 @@ export default function StatsPanel({
                       const name = t.tags?.TITLE ?? `Track ${i + 1}`;
                       const cell = (inner: ReactNode) =>
                         t.path ? (
-                          <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft">
+                          <Link to={trackRef(t)} className="hover:text-accent-soft">
                             {inner}
                           </Link>
                         ) : (

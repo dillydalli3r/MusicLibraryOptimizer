@@ -224,7 +224,7 @@ fn toggle_autostart(app: &tauri::AppHandle) {
 }
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let open_i = MenuItem::with_id(app, "open", "Open MusicLibraryOptimizer", true, None::<&str>)?;
+    let open_i = MenuItem::with_id(app, "open", "Open la musica", true, None::<&str>)?;
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
     let autostart_i = CheckMenuItem::with_id(
         app, "autostart", "Start on Login", true, autostart_on, None::<&str>,
@@ -241,7 +241,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("MusicLibraryOptimizer")
+        .tooltip("la musica")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
             "autostart" => toggle_autostart(app),
@@ -261,8 +261,18 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 show_main_window(tray.app_handle());
             }
         });
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    // Explicit compile-time-embedded icon: never depend on how the bundler
+    // resolved default_window_icon (this was showing a stale tray icon).
+    match tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")) {
+        Ok(icon) => {
+            builder = builder.icon(icon);
+        }
+        Err(e) => {
+            eprintln!("[mlo-desktop] embedded tray icon failed to decode: {e}");
+            if let Some(icon) = app.default_window_icon() {
+                builder = builder.icon(icon.clone());
+            }
+        }
     }
     // Left click opens the window; the menu lives on right click.
     builder = builder.show_menu_on_left_click(false);
@@ -304,7 +314,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building MusicLibraryOptimizer")
+        .expect("error while building la musica")
         .run(|app, event| match event {
             // Stay alive in the tray when the last window goes away; only
             // an explicit exit (Quit menu / process kill) ends the app.

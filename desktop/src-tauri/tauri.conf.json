@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MusicLibraryOptimizer",
+  "productName": "la musica",
   "version": "2.0.0",
   "identifier": "com.musiclibraryoptimizer.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "MusicLibraryOptimizer",
+        "title": "la musica",
         "width": 1440,
         "height": 900,
         "minWidth": 1024,

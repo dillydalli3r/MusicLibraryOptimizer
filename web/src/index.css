@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Inter variable font, bundled locally (public/fonts) so the desktop app
+   gets the exact typeface offline. Covers every weight 100–900; the UI
+   leans on 450 body text and 700/800 headings for the Monochrome look. */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   /* RGB triplets — Tailwind wraps them as rgb(var(--accent) / <alpha>) so
@@ -14,10 +25,57 @@
   --accent-fg: 9 9 11;
 }
 
-/* Native controls (checkbox/range tints) follow the accent token. */
-input[type="checkbox"],
-input[type="range"] {
+/* Native checkbox tints follow the accent token (ranges are fully custom). */
+input[type="checkbox"] {
   accent-color: rgb(var(--accent));
+}
+
+/* ---- Range sliders: slim accent track + round thumb ---- */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: #27272a;
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: rgb(var(--accent));
+  border: none;
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.15);
+  transition: transform 0.1s ease;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.25);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: rgb(var(--accent));
+  border: none;
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.15);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: #27272a;
+}
+
+/* Keyboard focus is always visible, everywhere. */
+:focus-visible {
+  outline: 2px solid rgb(var(--accent) / 0.55);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+input[type="range"]:focus-visible {
+  outline: none;
 }
 
 /* Text on top of solid accent fills (buttons, tabs, badges). */
@@ -51,6 +109,11 @@ body {
   background: #0a0a0c;
   color: #e8e8e8;
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  /* Weight 450 + tight tracking = the sturdier Monochrome-style feel while
+     keeping small UI text legible (Inter's variable axis interpolates). */
+  font-weight: 450;
+  font-optical-sizing: auto;
+  letter-spacing: -0.011em;
 }
 
 #root {
@@ -58,11 +121,13 @@ body {
 }
 
 @layer components {
+  /* Smoothed-rectangle controls (Monochrome-style): soft corners, never
+     full pills — buttons, chips and inputs share one rect language. */
   .btn {
-    @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none;
+    @apply inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-all disabled:opacity-40 disabled:pointer-events-none active:scale-[0.97];
   }
   .btn-primary {
-    @apply btn bg-accent on-accent hover:bg-accent-soft;
+    @apply btn bg-accent on-accent hover:bg-accent-soft shadow-sm;
   }
   .btn-ghost {
     @apply btn bg-raise border border-border text-zinc-300 hover:bg-panel hover:text-white;
@@ -71,10 +136,10 @@ body {
     @apply btn bg-red-900/60 text-red-200 hover:bg-red-800/60 border border-red-900;
   }
   .chip {
-    @apply inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium;
+    @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium;
   }
   .input {
-    @apply w-full rounded-md border border-border bg-panel px-3 py-1.5 text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent;
+    @apply w-full rounded-lg border border-border bg-raise px-3.5 py-1.5 text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent transition-colors;
   }
   .th {
     @apply px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-zinc-500 select-none;
@@ -86,4 +151,66 @@ body {
 
 .table-row {
   @apply border-t border-border/60 hover:bg-panel transition-colors cursor-pointer;
+}
+
+/* ------------------------------------------------------------------ */
+/* Now-playing ambience: animated color orbs behind the fullscreen     */
+/* player, tinted with the cover's dominant color (Apple Music /       */
+/* Monochrome style). Purely CSS — playback is never routed through    */
+/* WebAudio, so cross-origin stream tainting can't mute anything.      */
+/* ------------------------------------------------------------------ */
+.orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.5;
+  will-change: transform;
+  pointer-events: none;
+}
+.orb-a {
+  animation: orb-drift-a 26s ease-in-out infinite alternate;
+}
+.orb-b {
+  animation: orb-drift-b 34s ease-in-out infinite alternate;
+}
+.orb-c {
+  animation: orb-drift-c 42s ease-in-out infinite alternate;
+}
+@keyframes orb-drift-a {
+  0% { transform: translate(-10%, -6%) scale(1); }
+  50% { transform: translate(14%, 10%) scale(1.25); }
+  100% { transform: translate(-6%, 16%) scale(0.9); }
+}
+@keyframes orb-drift-b {
+  0% { transform: translate(8%, 12%) scale(1.1); }
+  50% { transform: translate(-16%, -8%) scale(0.85); }
+  100% { transform: translate(10%, -14%) scale(1.2); }
+}
+@keyframes orb-drift-c {
+  0% { transform: translate(0%, 10%) scale(0.9) rotate(0deg); }
+  100% { transform: translate(-12%, -12%) scale(1.3) rotate(20deg); }
+}
+/* gentle breathing on the artwork glow */
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.04); }
+}
+.artwork-glow {
+  animation: glow-pulse 7s ease-in-out infinite;
+}
+
+/* Frosted panel used across the redesigned surfaces */
+.glass {
+  background: rgb(255 255 255 / 0.05);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgb(255 255 255 / 0.08);
+}
+/* Scrollable-but-chromeless: wheel/touch scrolling still works, no bar. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }

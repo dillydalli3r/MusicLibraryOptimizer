@@ -65,6 +65,12 @@ export const api = {
     }),
 
   streamUrl: (path: string) => `${API}/stream?path=${encodeURIComponent(path)}`,
+  subtitles: (path: string) =>
+    json<{ muxed: { n: number; codec: string; title: string }[]; sidecars: { file: string; name: string; language: string | null }[] }>(
+      `${API}/videos/subtitles?path=${encodeURIComponent(path)}`
+    ),
+  subtitleUrl: (path: string, sidecar?: string, n?: number) =>
+    `${API}/videos/subtitle?path=${encodeURIComponent(path)}${sidecar ? `&sidecar=${encodeURIComponent(sidecar)}` : ""}${typeof n === "number" && n >= 0 ? `&n=${n}` : ""}`,
   // Read-only tag view (tag writing was removed; grading scripts own writes).
   tags: (path: string) => json<any>(`${API}/tags?path=${encodeURIComponent(path)}`),
   lyricsEmbed: (path: string, lyrics: string) =>
@@ -147,6 +153,12 @@ export const api = {
   mbSearchReleases: (q: string, mode: "release" | "track" | "catno" | "barcode" = "release") =>
     json<any[]>(`${API}/mb/search/releases?q=${encodeURIComponent(q)}&mode=${mode}`),
   mbSearchArtists: (q: string) => json<any[]>(`${API}/mb/search/artists?q=${encodeURIComponent(q)}`),
+  // Generic MusicBrainz browser (in-app entity pages)
+  mbSearch: (type: string, q: string, limit = 12, mode: "free" | "catno" | "barcode" = "free") =>
+    json<any[]>(`${API}/mb/search?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}&limit=${limit}&mode=${mode}`),
+  mbArtist: (id: string) => json<any>(`${API}/mb/artist/${id}`),
+  mbReleaseGroup: (id: string) => json<any>(`${API}/mb/release-group/${id}`),
+  mbRecording: (id: string) => json<any>(`${API}/mb/recording/${id}`),
   mbMatch: (albumPath: string, releaseId: string) =>
     json<{ release: import("./types").MBRelease; suggestions: import("./types").MatchSuggestion[] }>(
       `${API}/mb/match`,
@@ -190,6 +202,13 @@ export const api = {
         track: opts?.track ?? "",
         candidates: opts?.candidates,
       }),
+    }, 180000),
+
+  lyricsAiSync: (path: string, text?: string) =>
+    json<{ lrc: string; source: string }>(`${API}/lyrics/ai/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, text }),
     }, 180000),
 
   rymValidate: (url: string) => json<{ valid: boolean }>(`${API}/rym/validate?url=${encodeURIComponent(url)}`),
@@ -322,14 +341,48 @@ export const api = {
   soulseekDownloads: () =>
     json<{ downloads: any[] }>(`${API}/soulseek/downloads`, undefined, 30000),
   soulseekImport: () =>
-    json<{ ok: boolean; moved: string[] }>(`${API}/soulseek/import`, { method: "POST" }, 120000),
+    json<{ ok: boolean; moved: string[]; organized?: boolean; organize_error?: string }>(`${API}/soulseek/import`, { method: "POST" }, 120000),
+  soulseekAutoStatus: () =>
+    json<any>(`${API}/soulseek/auto`, undefined, 30000),
+  soulseekAutoStart: (body: { release_mbid?: string; queries?: string[]; username?: string; target_dir?: string }) =>
+    json<{ ok: boolean; job: any }>(`${API}/soulseek/auto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }, 180000),
+  soulseekAutoCancel: () =>
+    json<{ ok: boolean }>(`${API}/soulseek/auto/cancel`, { method: "POST" }, 30000),
+  soulseekTestLog: (username: string, files: { filename: string; size: number }[]) =>
+    json<{ ok: boolean; threshold: number; logs: { file: string; score: number | null; checksum: string | null; detail: string | null }[] }>(`${API}/soulseek/test-log`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, files }),
+    }, 240000),
+  soulseekSharesRefresh: () =>
+    json<{ ok: boolean; message: string }>(`${API}/soulseek/shares/refresh`, { method: "POST" }, 120000),
+  mbGenresWrite: (paths: string[], count?: number) =>
+    json<{ ok: boolean; updated: number; genres: string[]; per_track: boolean }>(`${API}/mb/genres`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths, count }),
+    }, 120000),
+  trackDownloadUrl: (path: string) => `${API}/track/download?path=${encodeURIComponent(path)}`,
+  trackExportUrl: (path: string, codec: string, bitrate: number, level = 5) =>
+    `${API}/track/export?path=${encodeURIComponent(path)}&codec=${encodeURIComponent(codec)}&bitrate=${bitrate}&level=${level}`,
 
   likes: () => json<{ paths: string[] }>(`${API}/likes`),
-  likeToggle: (path: string) =>
+  likeToggle: (path: string, mbid?: string) =>
     json<{ ok: boolean; liked: boolean }>(`${API}/likes/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ path, mbid: mbid ?? null }),
+    }),
+  favorites: () => json<{ albums: string[]; artists: string[]; playlists: string[] }>(`${API}/favorites`),
+  favoriteToggle: (kind: "album" | "artist" | "playlist", key: string, mbid?: string) =>
+    json<{ ok: boolean; fav: boolean }>(`${API}/favorites/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, key, mbid: mbid ?? null }),
     }),
   lyricsAiLines: (mode: "translate" | "transliterate", lines: string[]) =>
     json<{ mode: string; lines: string[] }>(`${API}/lyrics/ai/lines`, {
@@ -337,6 +390,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode, lines }),
     }, 180000),
+  // export to device
+  exportDrives: () => json<{ drives: { letter: string; root: string; type: string; free: number | null; total: number | null }[] }>(`${API}/export/drives`),
+  exportCodecs: () => json<{ codecs: Record<string, string> }>(`${API}/export/codecs`),
+  exportRun: (body: { paths: string[]; dest: string; subfolder: string; codec: string; quality: string; structure: string }, timeoutMs = 1800000) =>
+    json<{ ok: boolean; total: number; exported: number; skipped: number; failed: number; bytes: number; errors: string[] }>(`${API}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }, timeoutMs),
+
   soulseekUser: (username: string) =>
     json<any>(`${API}/soulseek/user/${encodeURIComponent(username)}`, undefined, 30000),
 };

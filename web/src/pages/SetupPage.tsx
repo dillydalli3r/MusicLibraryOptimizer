@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Music, Wrench, Check, ArrowRight, ArrowLeft, RotateCcw } from "lucide-react";
+import { FolderOpen, Wrench, Check, ArrowRight, ArrowLeft, RotateCcw, Users } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4;
 
 export default function SetupPage() {
   const navigate = useNavigate();
@@ -14,6 +14,12 @@ export default function SetupPage() {
   const [step, setStep] = useState<Step>(1);
   const [musicFolder, setMusicFolder] = useState("");
   const [busy, setBusy] = useState(false);
+  // Soulseek sharing setup (step 3)
+  const [ssUser, setSsUser] = useState("");
+  const [ssPass, setSsPass] = useState("");
+  const [ssPort, setSsPort] = useState(50000);
+  const [ssShare, setSsShare] = useState(true);
+  const [ssAutostart, setSsAutostart] = useState(false);
 
   const { data: deps, refetch: refetchDeps } = useQuery({
     queryKey: ["dependencies"],
@@ -23,8 +29,41 @@ export default function SetupPage() {
   });
 
   useEffect(() => {
-    if (config?.music_folder) setMusicFolder(String(config.music_folder));
+    if (!config) return;
+    if (config.music_folder) setMusicFolder(String(config.music_folder));
+    setSsUser(String(config.soulseek_username ?? ""));
+    setSsPass(String(config.soulseek_password ?? ""));
+    setSsPort(Number(config.soulseek_listen_port ?? 50000));
+    setSsShare(config.soulseek_share_library !== false);
+    setSsAutostart(!!config.soulseek_autostart);
   }, [config]);
+
+  const saveSoulseek = async (andStart: boolean) => {
+    setBusy(true);
+    try {
+      await api.saveConfig({
+        ...config,
+        soulseek_username: ssUser.trim(),
+        soulseek_password: ssPass,
+        soulseek_listen_port: ssPort,
+        soulseek_share_library: ssShare,
+        soulseek_autostart: ssAutostart,
+      });
+      qc.invalidateQueries({ queryKey: ["config"] });
+      if (andStart) {
+        if (ssShare) await api.soulseekSharesRefresh().catch(() => undefined);
+        await api.soulseekStart();
+        toast("slskd started — sharing your library");
+      } else {
+        toast("Soulseek settings saved");
+      }
+      setStep(4);
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const pickNative = async () => {
     if (!(window as any).__TAURI_INTERNALS__) {
@@ -104,17 +143,19 @@ export default function SetupPage() {
     <div className="min-h-screen bg-bg text-zinc-100 flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-2xl">
         <div className="flex items-center gap-2 mb-6">
-          <span className="h-9 w-9 rounded-md bg-white text-black flex items-center justify-center shadow-sm">
-            <Music className="h-5 w-5" />
-          </span>
+          <img
+            src="/icon.png"
+            alt="la musica"
+            className="h-9 w-9 rounded-lg object-cover ring-1 ring-border shadow-sm"
+          />
           <div>
-            <div className="font-bold tracking-wide">MusicLibraryOptimizer</div>
+            <div className="font-bold tracking-wide">la musica</div>
             <div className="text-xs text-zinc-500">First-run setup</div>
           </div>
         </div>
 
         <div className="flex items-center gap-2 text-[11px] text-zinc-500 mb-4">
-          {([1, 2, 3] as Step[]).map((s) => (
+          {([1, 2, 3, 4] as Step[]).map((s) => (
             <div key={s} className="flex items-center gap-2">
               <span
                 className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] border ${
@@ -124,7 +165,7 @@ export default function SetupPage() {
                 {step > s ? <Check className="h-3 w-3" /> : s}
               </span>
               <span className={step === s ? "text-zinc-200" : "text-zinc-600"}>
-                {s === 1 ? "Music folder" : s === 2 ? "Dependencies" : "Done"}
+                {s === 1 ? "Music folder" : s === 2 ? "Dependencies" : s === 3 ? "Soulseek" : "Done"}
               </span>
             </div>
           ))}
@@ -226,6 +267,59 @@ export default function SetupPage() {
         )}
 
         {step === 3 && (
+          <div className="bg-card rounded-lg border border-border p-6 space-y-4">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Users className="h-4 w-4 text-accent" /> Share your library on Soulseek
+            </div>
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Your music folder is shared with the network on the listen port below — slskd is
+              restarted automatically whenever files are added, removed or reorganized so the
+              share index always matches the disk. You can turn sharing off anytime in
+              Settings → Soulseek.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-xs text-zinc-500 uppercase">Soulseek username</span>
+                <input className="input mt-1" value={ssUser} onChange={(e) => setSsUser(e.target.value)} placeholder="your-nick" />
+              </label>
+              <label className="block">
+                <span className="text-xs text-zinc-500 uppercase">Password</span>
+                <input className="input mt-1" type="password" value={ssPass} onChange={(e) => setSsPass(e.target.value)} placeholder="••••••••" />
+              </label>
+              <label className="block">
+                <span className="text-xs text-zinc-500 uppercase">Listen port</span>
+                <input className="input mt-1" type="number" value={ssPort} min={1024} max={65535}
+                  onChange={(e) => setSsPort(Number(e.target.value))} />
+              </label>
+              <div className="flex flex-col justify-end gap-1.5 pb-1">
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                  <input type="checkbox" className="accent-[var(--accent)]" checked={ssShare} onChange={() => setSsShare(!ssShare)} />
+                  Share the library
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                  <input type="checkbox" className="accent-[var(--accent)]" checked={ssAutostart} onChange={() => setSsAutostart(!ssAutostart)} />
+                  Start slskd with the app
+                </label>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <button className="btn-ghost" onClick={() => setStep(2)} disabled={busy}>
+                <ArrowLeft className="h-3.5 w-3.5" /> Back
+              </button>
+              <div className="flex gap-2">
+                <button className="btn-ghost" onClick={() => setStep(4)} disabled={busy}>
+                  Skip for now
+                </button>
+                <button className="btn-primary" disabled={busy || !ssShare} onClick={() => saveSoulseek(true)}
+                  title={ssShare ? "Save settings and start sharing" : "Sharing is off — use Skip"}>
+                  {busy ? "Saving…" : ssShare ? "Save & start sharing" : "Save"} <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 4 && (
           <div className="bg-card rounded-lg border border-border p-6 space-y-4">
             <div className="flex items-center gap-2 text-sm font-semibold">
               <Check className="h-4 w-4 text-emerald-400" /> You're all set

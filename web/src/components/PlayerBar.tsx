@@ -1,34 +1,91 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, Maximize2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2 } from "lucide-react";
+import { Disc3, Heart, Maximize2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
 import NowPlayingView from "./NowPlayingView";
 
 export default function PlayerBar() {
-  const { queue, index, setIndex, playing, setPlaying, queueId } = useStore();
+  const { queue, index, setIndex, playing, setPlaying, queueId, vol, setVol } = useStore();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [shuffle, setShuffle] = useState(false);
   const [loop, setLoop] = useState(false);
-  const [vol, setVol] = useState(1);
   const [speed, setSpeed] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
   const qc = useQueryClient();
 
   const current = queue[index] ?? null;
 
+  // Queue entries built outside the library pages (e.g. .m3u8 playlist rows)
+  // carry no title — fetch the tag lazily so the bar shows the song title,
+  // never the file name, whenever a TITLE tag exists. Also yields the
+  // MusicBrainz recording ID used for move-safe likes.
+  const { data: currentTags } = useQuery({
+    queryKey: ["tags", current?.path],
+    queryFn: () => api.tags(current!.path),
+    enabled: !!current,
+    staleTime: 5 * 60 * 1000,
+  });
+  const displayTitle =
+    current?.title || currentTags?.tags?.TITLE || (current ? current.file.replace(/\.[^.]+$/, "") : "");
+  // Audio tech summary for the now playing bar: "FLAC · 1022 kbps · 16 bit · 44.1 kHz"
+  const t = currentTags?.tech as
+    | { bitrate?: number; sample_rate?: number; bits_per_sample?: number; codec?: string }
+    | undefined;
+  const techStr = t
+    ? [
+        t.codec ?? null,
+        t.bitrate ? `${Math.round(t.bitrate / 1000)} kbps` : null,
+        t.bits_per_sample ? `${Math.round(t.bits_per_sample)} bit` : null,
+        t.sample_rate ? `${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const [thumbFailed, setThumbFailed] = useState(false);
+  useEffect(() => setThumbFailed(false), [current?.path]);
+  const stepRef = useRef<(dir: 1 | -1) => void>(() => {});
+
+  // OS-level media controls (lockscreen / media keys) — guarded, best effort.
+  useEffect(() => {
+    const ms = (navigator as any).mediaSession;
+    if (!ms || !current) return;
+    try {
+      if (typeof (window as any).MediaMetadata === "function") {
+        ms.metadata = new (window as any).MediaMetadata({
+          title: displayTitle,
+          artist: current.artist ?? "",
+          album: current.album ?? "",
+          artwork: [{ src: api.coverUrl(current.albumPath), sizes: "512x512", type: "image/jpeg" }],
+        });
+      }
+      ms.setActionHandler("play", () => {
+        audioRef.current?.play();
+        setPlaying(current.path);
+      });
+      ms.setActionHandler("pause", () => {
+        audioRef.current?.pause();
+        setPlaying(null);
+      });
+      ms.setActionHandler("previoustrack", () => stepRef.current(-1));
+      ms.setActionHandler("nexttrack", () => stepRef.current(1));
+    } catch {
+      /* media session unsupported — ignore */
+    }
+  }, [current, displayTitle]);
+
   const { data: likesData } = useQuery({ queryKey: ["likes"], queryFn: api.likes });
   const liked = !!current && (likesData?.paths ?? []).includes(current.path);
   const toggleLike = () => {
     if (!current) return;
     api
-      .likeToggle(current.path)
+      .likeToggle(current.path, currentTags?.tags?.MUSICBRAINZ_TRACKID ?? undefined)
       .then((r) => {
         qc.invalidateQueries({ queryKey: ["likes"] });
-        toast(`${r.liked ? "Liked" : "Unliked"} — ${current.file.replace(/\.[^.]+$/, "")}`);
+        toast(`${r.liked ? "Liked" : "Unliked"} — ${displayTitle}`);
       })
       .catch((e) => toast(String(e)));
   };
@@ -51,6 +108,13 @@ export default function PlayerBar() {
     const audio = audioRef.current;
     if (audio) audio.playbackRate = speed;
   }, [speed]);
+
+  // Global volume: the stored value is re-applied to the <audio> element
+  // whenever it changes or a new source loads.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio) audio.volume = vol;
+  }, [vol, current?.path]);
 
   // Keyboard shortcuts: Space pause/play · [ / ] speed down/up · 0 reset ·
   // ← / → seek ±5s. Never hijacks typing or the lyrics editor (which owns
@@ -114,6 +178,7 @@ export default function PlayerBar() {
     setIndex(next);
     setPlaying(queue[next]?.path ?? null);
   };
+  stepRef.current = step;
 
   useEffect(() => {
     const onEnded = () => {
@@ -133,39 +198,66 @@ export default function PlayerBar() {
 
   if (!current) {
     return (
-      <div className="h-14 shrink-0 border-t border-border bg-panel flex items-center px-4 text-xs text-zinc-600">
-        No track playing — use Play on an album, artist or track.
+      <div className="shrink-0 px-3 pb-3 pt-1">
+        <div className="h-12 rounded-2xl border border-border bg-panel flex items-center px-4 text-xs text-zinc-600">
+          No track playing — use Play on an album, artist or track.
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="h-16 shrink-0 border-t border-border bg-panel flex items-center gap-4 px-4">
+    // Floating rounded bar (Monochrome-style): margins + pill radius instead
+    // of a full-bleed strip, lifted with a border and shadow.
+    <div className="shrink-0 px-3 pb-3 pt-1">
+    <div className="h-16 rounded-2xl border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-4 px-4">
       <audio
         ref={audioRef}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
       />
 
+      <button
+        className="relative h-11 w-16 rounded-lg overflow-hidden border border-border bg-raise shrink-0 flex items-center justify-center"
+        onClick={() => setFullscreen(true)}
+        title="Album art — click for the fullscreen player"
+      >
+        {!thumbFailed ? (
+          <img
+            src={api.coverUrl(current.albumPath)}
+            alt=""
+            onError={() => setThumbFailed(true)}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <Disc3 className="h-4 w-4 text-zinc-600" />
+        )}
+      </button>
+
       <div className="min-w-0 flex-1">
-        <div className="text-sm truncate font-medium">{current.file.replace(/\.[^.]+$/, "")}</div>
+        <div className="text-sm truncate font-semibold">{displayTitle}</div>
         <div className="text-[11px] text-zinc-500 truncate">
           {[current.artist ?? current.albumPath.split("/").pop(), current.album]
             .filter(Boolean)
             .join(" · ")}
           <span className="ml-2">{queue.length > 1 ? `${index + 1}/${queue.length}` : ""}</span>
+          {techStr && (
+            <span className="ml-2 font-mono text-[10px] text-zinc-600" title="Bitrate · sample rate · bit depth">
+              {techStr}
+            </span>
+          )}
         </div>
       </div>
 
       <div className="flex items-center gap-1">
-        <button className={`p-2 rounded hover:bg-raise ${shuffle ? "text-accent" : "text-zinc-500"}`} onClick={() => setShuffle(!shuffle)} title="Shuffle">
+        <button className={`p-2 rounded-lg hover:bg-raise ${shuffle ? "text-accent" : "text-zinc-500"}`} onClick={() => setShuffle(!shuffle)} title="Shuffle">
           <Shuffle className="h-4 w-4" />
         </button>
-        <button className="p-2 rounded hover:bg-raise text-zinc-300" onClick={() => step(-1)}>
+        <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(-1)}>
           <SkipBack className="h-4 w-4" />
         </button>
         <button
-          className="p-2.5 rounded-full bg-accent on-accent hover:bg-accent-soft"
+          className="p-2.5 rounded-lg bg-accent on-accent hover:bg-accent-soft"
           onClick={() => {
             const a = audioRef.current;
             if (!a) return;
@@ -180,14 +272,14 @@ export default function PlayerBar() {
         >
           {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
         </button>
-        <button className="p-2 rounded hover:bg-raise text-zinc-300" onClick={() => step(1)}>
+        <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(1)}>
           <SkipForward className="h-4 w-4" />
         </button>
-        <button className={`p-2 rounded hover:bg-raise ${loop ? "text-accent" : "text-zinc-500"}`} onClick={() => setLoop(!loop)} title="Repeat one">
+        <button className={`p-2 rounded-lg hover:bg-raise ${loop ? "text-accent" : "text-zinc-500"}`} onClick={() => setLoop(!loop)} title="Repeat one">
           <Repeat className="h-4 w-4" />
         </button>
         <button
-          className="p-1.5 rounded hover:bg-raise text-xs font-mono text-zinc-400 min-w-[46px]"
+          className="p-1.5 rounded-lg hover:bg-raise text-xs font-mono text-zinc-400 min-w-[46px]"
           onClick={cycleSpeed}
           title="Playback speed — [ slower · ] faster · 0 reset to 1×"
         >
@@ -196,7 +288,7 @@ export default function PlayerBar() {
       </div>
 
       <button
-        className={`p-2 rounded hover:bg-raise shrink-0 ${liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"}`}
+        className={`p-2 rounded-lg hover:bg-raise shrink-0 ${liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"}`}
         onClick={toggleLike}
         title={liked ? "Unlike" : "Like this track"}
       >
@@ -228,17 +320,14 @@ export default function PlayerBar() {
           max={1}
           step={0.05}
           value={vol}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            setVol(v);
-            if (audioRef.current) audioRef.current.volume = v;
-          }}
+          onChange={(e) => setVol(Number(e.target.value))}
           className="w-20 "
+          title="Volume — shared by the whole app"
         />
       </div>
 
       <button
-        className="p-2 rounded hover:bg-raise text-zinc-400 hover:text-white shrink-0"
+        className="p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white shrink-0"
         onClick={() => setFullscreen(true)}
         title="Fullscreen player with lyrics"
       >
@@ -254,7 +343,6 @@ export default function PlayerBar() {
           duration={duration}
           shuffle={shuffle}
           loop={loop}
-          vol={vol}
           liked={liked}
           onTogglePlay={() => {
             const a = audioRef.current;
@@ -276,14 +364,12 @@ export default function PlayerBar() {
           onStep={step}
           onToggleShuffle={() => setShuffle(!shuffle)}
           onToggleLoop={() => setLoop(!loop)}
-          onVolume={(v) => {
-            setVol(v);
-            if (audioRef.current) audioRef.current.volume = v;
-          }}
           onToggleLike={toggleLike}
           onClose={() => setFullscreen(false)}
+          getAudioTime={() => audioRef.current?.currentTime ?? 0}
         />
       )}
+    </div>
     </div>
   );
 }

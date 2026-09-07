@@ -22,6 +22,9 @@ export interface AlbumMeta {
   MUSICBRAINZ_ALBUMARTISTID?: string | null;
   MUSICBRAINZ_RELEASEGROUPID?: string | null;
   RATEYOURMUSIC_ALBUM?: string | null;
+  MEDIA?: string | null;
+  CATALOGNUMBER?: string | null;
+  LABEL?: string | null;
 }
 
 export interface Tech {
@@ -30,6 +33,7 @@ export interface Tech {
   sample_rate?: number;
   bits_per_sample?: number;
   channels?: number;
+  codec?: string;
 }
 
 export interface TrackTags {
@@ -52,6 +56,15 @@ export interface TrackTags {
   RATEYOURMUSIC_ALBUM?: string | null;
   RATEYOURMUSIC_TRACK?: string | null;
   RATEYOURMUSIC_ARTIST?: string | null;
+  CATALOGNUMBER?: string | null;
+  LABEL?: string | null;
+  RELEASETYPE?: string | null;
+  RELEASECOUNTRY?: string | null;
+  COMPOSER?: string | null;
+  LYRICIST?: string | null;
+  REMIXER?: string | null;
+  COPYRIGHT?: string | null;
+  ISRC?: string | null;
 }
 
 export interface Track {
@@ -99,6 +112,9 @@ export interface Album {
   instrumental_count: number;
   media: string;
   source_summary: string | null;
+  /** Grouped grading issues: full issue text → affected files ("album" for
+   * album-level checks). Powers the condensed FAIL details on the album page. */
+  issues?: Record<string, string[]>;
   tracks: Track[];
 }
 
@@ -179,6 +195,7 @@ export interface MBRelease {
   barcode?: string;
   country?: string;
   catalog_number?: string;
+  label?: string;
   artists: MBPerson[];
   genres: string[];
   media: MBTrack[];

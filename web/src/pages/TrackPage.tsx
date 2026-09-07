@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
-import { ExternalLink, Save, Play, Disc3, ListPlus, ShieldCheck, ImageUp, Clapperboard } from "lucide-react";
+import { ExternalLink, Save, Play, Disc3, ListPlus, ListStart, ListMusic, ShieldCheck, ImageUp, Clapperboard, Search, FolderOpen } from "lucide-react";
 import { api } from "../api";
+import { LinkChips, LinkEditorButton } from "../components/Links";
+import { SubtitledVideo } from "../components/SubtitledVideo";
 import { useStore, toast } from "../store";
 import { AuditBadge, GradeBadge, IssueList } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
 import LyricsViewer from "../components/LyricsViewer";
+import LyricsManagerModal from "../components/LyricsManagerModal";
+import OverflowMenu from "../components/OverflowMenu";
 
 export default function TrackPage() {
   const { path = "" } = useParams();
   const decoded = decodeURIComponent(path);
   const qc = useQueryClient();
-  const { playNow } = useStore();
+  const { playNow, queue, queueAdd } = useStore();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["track-tags", decoded],
@@ -20,17 +24,23 @@ export default function TrackPage() {
   });
 
   // Full grading/audit context from the album payload (issues, checks,
-  // audit verdict, log grade, AccurateRip status, tech).
-  const albumDir = decoded.split("/").slice(0, -1).join("/");
+  // audit verdict, log grade, AccurateRip status, tech). With "mb:<id>"
+  // references the album folder comes from the resolved tags payload.
+  const albumDir = decoded.startsWith("mb:")
+    ? (data?.path ?? "").split("/").slice(0, -1).join("/")
+    : decoded.split("/").slice(0, -1).join("/");
   const { data: album } = useQuery({
     queryKey: ["album", albumDir],
     queryFn: () => api.album(albumDir),
     retry: false,
+    enabled: !!albumDir,
   });
-  const track = (album?.tracks ?? []).find((t) => t.path === decoded);
+  const realPath = data?.path ?? decoded;
+  const track = (album?.tracks ?? []).find((t) => t.path === decoded || t.path === realPath);
 
   const [lyrics, setLyrics] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [managerOpen, setManagerOpen] = useState(false);
   const [coverBusy, setCoverBusy] = useState(false);
   const [videoOpen, setVideoOpen] = useState(false);
   const coverInput = useRef<HTMLInputElement>(null);
@@ -59,11 +69,57 @@ export default function TrackPage() {
   const csStatus = track?.checksum_status ?? null;
 
   const saveLyrics = async () => {
+    // Save target chosen in the lyrics editor toolbar (embedded tag / .lrc
+    // sidecar / both). Default keeps the historical embed-only behavior.
+    const target = localStorage.getItem("mlo.lyricsSaveTarget") ?? "embedded";
     try {
-      await api.lyricsEmbed(decoded, lyrics);
-      toast("Lyrics saved");
+      if (target === "embedded" || target === "both") await api.lyricsEmbed(decoded, lyrics);
+      if (target === "sidecar" || target === "both") await api.lyricsWrite(decoded, lyrics);
+      toast(target === "sidecar" ? "Lyrics saved to .lrc sidecar" : target === "both" ? "Lyrics saved (tag + .lrc sidecar)" : "Lyrics saved");
       setDirty(false);
       qc.invalidateQueries({ queryKey: ["library"] });
+      qc.invalidateQueries({ queryKey: ["track-tags", decoded] });
+      qc.invalidateQueries({ queryKey: ["album", albumDir] });
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+
+  /** LyricsManager hands lyrics to the editor; the normal Save flow writes
+   * them per the chosen save target. */
+  const applyFoundLyrics = (lrc: string, source: string) => {
+    setLyrics(lrc);
+    setDirty(true);
+    setManagerOpen(false);
+    toast(`Lyrics loaded — ${source}. Review, then Save.`);
+  };
+
+  const queueTrack = {
+    path: decoded, file: fileName, albumPath: albumDir,
+    artist: tags.ALBUMARTIST ?? tags.ARTIST, album: tags.ALBUM, title: tags.TITLE || undefined,
+  };
+  const enqueue = (position: "next" | "end") => {
+    if (!queue.length) {
+      playNow([queueTrack]);
+      return;
+    }
+    queueAdd([queueTrack], position);
+    toast(position === "next" ? "Playing next" : "Added to the queue");
+  };
+  const addToPlaylist = async () => {
+    const pls = await api.playlists();
+    const manual = pls.find((p) => p.kind === "manual");
+    if (!manual) {
+      const created = await api.createPlaylist("Library selection", "manual");
+      await api.playlistAdd(created.id, [decoded]);
+    } else {
+      await api.playlistAdd(manual.id, [decoded]);
+    }
+    toast("Added to playlist");
+  };
+  const openFolder = async () => {
+    try {
+      await api.openFolder(albumDir);
     } catch (e) {
       toast(String(e));
     }
@@ -84,18 +140,6 @@ export default function TrackPage() {
     }
   };
 
-  const addToPlaylist = async () => {
-    const pls = await api.playlists();
-    const manual = pls.find((p) => p.kind === "manual");
-    if (!manual) {
-      const created = await api.createPlaylist("Library selection", "manual");
-      await api.playlistAdd(created.id, [decoded]);
-    } else {
-      await api.playlistAdd(manual.id, [decoded]);
-    }
-    toast("Added to playlist");
-  };
-
   const linkTags: Record<string, { label: string; url?: (v: string) => string }> = {
     MUSICBRAINZ_ALBUMID: { label: "MusicBrainz Album", url: (v) => `https://musicbrainz.org/release/${v}` },
     MUSICBRAINZ_TRACKID: { label: "MusicBrainz Track", url: (v) => `https://musicbrainz.org/recording/${v}` },
@@ -113,16 +157,11 @@ export default function TrackPage() {
     .sort();
 
   return (
-    <div className="p-6 space-y-5 max-w-5xl">
+    <div className="p-6 space-y-5">
       {videoOpen && isVideo && (
         <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-6" onClick={() => setVideoOpen(false)}>
           <div className="w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
-            <video
-              src={api.streamUrl(decoded)}
-              controls
-              autoPlay
-              className="w-full max-h-[80vh] rounded-lg border border-border bg-black"
-            />
+            <SubtitledVideo path={decoded} className="w-full max-h-[80vh] rounded-lg border border-border bg-black" />
             <div className="flex justify-between items-center mt-2 text-xs text-zinc-400">
               <span className="truncate">{fileName}</span>
               <button className="btn-ghost !py-1" onClick={() => setVideoOpen(false)}>Close</button>
@@ -134,7 +173,7 @@ export default function TrackPage() {
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="text-xs text-zinc-500">
-            <Link to={`/album/${encodeURIComponent(albumDir)}`} className="hover:text-accent-soft">
+            <Link to={tags.MUSICBRAINZ_ALBUMID ? `/album/mb:${tags.MUSICBRAINZ_ALBUMID}` : `/album/${encodeURIComponent(albumDir)}`} className="hover:text-accent-soft">
               {tags.ALBUM || albumDir.split("/").pop()}
             </Link>
             {" · "}
@@ -145,24 +184,37 @@ export default function TrackPage() {
             <GradeBadge pass={!issues.length} score={issues.length ? 0 : 100} />
             <AuditBadge audit={audit} />
             <IssueList issues={issues} />
+            <LinkChips tags={tags} />
           </div>
         </div>
-        <div className="flex gap-2 shrink-0">
-          <button className="btn-ghost" onClick={addToPlaylist}><ListPlus className="h-4 w-4" /> Playlist</button>
-          {isVideo ? (
-            <button className="btn-ghost" onClick={() => setVideoOpen(true)}>
-              <Clapperboard className="h-4 w-4" /> Watch
-            </button>
-          ) : null}
-          <button className="btn-ghost" onClick={() => playNow([{
-            path: decoded, file: fileName, albumPath: albumDir,
-            artist: tags.ALBUMARTIST ?? tags.ARTIST, album: tags.ALBUM,
-          }])}>
-            <Play className="h-4 w-4" /> Play
+        <div className="flex items-center gap-2 shrink-0">
+          <button className="btn-ghost" onClick={() => playNow([queueTrack])} title="Play this track">
+            <Play className="h-4 w-4 fill-current" /> Play
           </button>
-          <button className="btn-primary" onClick={saveLyrics} disabled={!dirty}>
+          <LinkEditorButton mode="track" paths={[decoded]} current={tags} />
+          <button className="btn-primary" onClick={saveLyrics} disabled={!dirty} title="Save lyrics per the chosen save target">
             <Save className="h-4 w-4" /> Save lyrics
           </button>
+          <OverflowMenu
+            buttonTitle="All track actions"
+            sections={[
+              {
+                items: [
+                  { label: "Find lyrics", icon: Search, onClick: () => setManagerOpen(true) },
+                  { label: "Add to playlist", icon: ListPlus, onClick: addToPlaylist },
+                  { label: "Play next", icon: ListStart, onClick: () => enqueue("next") },
+                  { label: "Add to queue", icon: ListMusic, onClick: () => enqueue("end") },
+                ],
+              },
+              {
+                title: "Track",
+                items: [
+                  { label: "Watch video", icon: Clapperboard, hidden: !isVideo, onClick: () => setVideoOpen(true) },
+                  { label: "Open album folder", icon: FolderOpen, onClick: openFolder },
+                ],
+              },
+            ]}
+          />
         </div>
       </div>
 
@@ -213,9 +265,9 @@ export default function TrackPage() {
             <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Audio</div>
             <div className="grid grid-cols-2 gap-2 text-sm text-zinc-400">
               <div>Duration <span className="text-zinc-200">{tech.length ? `${Math.floor(tech.length / 60)}:${String(Math.floor(tech.length % 60)).padStart(2, "0")}` : "—"}</span></div>
-              <div>Bitrate <span className="text-zinc-200">{tech.bitrate ? `${Math.round(tech.bitrate / 1000)} kbps` : "—"}</span></div>
-              <div>Sample rate <span className="text-zinc-200">{tech.sample_rate ? `${Math.round(tech.sample_rate / 1000)} kHz` : "—"}</span></div>
+              <div>Bitrate <span className="text-zinc-200">{tech.bitrate ? `${tech.codec ? tech.codec + " · " : ""}${Math.round(tech.bitrate / 1000)} kbps` : "—"}</span></div>
               <div>Bit depth <span className="text-zinc-200">{tech.bits_per_sample ?? "—"}</span></div>
+              <div>Sample rate <span className="text-zinc-200">{tech.sample_rate ? `${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz` : "—"}</span></div>
               <div>Channels <span className="text-zinc-200">{tech.channels ?? "—"}</span></div>
             </div>
           </div>
@@ -287,6 +339,19 @@ export default function TrackPage() {
           />
         </div>
       </div>
+
+      {managerOpen && (
+        <LyricsManagerModal
+          path={decoded}
+          artist={tags.ARTIST ?? ""}
+          track={tags.TITLE ?? ""}
+          album={tags.ALBUM || undefined}
+          duration={tech.length ? Math.round(tech.length) : undefined}
+          currentText={lyrics}
+          onApplied={applyFoundLyrics}
+          onClose={() => setManagerOpen(false)}
+        />
+      )}
     </div>
   );
 }

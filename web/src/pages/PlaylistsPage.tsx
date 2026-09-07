@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListMusic, Plus, Trash2, Download, Upload, Play, ChevronUp, ChevronDown, Pencil } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
-import { EmptyState, AuditBadge } from "../components/Badges";
+import { EmptyState, GradeBadge } from "../components/Badges";
+import FavHeart from "../components/FavHeart";
+import { auditFails } from "../lib/status";
 import type { Playlist, FilterCondition } from "../types";
 
 const FIELDS = [
@@ -36,13 +38,13 @@ export default function PlaylistsPage() {
   const { playNow } = useStore();
   const { data: playlists, isLoading } = useQuery({ queryKey: ["playlists"], queryFn: api.playlists });
   const { data: lib } = useQuery({ queryKey: ["library"], queryFn: api.library });
-  // path -> tag-derived artist/album so the player bar shows real names
+  // path -> tag-derived title/artist/album so the player bar shows real names
   const trackInfo = useMemo(() => {
-    const map = new Map<string, { artist?: string; album?: string }>();
+    const map = new Map<string, { artist?: string; album?: string; title?: string }>();
     for (const a of lib?.artists ?? [])
       for (const al of a.albums)
         for (const t of al.tracks)
-          map.set(t.path, { artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined });
+          map.set(t.path, { artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined });
     return map;
   }, [lib]);
   const [newName, setNewName] = useState("");
@@ -96,7 +98,7 @@ export default function PlaylistsPage() {
   const smart = (playlists ?? []).filter((p) => p.kind === "smart");
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl">
+    <div className="p-6 space-y-6">
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <ListMusic className="h-6 w-6 text-accent" /> Playlists
@@ -134,6 +136,7 @@ export default function PlaylistsPage() {
               albumPath: path.split("/").slice(0, -1).join("/"),
               artist: trackInfo.get(path)?.artist,
               album: trackInfo.get(path)?.album,
+              title: trackInfo.get(path)?.title,
             })))} onSmart={() => smartFilter(p)} />
       ))}
 
@@ -147,6 +150,7 @@ export default function PlaylistsPage() {
               albumPath: path.split("/").slice(0, -1).join("/"),
               artist: trackInfo.get(path)?.artist,
               album: trackInfo.get(path)?.album,
+              title: trackInfo.get(path)?.title,
             })))} onSmart={() => smartFilter(p)} />
           ))}
         </div>
@@ -243,21 +247,24 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
 
   return (
     <div className="bg-card rounded-lg border border-border overflow-hidden">
-      <div className="flex items-center gap-3 px-4 py-2.5">
-        {renaming ? (
-          <>
-            <input className="input max-w-xs" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && rename()} />
-            <button className="btn-primary text-xs" onClick={rename}>Save</button>
-          </>
-        ) : (
-          <span className="font-semibold">{playlist.name}</span>
-        )}
+      <div className="flex items-center gap-3 px-4 py-2">
+        <div className="flex items-center gap-1.5">
+          <button className="btn-ghost !px-2 !py-1 text-xs" title="Play playlist" onClick={() => onPlay(tracks)}><Play className="h-3.5 w-3.5" /></button>
+          {renaming ? (
+            <>
+              <input className="input max-w-xs" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && rename()} />
+              <button className="btn-primary text-xs" onClick={rename}>Save</button>
+            </>
+          ) : (
+            <span className="font-semibold">{playlist.name}</span>
+          )}
+        </div>
         {playlist.kind === "smart" && (
           <span className="chip bg-accent/10 text-accent-soft border border-accent/25">SMART</span>
         )}
         <span className="text-xs text-zinc-500">{tracks.length} tracks</span>
         <div className="ml-auto flex gap-1.5">
-          <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => onPlay(tracks)}><Play className="h-3.5 w-3.5" /></button>
+          <FavHeart kind="playlist" id={String(playlist.id)} iconClass="h-3.5 w-3.5" />
           <a className="btn-ghost !px-2 !py-1 text-xs" href={api.playlistExportUrl(playlist.id)}><Download className="h-3.5 w-3.5" /></a>
           {playlist.kind === "smart" && (
             <button className="btn-ghost !px-2 !py-1 text-xs" onClick={onSmart}><Pencil className="h-3.5 w-3.5" /></button>
@@ -272,7 +279,11 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
             <div key={`${playlist.id}-${i}-${t}`} className="flex items-center gap-2 px-4 py-1.5 text-sm border-t border-border/40 first:border-t-0 hover:bg-panel">
               <span className="text-xs text-zinc-600 w-6">{i + 1}</span>
               <span className="flex-1 truncate">{trackMeta.get(t)?.title ?? t.split("/").pop()}</span>
-              <AuditBadge audit={trackMeta.get(t)?.audit ?? null} size="sm" />
+              <GradeBadge
+                pass={!!trackMeta.get(t)?.pass && !auditFails(trackMeta.get(t)?.audit)}
+                audit={trackMeta.get(t)?.audit}
+                size="sm"
+              />
               <div className="flex gap-0.5">
                 <button className="text-zinc-600 hover:text-zinc-300 disabled:opacity-30" onClick={() => move(i, -1)} disabled={i === 0}><ChevronUp className="h-4 w-4" /></button>
                 <button className="text-zinc-600 hover:text-zinc-300 disabled:opacity-30" onClick={() => move(i, 1)} disabled={i === tracks.length - 1}><ChevronDown className="h-4 w-4" /></button>

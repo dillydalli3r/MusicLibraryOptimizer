@@ -1,21 +1,26 @@
-"""Lossless video remux — script 11: any video container -> MP4.
+"""Lossless video remux — script 11: any video container -> MKV.
 
 Music libraries increasingly carry promo clips and music videos alongside
-the tracks (VOB rips, MKV/AVI/WMV downloads, TS captures...). Browsers,
-players and this app's own library scanner all prefer MP4, so this script
-normalizes every video file:
+the tracks (VOB rips, MKV/AVI/WMV downloads, TS captures...). Matroska can
+hold virtually every stream codec in common circulation, so this script
+normalizes every video file while keeping quality fully intact:
 
-* Video stream is copied **bit-exact** when its codec is MP4-compatible
-  (h264 / hevc / mpeg4 / av1 / vp9). Incompatible codecs (MPEG-2 in a VOB,
-  VP8, Flash...) are re-encoded to H.264 when ``video_reencode_incompatible``
-  is set — otherwise the file is skipped untouched.
-* **Every** audio stream is decoded and re-encoded to FLAC (lossless from
-  the decoded source), preserving channel layout and sample rate — FLAC in
-  MP4 is standardized and keeps multi-channel / hi-res audio intact.
-* Text subtitle streams become mov_text; chapters and cover art survive.
-* Output is verified with ffprobe (video present, audio stream count
-  matches, duration within 0.5%) before anything replaces the source. The
-  original file is only deleted when ``video_remove_original`` is set.
+* Pass 1 — video is copied **bit-exact**; every audio stream is re-encoded
+  to FLAC (lossless from the decoded source, compression level from
+  ``video_flac_level``) so the audio matches the library's FLAC standard.
+* Pass 2 (caption rescue) — text captions the MKV muxer refuses verbatim
+  are converted to SubRip so they are kept, never dropped.
+* Pass 3 (last resort, ``video_reencode_incompatible``) — a video codec the
+  muxer still refuses is re-encoded to H.264; audio stays FLAC.
+* Captions are NEVER removed: every subtitle stream is mapped in every
+  pass, and the output is verified to carry the same subtitle stream count
+  as the source (a remux that would drop captions fails instead).
+* Chapters survive. Output is verified with ffprobe (video present, audio
+  and subtitle stream counts match, duration within 0.5%) before anything
+  replaces the source. The original file is deleted after a verified remux
+  (``video_remove_original``, on by default) — a stray VOB whose same-stem
+  MKV already exists from an earlier run is verified by duration match and
+  then removed too.
 
 Config keys: video_reencode_incompatible, video_crf, video_preset,
 video_flac_level, video_remove_original, video_process_mp4.
@@ -43,16 +48,9 @@ VIDEO_EXTS = (
     ".vob", ".mpg", ".mpeg", ".m2v", ".vro", ".mod", ".tod",
     ".ts", ".m2ts", ".mts", ".m2t",
     ".mkv", ".avi", ".divx", ".wmv", ".asf", ".mov", ".flv", ".f4v",
-    ".webm", ".ogv", ".3gp", ".3g2", ".rm", ".rmvb",
+    ".webm", ".ogv", ".3gp", ".3g2", ".rm", ".rmvb", ".dv", ".amv", ".nsv",
+    ".evo", ".ogm", ".tp", ".trp", ".mxf", ".gxf",
 )
-
-# Video codecs an MP4 muxer accepts without re-encoding. vp9/av1 are
-# standard MP4 codec ids (ISO/IEC 14496-15); h263/vp8/mpeg2 are not.
-MP4_SAFE_VIDEO = {"h264", "hevc", "mpeg4", "av1", "vp9"}
-
-# Text-based subtitle codecs mov_text can carry; bitmap subs (PGS/DVB,
-# VOB spu) are dropped — MP4 cannot hold them losslessly.
-TEXT_SUBS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
 
 X264_PRESETS = (
     "ultrafast", "superfast", "veryfast", "faster", "fast",
@@ -106,9 +104,9 @@ def _stream_info(path, ffprobe_exe):
     return video, audio, subs, duration
 
 
-def _unique_dest(src, out_ext=".mp4"):
+def _unique_dest(src, out_ext=".mkv"):
     """Destination path next to the source: same stem + out_ext, never
-    overwriting an existing file ('name (2).mp4')."""
+    overwriting an existing file ('name (2).mkv')."""
     stem = os.path.splitext(src)[0]
     dest = stem + out_ext
     if os.path.normcase(dest) == os.path.normcase(src):
@@ -126,29 +124,12 @@ def _unique_dest(src, out_ext=".mp4"):
 _DEST_LOCK = threading.Lock()
 
 
-def remux_video(src, dest, ffmpeg_exe, ffprobe_exe, cfg):
-    """Remux one video file to MP4. Returns (ok, message).
-
-    ``dest`` must not exist (callers pass a temp path); on success the
-    caller os.replace()s it into place after verification.
-    """
-    info = _stream_info(src, ffprobe_exe)
-    if info is None:
-        return False, "unreadable by ffprobe"
-    vcodec, acodecs, scodecs, duration = info
-    if vcodec is None and not acodecs:
-        return False, "no audio or video streams"
-
-    reencode_bad = bool(cfg.get("video_reencode_incompatible", True))
-    if vcodec is None:
-        return False, "no video stream"
-    if vcodec not in MP4_SAFE_VIDEO:
-        if not reencode_bad:
-            return False, f"video codec {vcodec} is not MP4-compatible (re-encode disabled)"
-        copy_video = False
-    else:
-        copy_video = True
-
+def _ffmpeg_args(mode, cfg):
+    """Encoder arguments for a remux pass. Mode "2" = copied video + FLAC
+    audio + copied captions; "2s" = copied video + FLAC audio + captions
+    converted to SRT (rescue for text caption codecs the MKV muxer refuses);
+    "3" = h264 video + FLAC audio. Captions are NEVER dropped: every pass
+    maps all subtitle streams."""
     try:
         crf = max(0, min(51, int(cfg.get("video_crf", 18))))
     except (TypeError, ValueError):
@@ -161,50 +142,120 @@ def remux_video(src, dest, ffmpeg_exe, ffprobe_exe, cfg):
     except (TypeError, ValueError):
         flac_level = 8
 
-    cmd = [ffmpeg_exe, "-y", "-v", "error", "-nostdin", "-i", src,
-           "-map", "0:v:0", "-map", "0:a?", "-map", "0:s?"]
-    if copy_video:
-        cmd += ["-c:v", "copy"]
-    else:
-        cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-                "-pix_fmt", "yuv420p"]
+    cmd = []
+    cmd += ["-c:v", "copy" if mode != "3" else "libx264"]
+    if mode == "3":
+        cmd += ["-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
     # FLAC keeps every decoded audio stream bit-perfect (any channel
-    # layout / bit depth). Handle both flac-in-mp4-capable and older
-    # builds via -strict -2 (a no-op on modern ffmpeg).
-    cmd += ["-c:a", "flac", "-strict", "-2",
-            "-compression_level", str(flac_level)]
-    if scodecs:
-        cmd += ["-c:s", "mov_text"]
-    cmd += ["-movflags", "+faststart", "-f", "mp4", dest]
+    # layout / bit depth) — lossless, at the configured compression level.
+    cmd += ["-c:a", "flac", "-strict", "-2", "-compression_level", str(flac_level)]
+    # Captions: copied verbatim; the "2s" rescue pass re-encodes text
+    # captions to SubRip (content preserved) when the container refuses
+    # the source codec. Bitmap captions (DVD/PGS/DVB) can only be copied.
+    cmd += ["-c:s", "copy" if mode != "2s" else "srt"]
+    return cmd
 
-    timeout = 60 * 120  # long encodes (full VOB remasters) still capped
-    try:
-        proc = run_tool(cmd, capture_output=True, text=True,
-                        encoding="utf-8", errors="replace", timeout=timeout)
-    except Exception as e:
-        return False, f"ffmpeg failed: {e}"
-    if proc.returncode != 0:
-        tail = (proc.stderr or "").strip().splitlines()[-3:]
-        return False, "; ".join(tail) or f"ffmpeg exit {proc.returncode}"
 
-    # Verification: the output must have video, the same number of audio
-    # streams, and (when known) a duration within 0.5% / 1 s of the source.
-    out_info = _stream_info(dest, ffprobe_exe)
-    if out_info is None:
-        return False, "output failed verification (ffprobe)"
-    ov, oa, _subs, odur = out_info
-    if ov is None:
-        return False, "output has no video stream"
-    if len(oa) != len(acodecs):
-        return False, f"audio stream count changed ({len(acodecs)} -> {len(oa)})"
-    if duration and odur and abs(duration - odur) > max(1.0, 0.005 * duration):
-        return False, f"duration changed ({duration:.2f}s -> {odur:.2f}s)"
-    return True, ("video copied" if copy_video else
-                  f"{vcodec} video re-encoded to h264 (crf {crf})")
+def remux_video(src, dest, ffmpeg_exe, ffprobe_exe, cfg):
+    """Remux one video file to MKV. Returns (ok, message).
+
+    ``dest`` must not exist (callers pass a temp path); on success the
+    caller os.replace()s it into place after verification. Video is copied
+    bit-exact and every audio stream is re-encoded to FLAC (lossless);
+    when the muxer refuses the video codec a config-gated H.264 pass
+    follows. Subtitle streams are always mapped and copied — the output is
+    verified to carry the same caption streams as the source.
+    """
+    # Forward slashes: with backslash paths ffmpeg's VOB/VOB-VR demuxer can
+    # expose phantom audio substreams (unknown codec parameters) that kill
+    # the mux. Windows ffmpeg accepts forward slashes everywhere.
+    src = str(src).replace("\\", "/")
+    dest = str(dest).replace("\\", "/")
+    info = _stream_info(src, ffprobe_exe)
+    if info is None:
+        return False, "unreadable by ffprobe"
+    vcodec, acodecs, scodecs, duration = info
+    if vcodec is None and not acodecs:
+        return False, "no audio or video streams"
+    if vcodec is None:
+        return False, "no video stream"
+
+    # H.264 fallback only ever runs when the user kept the safety valve on.
+    allow_reencode = bool(cfg.get("video_reencode_incompatible", True))
+
+    # Regenerate input PTS — DVD-VR VOBs often carry pcm_dvd packets with
+    # unknown timestamps that abort the mux otherwise. Input flags must
+    # precede -i. Only video/audio/subtitle streams are mapped — data
+    # streams (DVD navigation packets) can't be carried by any muxer.
+    # Subtitles are mapped unconditionally: captions are never removed.
+    input_flags = ["-fflags", "+genpts"]
+    stream_maps = ["-map", "0:v", "-map", "0:a?", "-map", "0:s?"]
+
+    last_err = ""
+    for mode in ("2", "2s", "3") if allow_reencode else ("2", "2s"):
+        cmd = ([ffmpeg_exe, "-y", "-v", "error", "-nostdin"]
+               + input_flags + ["-i", src] + stream_maps)
+        cmd += _ffmpeg_args(mode, cfg)
+        cmd += ["-f", "matroska", dest]
+        try:
+            proc = run_tool(cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=60 * 120)
+        except Exception as e:
+            last_err = f"ffmpeg failed: {e}"
+            continue
+        if proc.returncode != 0:
+            last_err = "; ".join((proc.stderr or "").strip().splitlines()[-3:]) \
+                or f"ffmpeg exit {proc.returncode}"
+            continue
+
+        # Verification: the output must have video, the same number of audio
+        # streams, the SAME subtitle (caption) streams — a remux that would
+        # drop captions fails rather than losing them — and (when known) a
+        # duration within 0.5% / 1 s of the source.
+        out_info = _stream_info(dest, ffprobe_exe)
+        if out_info is None:
+            last_err = "output failed verification (ffprobe)"
+            continue
+        ov, oa, osubs, odur = out_info
+        if ov is None:
+            last_err = "output has no video stream"
+            continue
+        if len(oa) != len(acodecs):
+            last_err = f"audio stream count changed ({len(acodecs)} -> {len(oa)})"
+            continue
+        if len(osubs) != len(scodecs):
+            last_err = f"subtitle streams dropped ({len(scodecs)} -> {len(osubs)}) — refusing to lose captions"
+            continue
+        if duration and odur and abs(duration - odur) > max(1.0, 0.005 * duration):
+            last_err = f"duration changed ({duration:.2f}s -> {odur:.2f}s)"
+            continue
+        if mode == "2":
+            return True, f"video copied, audio -> FLAC ({' + '.join(acodecs) if acodecs else '?'})"
+        if mode == "2s":
+            return True, "video copied, audio -> FLAC, captions -> SRT"
+        return True, (f"{vcodec} video re-encoded to h264 "
+                      f"(crf {cfg.get('video_crf', 18)}), audio -> FLAC")
+    return False, last_err or "remux failed"
+
+
+def _same_program(src, mkv, ffprobe_exe):
+    """Best-effort check that *mkv* looks like the remux product of *src*:
+    both probe, both carry video, and their durations match closely. Used
+    before deleting a stray original whose same-stem MKV already exists."""
+    a = _stream_info(src, ffprobe_exe)
+    b = _stream_info(mkv, ffprobe_exe)
+    if not a or not b:
+        return False
+    if a[0] is None or b[0] is None:
+        return False
+    da, db = a[3], b[3]
+    if not da or not db:
+        return False
+    return abs(da - db) <= max(1.0, 0.005 * da)
 
 
 def run_remux_videos(config):
-    """Script 11 — convert every video file in the target set to MP4."""
+    """Script 11 — convert every video file in the target set to MKV."""
     stats = new_stats()
     stats["converted"] = 0
     stats["removed_originals"] = 0
@@ -217,14 +268,15 @@ def run_remux_videos(config):
         stats["errors"].append("ffmpeg/ffprobe not available")
         return stats
 
-    print_header("Video Remux (MP4)")
+    print_header("Video Remux (MKV)")
     reenc = bool(config.get("video_reencode_incompatible", True))
-    remove_original = bool(config.get("video_remove_original", False))
+    remove_original = bool(config.get("video_remove_original", True))
     process_mp4 = bool(config.get("video_process_mp4", False))
     log(
         f"ffmpeg: {ffmpeg}\n"
-        f"incompatible video: {'re-encode to h264' if reenc else 'skip'} · "
-        f"audio: FLAC · originals: {'removed after verified remux' if remove_original else 'kept'}"
+        f"streams: video copied · audio -> FLAC (lossless, level {config.get('video_flac_level', 8)}) · "
+        f"captions always kept · h264 fallback {'on' if reenc else 'off'} · "
+        f"originals: {'removed after verified remux' if remove_original else 'kept'}"
     )
 
     exts = VIDEO_EXTS + (".mp4",) if process_mp4 else VIDEO_EXTS
@@ -253,15 +305,31 @@ def run_remux_videos(config):
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _job(path):
-        if os.path.splitext(path)[1].lower() == ".mp4" and process_mp4:
-            # Only normalize mp4 files that don't already carry FLAC audio.
-            info = _stream_info(path, ffprobe)
-            if info and all(a == "flac" for a in info[1]) and info[1]:
-                return path, None, "already FLAC audio", 0
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".mkv":
+            # Already the target container — nothing to normalize.
+            return path, None, "already MKV", 0
+        if os.path.exists(os.path.splitext(path)[0] + ".mkv"):
+            # A verified remux from an earlier run is already in place —
+            # keep re-runs idempotent instead of piling up "(2).mkv" copies.
+            # The stray original (e.g. a leftover VOB) is removed once the
+            # existing MKV is duration-verified as its remux product.
+            mkv = os.path.splitext(path)[0] + ".mkv"
+            if remove_original and _same_program(path, mkv, ffprobe):
+                try:
+                    before = os.path.getsize(path)
+                    with _DEST_LOCK:
+                        os.remove(path)
+                    stats["removed_originals"] += 1
+                    stats["total_bytes_removed"] += before
+                    return path, None, "already remuxed — stray original removed", 0
+                except OSError as e:
+                    return path, None, f"already remuxed (same-stem MKV exists); remove failed: {e}", 0
+            return path, None, "already remuxed (same-stem MKV exists)", 0
         # Unique temp file in the same directory (same volume => the final
         # os.replace is atomic). mkstemp guarantees no two jobs share one.
         fd, tmp = tempfile.mkstemp(
-            prefix=".remux_", suffix=".mp4", dir=os.path.dirname(path) or ".")
+            prefix=".remux_", suffix=".mkv", dir=os.path.dirname(path) or ".")
         os.close(fd)
         try:
             ok, msg = remux_video(path, tmp, ffmpeg, ffprobe, config)
@@ -294,7 +362,9 @@ def run_remux_videos(config):
                 continue
             if dest is None:
                 stats["skipped_count"] += 1
-                if msg != "already FLAC audio":
+                if msg == "already remuxed — stray original removed":
+                    log(f"  - {os.path.basename(path)}: stray original removed (same-stem MKV verified)")
+                elif msg not in ("already MKV", "already remuxed (same-stem MKV exists)"):
                     stats["errors"].append(f"{os.path.basename(path)}: {msg}")
                     log(c(f"  ! {os.path.basename(path)}: {msg}", Color.YELLOW))
                 else:

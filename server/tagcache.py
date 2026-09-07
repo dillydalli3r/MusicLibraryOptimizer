@@ -32,6 +32,33 @@ def _stat_key(path):
         return (os.path.normcase(path), 0, 0)
 
 
+# Display codec names for audio file extensions. .m4a is resolved further
+# below via mutagen (ALAC vs AAC live in the same container).
+_EXT_CODEC = {
+    ".flac": "FLAC", ".mp3": "MP3", ".m4a": "M4A", ".mp4": "M4A",
+    ".aac": "AAC", ".ogg": "Vorbis", ".opus": "Opus", ".wav": "WAV",
+    ".aiff": "AIFF", ".aif": "AIFF", ".ape": "APE", ".wv": "WavPack",
+    ".wma": "WMA", ".alac": "ALAC",
+}
+
+
+def _detect_codec(path, af):
+    """Human-readable audio codec for the tech panel (e.g. 'FLAC').
+    Mutagen reports the real codec inside MP4 containers (ALAC vs AAC);
+    other formats are identified by extension, which is exact for them."""
+    ext = os.path.splitext(path)[1].lower()
+    codec = _EXT_CODEC.get(ext)
+    if ext in (".m4a", ".mp4"):
+        try:
+            inner = getattr(getattr(af, "audio", None), "info", None)
+            inner = str(getattr(inner, "codec", "") or "").lower()
+            if inner in ("alac", "aac"):
+                codec = inner.upper()
+        except Exception:
+            pass
+    return codec or ext.lstrip(".").upper() or None
+
+
 def read_track(path, tag_list=None):
     """Return (tags dict, tech dict) for an audio file, cached.
 
@@ -62,6 +89,13 @@ def read_track(path, tag_list=None):
                         tech[attr] = round(float(v), 3) if isinstance(v, (int, float)) else str(v)
                 except Exception:
                     pass
+        # Codec (FLAC / MP3 / ALAC / …) shown next to bitrate and depth.
+        try:
+            codec = _detect_codec(path, af)
+            if codec:
+                tech["codec"] = codec
+        except Exception:
+            pass
     with _lock:
         _tag_cache[key] = (tags, tech)
         _tag_cache.move_to_end(key)

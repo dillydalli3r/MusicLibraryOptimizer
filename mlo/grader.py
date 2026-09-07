@@ -7,7 +7,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .audio import AudioFile
 from .config import should_write_audio_tag
 from .lyrics import _lrc_for, _canonical_lyrics, format_lyrics_text
+from .lyrics_xlit import XLIT_SIDECAR, ai_ready, non_latin_ratio, primary_translation_lang
 from .cue import canonical_cue_text
+from .naming import DEFAULT_NAMING_SCRIPT
 from .paths import AUDIO_EXTS, IMAGE_EXTS, LIB_AUDIO_EXTS, get_sidecar_cover_path
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, is_audio_file,
@@ -16,6 +18,17 @@ from .stats import (
 )
 from .deps import HAS_PIL, Image
 from .ui import print_header, log, c, Color, print_separator, _short_val
+
+# Media formats the library understands (MusicBrainz-style MEDIA values).
+# Everything outside CD / Digital Media in this set is graded like any other
+# release — the CUE/LOG/AccurateRip expectations are already gated on
+# media_summary == "CD" — while unknown values still fail grading.
+KNOWN_MEDIA = {
+    "cd", "cd-r", "digital media", "vinyl", '12" vinyl', '10" vinyl', '7" vinyl',
+    "sacd", "dvd", "dvd-video", "dvd-audio", "blu-ray", "blu-spec cd", "shm-cd",
+    "cassette", "minidisc", "8-track", "vhs", "laserdisc",
+}
+
 
 def _get_cover_dimensions(cover_path):
     """Get cover dimensions, handling JXL via jxlinfo when Pillow lacks JXL support."""
@@ -385,7 +398,9 @@ SIDECAR_TYPES = {
 }
 
 # Category -> config key deciding whether files of that kind are allowed.
-# 'other' is opt-in (extra files fail grading by default).
+# 'other' is opt-in (extra files fail grading by default). Videos — remuxed
+# MKV and raw VOB/AVI/... — are their own allowed-by-default category; raw
+# videos still fail the dedicated un-remuxed-video check.
 CATEGORY_INCLUDE_KEYS = {
     "music": "grade_include_music",
     "cover": "grade_include_cover",
@@ -393,15 +408,38 @@ CATEGORY_INCLUDE_KEYS = {
     "log": "grade_include_log",
     "lrc": "grade_include_lrc",
     "accurip": "grade_include_accurip",
+    "video": "grade_include_video",
     "other": "grade_include_other",
 }
 
 
+_VIDEO_EXTS_CACHE = None
+
+
+def _video_exts():
+    """Every video container extension the remuxer (script 11) accepts.
+    Lazy import keeps the grader import light and avoids import cycles."""
+    global _VIDEO_EXTS_CACHE
+    if _VIDEO_EXTS_CACHE is None:
+        try:
+            from .remux import VIDEO_EXTS
+
+            _VIDEO_EXTS_CACHE = VIDEO_EXTS
+        except Exception:
+            _VIDEO_EXTS_CACHE = (".mkv",)
+    return _VIDEO_EXTS_CACHE
+
+
 def _classify_file(f):
-    """Category of a filename: music / cover / cue / log / lrc / accurip / other."""
+    """Category of a filename: music / cover / cue / log / lrc / accurip / video / other."""
     low = f.lower()
     if low.endswith(LIB_AUDIO_EXTS):
         return "music"
+    if low.endswith(_video_exts()):
+        # Remuxed (MKV) and raw (VOB/AVI/WMV/...) videos are their own
+        # allowed-by-default category, so a raw VOB only fails the dedicated
+        # un-remuxed-video check — never the generic disallowed-files check.
+        return "video"
     if low.endswith(IMAGE_EXTS):
         return "cover"
     if low.endswith(".cue"):
@@ -460,6 +498,29 @@ def _disallowed_files(album_dir, all_files, cfg):
             continue
         if not _category_allowed(cfg, _classify_file(f)):
             out.append(f)
+    return out
+
+
+def _extra_images(album_dir, all_files, audio_files):
+    """Image files that belong to no track and no album slot: neither the
+    album cover (cover.*) nor a per-track sidecar whose stem matches a track
+    ("01 - Song.jpg", extended stems like "01 - Song.front.jpg" count too —
+    the same convention the organizer's sidecar pass follows)."""
+    track_stems = {os.path.splitext(f)[0].lower() for f in audio_files}
+    out = []
+    for f in sorted(all_files):
+        low = f.lower()
+        if not low.endswith(IMAGE_EXTS) or low in COVER_NAMES:
+            continue
+        full = os.path.join(album_dir, f)
+        if _skip_grading_file(full):
+            continue
+        stem = os.path.splitext(f)[0].lower()
+        if stem in track_stems or any(
+            stem.startswith(s + ".") for s in track_stems
+        ):
+            continue
+        out.append(f)
     return out
 
 
@@ -716,13 +777,43 @@ def _grade_sidecars(album_dir, all_files, cfg):
                     except Exception:
                         detail = "needs resize/crop"
         else:
-            ok = _category_allowed(cfg, "other")
+            ok = _category_allowed(cfg, category)
             detail = "allowed" if ok else "disallowed type"
         sidecars.append({
             "file": f, "type": category,
             "ok": ok, "detail": detail,
         })
     return sidecars
+
+
+def _norm_path_case(p):
+    """Separator + case normalization so path comparisons work on both
+    Windows (case-insensitive, backslashes) and POSIX."""
+    return os.path.normcase(str(p or "").replace("/", os.sep).replace("\\", os.sep))
+
+
+def _naming_mismatch(ap, folder, script, release_type, tags):
+    """Expected-relative-path comparison for grade_check_naming.
+
+    The naming script defines the target path WITHOUT the file extension
+    (beets-style — the extension is preserved from the source file), so the
+    extension is appended before comparing. Returns the expected relative
+    path when the track's actual path (relative to the music folder) does
+    not match, else None. Both full and 8-char-truncated MusicBrainz IDs
+    are accepted so the short_folder_names setting can't produce false
+    failures.
+    """
+    from mlo.naming import eval_script, track_variables
+
+    actual = os.path.relpath(ap, folder)
+    variables = track_variables(tags or {}, release_type=release_type)
+    ext = os.path.splitext(ap)[1]
+    expected_full = eval_script(script, variables, shorter_ids=False) + ext
+    expected_short = eval_script(script, variables, shorter_ids=True) + ext
+    for exp in (expected_full, expected_short):
+        if exp and _norm_path_case(exp) == _norm_path_case(actual):
+            return None
+    return expected_full or expected_short
 
 
 def _grade_album(album_dir, lyrics_format, cfg=None):
@@ -752,6 +843,22 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
     media_values = []
     source_values = []
     album_artist = None
+
+    # Path-grading setup (grade_check_naming): the naming script is evaluated
+    # per track exactly like the organizer does, minus the network MB lookup —
+    # RELEASETYPE comes from tags only.
+    music_folder = str(cfg.get("music_folder") or "").strip()
+    naming_script = (str(cfg.get("naming_script") or "").strip() or DEFAULT_NAMING_SCRIPT)
+    try:
+        naming_check = (
+            cfg.get("grade_check_naming", True)
+            and bool(music_folder)
+            and os.path.commonpath([os.path.normpath(album_dir), os.path.normpath(music_folder)])
+            == os.path.normpath(music_folder)
+        )
+    except ValueError:
+        naming_check = False
+    album_release_type = None
 
     lyrics_present_count = 0
     lyrics_expected_count = 0
@@ -842,13 +949,51 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     add_issue(f"{t} has leading/trailing spaces ({raw_all!r})", basename)
                     track["issues"].append(t)
             if cfg.get("grade_check_tag_blank_lines", True):
-                raw_blank = str(val) if val is not None else ""
-                # Any blank/whitespace-only line anywhere (including leading/trailing outer blanks)
-                # mirrors Format All's removal of ALL blank lines, not just middle
-                if "\n" in raw_blank and any(not line.strip() for line in raw_blank.splitlines()):
+                # LYRICS is exempt here: the lyrics formatter intentionally
+                # keeps single middle blank lines (section separators) and
+                # their blank/spacing handling is owned by the dedicated
+                # grade_check_lyrics_* checks below, which mirror it.
+                if t not in ("LYRICS", "UNSYNCEDLYRICS", "SYNCLYRICS"):
+                    raw_blank = str(val) if val is not None else ""
+                    # Any blank/whitespace-only line anywhere (including leading/trailing outer blanks)
+                    # mirrors Format All's removal of ALL blank lines, not just middle
+                    if "\n" in raw_blank and any(not line.strip() for line in raw_blank.splitlines()):
+                        failed_checks += 1
+                        add_issue(f"{t} has blank lines", basename)
+                        track["issues"].append(t)
+
+        # Key & BPM (script 12 output) — required when the check is on.
+        if cfg.get("grade_check_key_bpm", True):
+            for t in ("INITIALKEY", "BPM"):
+                if not should_write_audio_tag(cfg, t, filepath=ap):
+                    continue
+                total_checks += 1
+                val = af.get_tag(t)
+                track["values"][t] = val
+                if val is None or str(val).strip() == "":
                     failed_checks += 1
-                    add_issue(f"{t} has blank lines", basename)
+                    add_issue(f"Missing {t}", basename)
                     track["issues"].append(t)
+
+        # File/folder names must match the naming script (the same script the
+        # organizer applies), relative to the music folder.
+        if naming_check:
+            try:
+                tags_map = af.all_tags() or {}
+            except Exception:
+                tags_map = {}
+            if album_release_type is None and tags_map.get("RELEASETYPE"):
+                album_release_type = tags_map.get("RELEASETYPE")
+            expected = _naming_mismatch(
+                ap, music_folder, naming_script,
+                tags_map.get("RELEASETYPE") or album_release_type,
+                tags_map,
+            )
+            if expected is not None:
+                total_checks += 1
+                failed_checks += 1
+                add_issue(f"PATH: expected '{expected}'", basename)
+                track["issues"].append("PATH")
 
         # Additional check for *all* tags in the file (including TITLE, ALBUM, etc.) for leading/trailing spaces and blank lines
         if cfg.get("grade_check_tag_spaces", True) or cfg.get("grade_check_tag_blank_lines", True):
@@ -860,6 +1005,12 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         continue
                     # Skip some internal tags that are not user-visible
                     if tag_key in ("ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION", "AUDIT", "LOG_GRADE"):
+                        continue
+                    # Lyrics tags are graded by the dedicated grade_check_lyrics_*
+                    # checks below, which mirror the lyrics formatter (it keeps
+                    # single middle blank lines by design) — the generic tag
+                    # hygiene rule must not fail them.
+                    if tag_key.upper() in ("LYRICS", "UNSYNCEDLYRICS", "SYNCLYRICS"):
                         continue
                     raw = str(tag_val) if tag_val is not None else ""
                     # Per-line spaces check (not whole-string strip which flags trailing \n)
@@ -983,6 +1134,44 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                           basename)
                 track["issues"].append("AUDIT")
 
+        # MusicBrainz / RateYourMusic identity links — required for a PASS.
+        # Album, artist AND track level links must exist: they power the
+        # open-in-MB/RYM buttons, move-safe likes and re-import matching.
+        mb_album = str(
+            af.get_tag("MUSICBRAINZ_ALBUMID") or af.get_tag("MUSICBRAINZ_RELEASEGROUPID") or ""
+        ).strip()
+        mb_artist = str(af.get_tag("MUSICBRAINZ_ARTISTID") or "").strip()
+        mb_track = str(af.get_tag("MUSICBRAINZ_TRACKID") or "").strip()
+        rym_album = str(af.get_tag("RATEYOURMUSIC_ALBUM") or "").strip()
+        rym_artist = str(af.get_tag("RATEYOURMUSIC_ARTIST") or "").strip()
+        rym_track = str(af.get_tag("RATEYOURMUSIC_TRACK") or "").strip()
+        if should_write_audio_tag(cfg, "MUSICBRAINZ_TRACKID", filepath=ap) and cfg.get(
+            "grade_check_mb_links", True
+        ):
+            total_checks += 1
+            missing = [
+                name for name, val in
+                (("album", mb_album), ("artist", mb_artist), ("track", mb_track))
+                if not val
+            ]
+            if missing:
+                failed_checks += 1
+                add_issue(f"Missing MusicBrainz {'/'.join(missing)} link (import from MusicBrainz)", basename)
+                track["issues"].append("MB_LINK")
+        if should_write_audio_tag(cfg, "RATEYOURMUSIC_ALBUM", filepath=ap) and cfg.get(
+            "grade_check_rym_links", True
+        ):
+            total_checks += 1
+            missing = [
+                name for name, val in
+                (("album", rym_album), ("artist", rym_artist), ("track", rym_track))
+                if not val
+            ]
+            if missing:
+                failed_checks += 1
+                add_issue(f"Missing RateYourMusic {'/'.join(missing)} link", basename)
+                track["issues"].append("RYM_LINK")
+
         # Rip-log score (MEDIA=CD releases only, checked once MEDIA is
         # known - read here, graded in the CD section below).
         lg_val = af.get_tag("LOG_GRADE")
@@ -1087,6 +1276,42 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     add_issue("Lyrics not optimally formatted "
                               "(run Lyrics script)", basename)
                     track["issues"].append("LYRICS")
+
+        # Script 15 outputs: transliteration + translation, graded per track.
+        # Gated on the features being enabled AND AI being configured in
+        # Settings → AI, so a library without lyric transforms configured is
+        # never penalized. Latin-script lyrics are their own transliteration
+        # (romanizing Spanish would be a no-op) and always pass the xlit check.
+        if (embedded or lrc) and cfg.get("grade_check_xlit", True) \
+                and cfg.get("lyrics_xlit_enabled", True) and ai_ready(cfg):
+            xsrc = str(lyr) if embedded else None
+            if xsrc is None and lrc:
+                try:
+                    with open(_lrc_for(ap), "r", encoding="utf-8",
+                              errors="replace") as _f:
+                        xsrc = _f.read()
+                except OSError:
+                    xsrc = None
+            if xsrc and non_latin_ratio(xsrc) >= 0.15:
+                total_checks += 1
+                has_xlit = bool(str(af.get_tag("TRANSLITERATION") or "").strip()) \
+                    or os.path.isfile(os.path.splitext(ap)[0] + XLIT_SIDECAR)
+                if not has_xlit:
+                    failed_checks += 1
+                    add_issue("No transliteration for non-Latin lyrics "
+                              "(run Lyrics Translate script)", basename)
+                    track["issues"].append("LYRICS")
+        if (embedded or lrc) and cfg.get("grade_check_trans", True) \
+                and cfg.get("lyrics_translate_enabled", True) and ai_ready(cfg):
+            lang = primary_translation_lang(cfg)
+            total_checks += 1
+            has_trans = bool(str(af.get_tag("TRANSLATION") or "").strip()) \
+                or os.path.isfile(os.path.splitext(ap)[0] + f".{lang}.lrc")
+            if not has_trans:
+                failed_checks += 1
+                add_issue(f"No {lang} translation (run Lyrics Translate script)",
+                          basename)
+                track["issues"].append("LYRICS")
 
         # Sidecar track cover (e.g. "01 - Song.flac" → "01 - Song.jpg" in same folder)
         # Graded with the same cover checks as the album cover.* (size, square, etc.)
@@ -1697,11 +1922,17 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         pass
 
     else:
+        # Vinyl / SACD / DVD / Blu-ray / Cassette etc. — valid media, no CUE
+        # or LOG expectations; only genuinely unknown values fail.
         if cfg.get("grade_check_media", True):
             total_checks += 1
-            if media_summary is not None and media_summary != "INCONSISTENT":
+            if (
+                media_summary is not None
+                and media_summary != "INCONSISTENT"
+                and media_summary.strip().lower() not in KNOWN_MEDIA
+            ):
                 failed_checks += 1
-                add_issue("Unrecognized MEDIA value", "album-wide")
+                add_issue(f"Unrecognized MEDIA value: {media_summary}", "album-wide")
 
     # Cover check — also builds a UI-friendly cover_detail string that
     # surfaces enforcement failures (e.g. "cover.jpg (wrong size 500x500 → 1000x1000)"
@@ -1930,6 +2161,55 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             if len(disallowed) > 6:
                 shown += f" (+{len(disallowed) - 6} more)"
             add_issue(f"Disallowed file types: {shown}", "album")
+
+    # Extra artwork check: images that are neither the album cover (cover.*)
+    # nor a per-track sidecar ("01 - Song.jpg") are strays — they must move
+    # with the album (organize sweeps them to the album root) or be removed.
+    if cfg.get("grade_check_extra_images", True):
+        extra_imgs = _extra_images(album_dir, all_files, files)
+        total_checks += 1
+        if extra_imgs:
+            failed_checks += 1
+            shown = ", ".join(extra_imgs[:4])
+            if len(extra_imgs) > 4:
+                shown += f" (+{len(extra_imgs) - 4} more)"
+            add_issue(f"Extra artwork not tied to any track: {shown}", "album")
+
+    # Raw, un-remuxed video files (VOB/AVI/WMV/TS/...) fail grading — script
+    # 11 normalizes them to MKV with every stream copied bit-exact. The
+    # remuxed containers themselves (MKV/MP4) are not flagged here.
+    if cfg.get("grade_check_raw_video", True):
+        try:
+            from .remux import VIDEO_EXTS as _ALL_VIDEO_EXTS
+            _RAW_VIDEO_EXTS = tuple(e for e in _ALL_VIDEO_EXTS if e != ".mkv")
+        except Exception:
+            _RAW_VIDEO_EXTS = ()
+        raw_videos = [f for f in sorted(all_files)
+                      if _RAW_VIDEO_EXTS and f.lower().endswith(_RAW_VIDEO_EXTS)]
+        total_checks += 1
+        if raw_videos:
+            failed_checks += 1
+            shown = ", ".join(raw_videos[:4])
+            if len(raw_videos) > 4:
+                shown += f" (+{len(raw_videos) - 4} more)"
+            add_issue(f"Un-remuxed video file(s): {shown} (run Remux)", "album")
+
+    # Lossless but uncompressed sources (WAV/AIFF/APE/WV/SHN) fail grading —
+    # script 3 converts them to FLAC losslessly.
+    if cfg.get("grade_check_lossless_source", True):
+        try:
+            from .flac import LOSSLESS_SOURCE_EXTS as _LOSSLESS_SRC_EXTS
+        except Exception:
+            _LOSSLESS_SRC_EXTS = ()
+        uncompressed = [f for f in sorted(all_files)
+                        if _LOSSLESS_SRC_EXTS and f.lower().endswith(_LOSSLESS_SRC_EXTS)]
+        total_checks += 1
+        if uncompressed:
+            failed_checks += 1
+            shown = ", ".join(uncompressed[:4])
+            if len(uncompressed) > 4:
+                shown += f" (+{len(uncompressed) - 4} more)"
+            add_issue(f"Uncompressed lossless file(s): {shown} (convert to FLAC)", "album")
 
     pass_count = max(0, total_checks - failed_checks)
 

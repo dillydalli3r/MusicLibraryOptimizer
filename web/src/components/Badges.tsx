@@ -1,23 +1,34 @@
-import { Check, X, Minus, CircleAlert } from "lucide-react";
+import { Check, X, Disc3, CircleAlert } from "lucide-react";
 
-export function GradeBadge({ pass, score, size = "md" }: { pass: boolean; score: number | null; size?: "sm" | "md" }) {
+/** The one condensed grade verdict: PASS or FAIL. `score` (the old
+ * percentage) and `audit` survive only as hover details. */
+export function GradeBadge({
+  pass,
+  score,
+  audit,
+  size = "md",
+}: {
+  pass: boolean;
+  score?: number | null;
+  audit?: string | null;
+  size?: "sm" | "md";
+}) {
   const cls = size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-xs";
-  if (score === null) {
-    return <span className={`chip ${cls} bg-zinc-800 text-zinc-400 border border-border`}>—</span>;
-  }
-  const ok = pass && score >= 100;
+  const detail: string[] = [];
+  if (score != null && !pass) detail.push(`${score}% of checks passed`);
+  const a = (audit ?? "").trim().toUpperCase();
+  if (a) detail.push(`audit ${a}`);
   return (
     <span
-      className={`chip ${cls} ${
-        ok
+      className={`chip ${cls} font-semibold ${
+        pass
           ? "bg-green-900/60 text-green-300 border border-green-800"
           : "bg-red-900/50 text-red-300 border border-red-900"
       }`}
-      title={`${score}%`}
+      title={detail.length ? detail.join(" · ") : pass ? "All checks passed" : "Grading failed — see details"}
     >
-      {ok ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-      {score}
-      {pass ? " PASS" : " FAIL"}
+      {pass ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+      {pass ? "PASS" : "FAIL"}
     </span>
   );
 }
@@ -48,6 +59,22 @@ export function MediaChip({ media }: { media: string | null | undefined }) {
       {media}
     </span>
   );
+}
+
+/** Compact media label for album cards/icons: "CD", "DIGITAL", "VINYL", …
+ * Falls back to the first word when the format is something unusual. */
+export function mediaShort(media: string | null | undefined): string | null {
+  const m = (media ?? "").trim();
+  if (!m) return null;
+  const u = m.toUpperCase();
+  if (u.includes("CD")) return "CD";
+  if (u.includes("VINYL")) return "VINYL";
+  if (u.includes("DIGITAL") || u.includes("FILE") || u.includes("WEB")) return "DIGITAL";
+  if (u.includes("DVD")) return "DVD";
+  if (u.includes("BLU")) return "BLU-RAY";
+  if (u.includes("SACD")) return "SACD";
+  if (u.includes("CASSETTE")) return "TAPE";
+  return u.split(/[\s/;,]+/)[0].slice(0, 8);
 }
 
 export function AdvisoryBadge({ value }: { value: string | null | undefined }) {
@@ -119,9 +146,9 @@ export function IssueList({ issues }: { issues: string[] }) {
 export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-24 text-zinc-500">
-      <Minus className="h-8 w-8 opacity-40" />
+      <Disc3 className="h-9 w-9 opacity-30" />
       <div className="text-sm font-medium text-zinc-400">{title}</div>
-      {hint && <div className="text-xs text-zinc-600">{hint}</div>}
+      {hint && <div className="text-xs text-zinc-600 max-w-sm text-center">{hint}</div>}
     </div>
   );
 }

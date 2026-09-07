@@ -10,7 +10,10 @@ from .ui import c, Color
 # Run All order — strict pipeline v1.7.0: 1 Lyrics → 2 CUEs → 8 Auto Tagging → 3 FLAC → 5 Images → 9 AccurateRip → 6 Audit → 4 Grade → 7 DR/ReplayGain → 10 Format All.
 # AccurateRip must run before Audit/Grade so the .accurip is present for real-time AUDIT; Grade after Audit so AUDIT tags are fresh; Format All at end does final canonical trims.
 # User's strict config default as of v1.6.0; reorder via Settings → Run All Order.
-DEFAULT_RUN_ALL_ORDER = [1, 2, 8, 3, 5, 9, 6, 4, 7, 10, 12]
+# Run All pipeline: remux first, then beets tagging (MusicBrainz), then
+# formatting/tagging scripts, lyric fetching (before grade sees it), and
+# analysis/audit/grade at the end.
+DEFAULT_RUN_ALL_ORDER = [11, 14, 1, 2, 8, 13, 12, 3, 5, 9, 6, 4, 7, 10]
 
 # Audio tag families that can be toggled per filetype.
 # Each family groups related TAG_MAP keys that are written together.
@@ -156,9 +159,10 @@ DEFAULT_CONFIG = {
     "jpeg_progressive": True,
     "png_optimization_level": 6,
     "force_reencode_images": False,
-    # Cover art — resize / crop (new in v1.2.0) — defaults now enforce exactly 1000x1000
+    # Cover art — resize / crop — defaults enforce exactly 1200x1200 90% JPEG
+    # (the canonical embedded-art size requested by the user).
     "cover_resize_enabled": True,
-    "cover_target_size": 1000,
+    "cover_target_size": 1200,
     "cover_crop_enabled": True,
     "cover_crop_threshold": 0.0,
     "cover_force_exact_size": True,
@@ -170,6 +174,8 @@ DEFAULT_CONFIG = {
     "cover_jpeg_target_size": 0,
     "cover_png_target_size": 0,
     "cover_jxl_target_size": 0,
+    # Album covers re-encode to 90% quality; other images keep max quality.
+    "cover_jpeg_quality": 90,
 
     # Lyrics / CUE — including Enhanced/Extended LRC (new in v1.2.0)
     "optimize_lrc": True,
@@ -233,6 +239,8 @@ DEFAULT_CONFIG = {
     "grade_include_lrc": True,
     "grade_include_accurip": True,
     "grade_include_other": False,
+    # Remuxed music videos (MKV sidecars from script 11) are allowed by default.
+    "grade_include_video": True,
     # Configurable strict checks for grading (all on by default, per request)
     # These make trailing/leading spaces, blank lines, cropping and zero timestamp
     # count as failures for the relevant file types.
@@ -270,6 +278,30 @@ DEFAULT_CONFIG = {
     "grade_check_cover": True,
     "grade_check_cue_format": True,
     "grade_check_disallowed": True,
+    # Images that are neither the album cover (cover.*) nor a per-track
+    # sidecar ("01 - Song.jpg") fail grading — strays must move with the
+    # album (organize sweeps them to the album root) or be removed.
+    "grade_check_extra_images": True,
+    # File paths must match the configured naming script (per-track relative
+    # path from the music folder). Both full and shortened MusicBrainz IDs
+    # are accepted so the short_folder_names setting can't cause false fails.
+    "grade_check_naming": True,
+    # INITIALKEY + BPM tags (written by script 12, Key & BPM) are required.
+    "grade_check_key_bpm": True,
+    # Raw, un-remuxed video files (VOB/AVI/WMV/TS...) fail grading — run
+    # script 11 to normalize them to MKV. Remuxed MKV/MP4 videos are fine.
+    "grade_check_raw_video": True,
+    # Script 15 outputs, graded per track. These only fire when the matching
+    # feature is enabled below (and lyrics exist): a library owner who never
+    # turns on AI transforms is never penalized. Latin-script lyrics never
+    # require transliteration — the romanization would be identical.
+    "grade_check_mb_links": True,   # MusicBrainz album/artist/track links required
+    "grade_check_rym_links": True,  # RateYourMusic album/artist/track links required
+    "grade_check_xlit": True,
+    "grade_check_trans": True,
+    # Lossless but uncompressed sources (WAV/AIFF/APE/WV/SHN) fail grading —
+    # script 3 converts them to FLAC.
+    "grade_check_lossless_source": True,
 
     # Audio audit (AudioAuditor CLI): full-track detectors (silence, DR,
     # true peak, LUFS, BPM) instead of the fast scan; force re-audits files
@@ -338,18 +370,27 @@ DEFAULT_CONFIG = {
     "force_dr_replaygain": False,
     "force_dr_ui": False,
 
-    # Video remux (script 11): every video container -> MP4. Video streams
-    # are copied bit-exact when MP4-compatible; incompatible codecs (MPEG-2
-    # in VOB, VP8...) are re-encoded to H.264 when the flag below is set.
-    # All audio streams are decoded and re-encoded to FLAC (lossless from
-    # the decoded source). The original is only deleted after a verified
-    # remux and when video_remove_original is on.
+    # Video remux (script 11): every video container -> MKV with the video
+    # copied bit-exact and every audio stream re-encoded to FLAC (lossless
+    # from the decoded source, compression level video_flac_level). Caption /
+    # subtitle streams are always copied and verified — never removed. When
+    # the muxer refuses the video codec, the video falls back to H.264
+    # (gated by video_reencode_incompatible). The original (e.g. the VOB) is
+    # deleted after a verified remux; a stray original whose same-stem MKV
+    # already exists is duration-verified and then removed as well.
     "video_reencode_incompatible": True,
     "video_crf": 18,
     "video_preset": "medium",
     "video_flac_level": 8,
-    "video_remove_original": False,
+    "video_remove_original": True,
     "video_process_mp4": False,
+
+    # Lossless source conversion (part of script 3): uncompressed WAV /
+    # AIFF (and ffmpeg-decodable APE/WV/SHN) are re-encoded to FLAC with
+    # tags copied over. The original is only removed after a verified
+    # conversion and when lossless_remove_original is on.
+    "optimize_convert_lossless": True,
+    "lossless_remove_original": True,
 
     # Auto Tagging (script 8)
     "auto_advisory": True,
@@ -370,12 +411,28 @@ DEFAULT_CONFIG = {
     "ai_model": "",
     "ai_translate_lang": "en",
 
+    # Script 15 — persistent lyric transforms. Enabled by default so Run All
+    # writes TRANSLITERATION / TRANSLATION tags (and sidecars) for every
+    # track with lyrics; results are cached per track, so re-runs are cheap.
+    "lyrics_xlit_enabled": True,
+    "lyrics_translate_enabled": True,
+    # Target languages for translation, comma separated ("en,de"). The first
+    # language goes into the TRANSLATION tag; each language also gets its
+    # own "<stem>.<lang>.lrc" sidecar.
+    "lyrics_translation_langs": "en",
+    # Also write "<stem>.romaji.lrc" / "<stem>.<lang>.lrc" next to the audio.
+    "lyrics_xlit_sidecars": True,
+    "force_xlit": False,
+
     # Managed beets tagging (Picard parity).
     "beets_locale": "en",
     "beets_translations": True,
     "beets_work_movement": True,
     "beets_release_type_caps": True,
-    "beets_organize_after": False,
+    # Default True: beets only relocates AUDIO files; the follow-up organize
+    # applies the naming script to filenames and gathers sidecars / covers
+    # into the final album folder, which grading requires.
+    "beets_organize_after": True,
 
     # Soulseek via managed slskd (shares = music folder).
     "soulseek_username": "",
@@ -387,6 +444,25 @@ DEFAULT_CONFIG = {
     "soulseek_down_limit": 0,
     "soulseek_download_dir": "",
     "soulseek_autostart": False,
+    # Share the library with the network on the configured listen port.
+    "soulseek_share_library": True,
+    # Auto-import (MusicBrainz release → Soulseek). Each template is a
+    # space-separated list of release fields: artist album year date country
+    # catalognumber barcode label. CD rips are searched by catalog number
+    # (the only trait usually present in rip folder names); digital media
+    # by title + year.
+    "soulseek_auto_cd_queries": [
+        "catalognumber", "artist album catalognumber", "artist album"],
+    "soulseek_auto_digital_queries": ["artist album year", "artist album"],
+    # Every disc's .log must score at least this (Logchecker 0-100) before
+    # the full album is downloaded.
+    "soulseek_auto_log_min_score": 100,
+    # Fraction of the release track list a candidate folder must contain.
+    "soulseek_auto_complete_ratio": 1.0,
+    # Genres imported from MusicBrainz per release/track (top voted first).
+    "mb_genre_count": 1,
+    # Script 3/10 removes tags outside the canonical set while optimizing.
+    "strip_unknown_tags": True,
 
     # Misc
     "auto_advance": True,
@@ -433,6 +509,8 @@ _INT_RANGES = {
     "cover_jpeg_target_size": (0, 4000),
     "cover_png_target_size": (0, 4000),
     "cover_jxl_target_size": (0, 4000),
+    "soulseek_auto_log_min_score": (0, 100),
+    "mb_genre_count": (1, 10),
 }
 _CHOICES = {
     "lyrics_format": {"EMBEDDED", "LRC", "BOTH"},
@@ -540,6 +618,21 @@ def normalize_config(user=None) -> dict:
         pat = "CD-{n}"
     cfg["discs_rename_pattern"] = pat
 
+    try:
+        ratio = float(cfg.get("soulseek_auto_complete_ratio", 1.0))
+        cfg["soulseek_auto_complete_ratio"] = max(0.5, min(1.0, ratio))
+    except (TypeError, ValueError):
+        cfg["soulseek_auto_complete_ratio"] = 1.0
+    for k in ("soulseek_auto_cd_queries", "soulseek_auto_digital_queries"):
+        v = cfg.get(k)
+        if isinstance(v, str):
+            # the settings UI edits templates as one ";"-separated line
+            v = [t for t in v.split(";") if t.strip()]
+        if not isinstance(v, list):
+            v = list(DEFAULT_CONFIG[k])
+        clean = [str(t).strip()[:120] for t in v if str(t).strip()]
+        cfg[k] = clean[:6] or list(DEFAULT_CONFIG[k])
+
     default_tags = DEFAULT_CONFIG["encoder_tags"]
     user_tags = cfg.get("encoder_tags") if isinstance(cfg.get("encoder_tags"), dict) else {}
     merged_tags = {}
@@ -580,7 +673,7 @@ def normalize_config(user=None) -> dict:
                 script_id = int(value)
             except (TypeError, ValueError):
                 continue
-            if 1 <= script_id <= 11 and script_id not in clean_order:
+            if 1 <= script_id <= 15 and script_id not in clean_order:
                 clean_order.append(script_id)
     # Migrate legacy sequential default [1..8] to systematic pipeline
     if clean_order == [1, 2, 3, 4, 5, 6, 7, 8] and clean_order != list(DEFAULT_RUN_ALL_ORDER):
@@ -594,6 +687,24 @@ def normalize_config(user=None) -> dict:
     # Also handle case where user had old 9 at end: [1,2,8,3,5,6,4,7,9] -> migrate to new order with 10 at end
     if clean_order == [1, 2, 8, 3, 5, 6, 4, 7, 9]:
         clean_order = [1, 2, 8, 3, 5, 9, 6, 4, 7, 10]
+
+    # Scripts added later join existing pipelines at sensible positions:
+    #   14 beets tagging  — right after the remux (writes tags, places files)
+    #   13 lyric fetching — after autotag (needs final ARTIST/TITLE), before grade
+    #   12 Key & BPM      — after 13 (grading wants its tags)
+    def _insert_script(order, sid, anchors):
+        if sid in order:
+            return
+        for anchor in anchors:
+            if anchor in order:
+                order.insert(order.index(anchor) + 1, sid)
+                return
+        order.append(sid)
+
+    if clean_order:
+        _insert_script(clean_order, 14, [11])
+        _insert_script(clean_order, 13, [8, 14, 11])
+        _insert_script(clean_order, 12, [13, 8])
     cfg["run_all_order"] = clean_order or list(DEFAULT_RUN_ALL_ORDER)
     return cfg
 

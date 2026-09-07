@@ -1,19 +1,24 @@
 ﻿import { Fragment, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import {
-  Search, FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Info as InfoIcon,
+import {  FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Info as InfoIcon, CloudDownload,
+  ListFilter,
 } from "lucide-react";
 import { api } from "../api";
+import { SCRIPTS, DEFAULT_RUN_ALL } from "../lib/scripts";
 import { toast, useStore } from "../store";
 import { sortRows, SortHeader, groupByDisc, type SortState } from "../lib/sort.tsx";
-import { AuditBadge, EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "../components/Badges";
+import { gradeSliver, statusFor, auditFails } from "../lib/status";
+import { albumRef, trackRef, artistRef } from "../lib/refs";
+import { EmptyState, GradeBadge, MediaChip, AdvisoryBadge, mediaShort } from "../components/Badges";
+import { forceDict, loadForceSel } from "../lib/force";
 import CoverImg from "../components/CoverImg";
+import FavHeart from "../components/FavHeart";
 import StatsPanel from "../components/StatsPanel";
 import TrackDetails from "../components/TrackDetails";
 import type { Album, Artist, Track } from "../types";
 
-type View = "albums" | "artists" | "tracks";
+type View = "grid" | "compact" | "albums" | "artists" | "tracks";
 
 type Preset =
   | "all"
@@ -35,10 +40,15 @@ const PRESETS: { id: Preset; label: string }[] = [
 ];
 
 const VIEW_TABS: { id: View; label: string }[] = [
+  { id: "grid", label: "Grid" },
+  { id: "compact", label: "Compact" },
   { id: "albums", label: "Albums" },
   { id: "artists", label: "Artists" },
   { id: "tracks", label: "Tracks" },
 ];
+
+/** Grid cover sizes (small / medium / large) → grid-template min column. */
+const GRID_SIZE_MIN: Record<"s" | "m" | "l", number> = { s: 126, m: 164, l: 214 };
 
 const ALBUM_SORTS = [
   { key: "meta.ALBUM", label: "Album name" },
@@ -48,20 +58,6 @@ const ALBUM_SORTS = [
   { key: "grade_pct", label: "Grade" },
   { key: "audit_summary", label: "Audit" },
 ];
-
-const SCRIPTS: { ids: number[]; label: string }[] = [
-  { ids: [1], label: "Format lyrics" },
-  { ids: [2], label: "Format CUEs" },
-  { ids: [3], label: "Optimize FLACs" },
-  { ids: [5], label: "Process images" },
-  { ids: [6], label: "Audit library" },
-  { ids: [7], label: "DR & ReplayGain" },
-  { ids: [8], label: "Auto tagging" },
-  { ids: [4], label: "Grade" },
-  { ids: [11], label: "Remux videos (MP4/FLAC)" },
-];
-
-const DEFAULT_RUN_ALL = [11, 1, 2, 8, 3, 5, 9, 6, 4, 7, 10];
 
 interface Col {
   id: string;
@@ -75,7 +71,6 @@ const ALBUM_COLS: Col[] = [
   { id: "year", label: "Year", sortKey: "meta.DATE" },
   { id: "tracks", label: "Tracks", sortKey: "track_count" },
   { id: "grade", label: "Grade", sortKey: "grade_pct" },
-  { id: "audit", label: "Audit", sortKey: "audit_summary" },
   { id: "media", label: "Media", sortKey: "media" },
   { id: "source", label: "Source", sortKey: "source_summary" },
 ];
@@ -85,7 +80,6 @@ const ARTIST_COLS: Col[] = [
   { id: "tracks", label: "Tracks", sortKey: "aggregate.track_count" },
   { id: "checks", label: "Checks", sortKey: "aggregate.grade_pct" },
   { id: "grade", label: "Grade", sortKey: "aggregate.grade_pct" },
-  { id: "audit", label: "Audit", sortKey: "aggregate.audit_summary" },
 ];
 
 const TRACK_COLS: Col[] = [
@@ -97,7 +91,6 @@ const TRACK_COLS: Col[] = [
   { id: "genre", label: "Genre", sortKey: "tags.GENRE" },
   { id: "media", label: "Media", sortKey: "tags.MEDIA" },
   { id: "grade", label: "Grade", sortKey: "grade_pass" },
-  { id: "audit", label: "Audit", sortKey: "audit" },
   { id: "advisory", label: "Advisory", sortKey: "tags.ITUNESADVISORY" },
   { id: "duration", label: "Duration", sortKey: "tech.length" },
   { id: "bitrate", label: "Bitrate", sortKey: "tech.bitrate" },
@@ -117,21 +110,27 @@ export default function LibraryPage() {
   const { data: lib, isLoading, error } = useQuery({ queryKey: ["library"], queryFn: api.library });
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
   const runAllIds = Array.isArray(config?.run_all_order) && config.run_all_order.length
-    ? config.run_all_order.filter((n: number) => n >= 1 && n <= 11)
+    ? config.run_all_order.filter((n: number) => n >= 1 && n <= 15)
     : DEFAULT_RUN_ALL;
   const qc = useQueryClient();
-  const { query, setQuery, setToast, folder } = useStore();
+  const { query, setToast, folder } = useStore();
   const {
     selection, setSelection, toggleTrack, toggleAlbum, toggleArtist, clearSelection, playNow,
   } = useStore();
-  const [view, setView] = useState<View>(() => (localStorage.getItem("mlo.defaultView") as View) ?? "albums");
+  const [view, setView] = useState<View>(() => (localStorage.getItem("mlo.defaultView.v2") as View) ?? "grid");
   const [preset, setPreset] = useState<Preset>("all");
+  const [filterOpen, setFilterOpen] = useState(false);
   const [albumSort, setAlbumSort] = useLocalSort("album");
   const [artistSort, setArtistSort] = useLocalSort("artist");
   const [trackSort, setTrackSort] = useLocalSort("track");
   const [removing, setRemoving] = useState<string | null>(null);
+  const [lyricsBusy, setLyricsBusy] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [groupByArtist, setGroupByArtist] = useState(false);
+  const [gridSize, setGridSize] = useState<"s" | "m" | "l">(() => {
+    const v = localStorage.getItem("mlo.gridSize");
+    return v === "s" || v === "l" ? v : "m";
+  });
   const [statsOpen, setStatsOpen] = useState(false);
   const [detailTrack, setDetailTrack] = useState<{ track: Track; albumPath: string } | null>(null);
 
@@ -154,33 +153,44 @@ export default function LibraryPage() {
     return { albums, tracks };
   }, [lib]);
 
+  // Per-preset predicate, shared by the filter memo and the filter menu
+  // counts (search text is applied separately from the preset).
+  const trackPresetOK = (t: Track, preset: Preset) => {
+    switch (preset) {
+      case "all": return true;
+      case "failing": return !t.grade_pass;
+      case "cd": return (t.tags.MEDIA ?? "").toUpperCase().includes("CD");
+      case "digital": return (t.tags.MEDIA ?? "").toUpperCase().includes("DIGITAL");
+      case "explicit": return t.tags.ITUNESADVISORY === "1";
+      case "instrumental": return t.tags.INSTRUMENTAL === "1";
+      case "missingLyrics": return !t.lyrics_present;
+    }
+  };
+  const albumPresetOK = (al: Album, preset: Preset) => {
+    switch (preset) {
+      case "all": return true;
+      case "failing": return !al.pass;
+      case "cd": return (al.media ?? "").toUpperCase().includes("CD");
+      case "digital": return (al.media ?? "").toUpperCase().includes("DIGITAL");
+      case "explicit":
+      case "instrumental":
+      case "missingLyrics": return (al.tracks ?? []).some((t) => trackPresetOK(t, preset));
+    }
+  };
+  const presetCounts = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const { id } of PRESETS) out[id] = flat.albums.filter((al) => albumPresetOK(al, id)).length;
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flat]);
+
   const filtered = useMemo(() => {
     if (!lib) return { artists: [] as Artist[], albums: [] as FlatAlbum[], tracks: [] as FlatTrack[] };
     const q = query.toLowerCase();
     const matches = (hay: string) => !q || hay.toLowerCase().includes(q);
 
-    const trOK = (t: Track) => {
-      switch (preset) {
-        case "all": return true;
-        case "failing": return !t.grade_pass;
-        case "cd": return (t.tags.MEDIA ?? "").toUpperCase().includes("CD");
-        case "digital": return (t.tags.MEDIA ?? "").toUpperCase().includes("DIGITAL");
-        case "explicit": return t.tags.ITUNESADVISORY === "1";
-        case "instrumental": return t.tags.INSTRUMENTAL === "1";
-        case "missingLyrics": return !t.lyrics_present;
-      }
-    };
-    const alOK = (al: Album) => {
-      switch (preset) {
-        case "all": return true;
-        case "failing": return !al.pass;
-        case "cd": return (al.media ?? "").toUpperCase().includes("CD");
-        case "digital": return (al.media ?? "").toUpperCase().includes("DIGITAL");
-        case "explicit":
-        case "instrumental":
-        case "missingLyrics": return (al.tracks ?? []).some(trOK);
-      }
-    };
+    const trOK = (t: Track) => trackPresetOK(t, preset);
+    const alOK = (al: Album) => albumPresetOK(al, preset);
     const alSearch = (al: Album, artist: string) =>
       matches([artist, al.meta?.ALBUM, al.meta?.DATE, al.meta?.ARTIST, ...(al.tracks?.map((t) => `${t.tags.TITLE} ${t.file}`) ?? [])].join(" "));
 
@@ -250,6 +260,71 @@ export default function LibraryPage() {
     }
   };
 
+  /** Batch LRCLIB lyric download for the selection: skips instrumentals and
+   * tracks that already have lyrics; writes per the global lyrics_format. */
+  const downloadLyricsSelection = async () => {
+    if (!selectionCount) {
+      toast("Select albums, artists or tracks first");
+      return;
+    }
+    setLyricsBusy(true);
+    try {
+      const cfg = await api.config();
+      const fmt = String(cfg.lyrics_format ?? "EMBEDDED").toUpperCase();
+      const albumSet = new Set(selection.albums);
+      const artistSet = new Set(selection.artists);
+      const trackSet = new Set(selection.tracks);
+      const targets: { track: Track; displayArtist?: string }[] = [
+        ...flat.albums
+          .filter((al) => albumSet.has(al.path))
+          .flatMap((al) => (al.tracks ?? []).map((t) => ({ track: t, displayArtist: al.artist }))),
+        ...(lib?.artists ?? [])
+          .filter((a) => artistSet.has(a.path))
+          .flatMap((a) => a.albums.flatMap((al) => al.tracks.map((t) => ({ track: t, displayArtist: al.album_artist || a.name })))),
+        ...flat.tracks.filter((t) => trackSet.has(t.path)).map((t) => ({ track: t as Track, displayArtist: t.artist })),
+      ];
+      let fetched = 0;
+      let skipped = 0;
+      let missing = 0;
+      let failed = 0;
+      for (const { track: t, displayArtist } of targets) {
+        if (t.tags.INSTRUMENTAL === "1" || t.lyrics_present) {
+          skipped++;
+          continue;
+        }
+        const artist = t.tags.ARTIST || displayArtist || undefined;
+        const title = t.tags.TITLE;
+        if (!artist || !title) {
+          skipped++;
+          continue;
+        }
+        try {
+          const res = await api.lyricsGet(artist, title, t.tags.ALBUM || undefined, t.tech?.length ? Math.round(t.tech.length) : undefined);
+          const lrc = res?.syncedLyrics ?? res?.plainLyrics;
+          if (!lrc) {
+            missing++;
+          } else {
+            if (fmt === "LRC" || fmt === "BOTH") await api.lyricsWrite(t.path, lrc);
+            if (fmt === "EMBEDDED" || fmt === "BOTH") await api.lyricsEmbed(t.path, lrc);
+            fetched++;
+          }
+        } catch {
+          failed++;
+        }
+        await new Promise((r) => setTimeout(r, 350)); // LRCLIB rate-limit pacing
+      }
+      toast(`Lyrics: ${fetched} downloaded · ${skipped} skipped · ${missing} not on LRCLIB${failed ? ` · ${failed} failed` : ""}`);
+      if (fetched) {
+        clearSelection();
+        qc.invalidateQueries({ queryKey: ["library"] });
+      }
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setLyricsBusy(false);
+    }
+  };
+
   const organizeSelection = async () => {
     if (!selectionAlbumDirs.length) {
       toast("Select albums or artists to organize");
@@ -270,28 +345,31 @@ export default function LibraryPage() {
   };
 
   const playSelection = () => {
-    const out: { path: string; file: string; albumPath: string; artist?: string; album?: string }[] = [];
+    const out: { path: string; file: string; albumPath: string; artist?: string; album?: string; title?: string }[] = [];
     for (const al of sortedAlbums)
       if (selection.albums.includes(al.path))
-        for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.artist, album: al.meta?.ALBUM ?? undefined });
+        for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined });
     for (const a of sortedArtists)
       if (selection.artists.includes(a.path))
         for (const al of a.albums)
-          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined });
+          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined });
     for (const tr of sortedTracks)
       if (selection.tracks.includes(tr.path))
-        out.push({ path: tr.path, file: tr.file, albumPath: tr.path.split("/").slice(0, -1).join("/"), artist: tr.artist, album: tr.album });
+        out.push({ path: tr.path, file: tr.file, albumPath: tr.path.split("/").slice(0, -1).join("/"), artist: tr.artist, album: tr.album, title: tr.tags.TITLE || undefined });
     if (out.length) playNow(out);
   };
 
-  const runScriptsOnSelection = async (ids: number[]) => {
+  const runScriptsOnSelection = async (ids: number[], force = false) => {
     if (!selectionAlbumDirs.length) {
       toast("Select albums or artists to run scripts on");
       return;
     }
     try {
-      await api.run(ids, selectionAlbumDirs);
-      setToast(`Scripts run on ${selectionAlbumDirs.length} album(s)`);
+      // Same selection the header Force menu configures (Settings → General
+      // force toggles keep working independently as saved defaults).
+      const forceOpts = force ? forceDict(loadForceSel()) : undefined;
+      await api.run(ids, selectionAlbumDirs, forceOpts);
+      setToast(`Scripts run on ${selectionAlbumDirs.length} album(s)${force ? " (forced)" : ""}`);
       qc.invalidateQueries({ queryKey: ["library"] });
     } catch (e) {
       toast(String(e));
@@ -312,8 +390,49 @@ const toggleExpand = (path: string) =>
   const sortedArtists = useMemo(() => sortRows(filtered.artists, artistSort), [filtered.artists, artistSort]);
   const sortedTracks = useMemo(() => sortRows(filtered.tracks, trackSort), [filtered.tracks, trackSort]);
 
+  // Grid sections: one flat list, or artist-headed groups.
+  const gridSections = useMemo(() => {
+    if (!groupByArtist) return [{ artist: null as string | null, albums: sortedAlbums }];
+    const out: { artist: string | null; albums: FlatAlbum[] }[] = [];
+    let cur: string | null = null;
+    for (const al of sortedAlbums) {
+      if (al.artist !== cur) {
+        cur = al.artist;
+        out.push({ artist: cur, albums: [] });
+      }
+      out[out.length - 1].albums.push(al);
+    }
+    return out;
+  }, [sortedAlbums, groupByArtist]);
+
+  const pickGridSize = (s: "s" | "m" | "l") => {
+    setGridSize(s);
+    try {
+      localStorage.setItem("mlo.gridSize", s);
+    } catch {
+      /* ignore */
+    }
+  };
+
   if (error) return <EmptyState title="Backend unreachable" hint={String(error)} />;
-  if (isLoading || !lib) return <div className="p-8 text-zinc-500">Scanning library…</div>;
+  if (isLoading || !lib)
+    return (
+      <div className="p-4 space-y-4">
+        <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <span className="h-3.5 w-3.5 rounded-full border-2 border-zinc-700 border-t-zinc-400 animate-spin inline-block" />
+          Scanning library…
+        </div>
+        <div className="grid gap-x-4 gap-y-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(164px, 1fr))" }}>
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="p-2 animate-pulse">
+              <div className="aspect-square w-full rounded-xl bg-zinc-800/60" />
+              <div className="h-3 w-3/4 rounded bg-zinc-800/60 mt-2.5" />
+              <div className="h-2.5 w-1/2 rounded bg-zinc-800/40 mt-1.5" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
 
   const albumRows: ({ kind: "header"; artist: string } | { kind: "album"; album: FlatAlbum })[] = [];
   if (groupByArtist) {
@@ -327,7 +446,7 @@ const toggleExpand = (path: string) =>
     }
   }
 
-  const albumColSpan = 3 + albumCols.length + 1; // checkbox, chevron+cover, cols, actions
+  const albumColSpan = 4 + albumCols.length + 1; // play, checkbox, chevron+cover, cols, actions
 
   const allAlbumsSelected = sortedAlbums.length > 0 && sortedAlbums.every((a) => selection.albums.includes(a.path));
   const allArtistsSelected = sortedArtists.length > 0 && sortedArtists.every((a) => selection.artists.includes(a.path));
@@ -335,17 +454,8 @@ const toggleExpand = (path: string) =>
 
   return (
     <div className="p-4 space-y-3">
-      {/* toolbar */}
+      {/* toolbar — search lives in the top bar now (same store query) */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 max-w-xl min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search artists / albums / tracks…"
-            className="input pl-9"
-          />
-        </div>
         <div className="flex rounded-md border border-border overflow-hidden">
           {VIEW_TABS.map((v) => (
             <button
@@ -360,7 +470,7 @@ const toggleExpand = (path: string) =>
           ))}
         </div>
 
-        {view === "albums" && (
+        {(view === "albums" || view === "compact" || view === "grid") && (
           <>
             <select
               className="input !w-auto text-xs"
@@ -375,20 +485,39 @@ const toggleExpand = (path: string) =>
                 </option>
               ))}
             </select>
-            <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none" title="Group albums under artist headers">
-              <input type="checkbox" checked={groupByArtist} onChange={(e) => setGroupByArtist(e.target.checked)} className="" />
-              Group by artist
-            </label>
+            {view === "grid" && (
+              <div className="flex rounded-md border border-border overflow-hidden" title="Cover size">
+                {(["s", "m", "l"] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => pickGridSize(s)}
+                    className={`px-2.5 py-1.5 text-xs font-medium uppercase transition-colors ${
+                      gridSize === s ? "bg-accent on-accent" : "bg-panel text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+            {(view === "albums" || view === "grid") && (
+              <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none" title="Group albums under artist headers">
+                <input type="checkbox" checked={groupByArtist} onChange={(e) => setGroupByArtist(e.target.checked)} className="" />
+                Group by artist
+              </label>
+            )}
           </>
         )}
 
-        <ColumnsMenu
-          cols={view === "albums" ? ALBUM_COLS : view === "artists" ? ARTIST_COLS : TRACK_COLS}
-          visible={view === "albums" ? albumCols : view === "artists" ? artistCols : trackCols}
-          onToggle={view === "albums" ? toggleAlbumCol : view === "artists" ? toggleArtistCol : toggleTrackCol}
-          fullDates={fullDates}
-          onFullDates={setFullDates}
-        />
+        {view !== "compact" && view !== "grid" && (
+          <ColumnsMenu
+            cols={view === "albums" ? ALBUM_COLS : view === "artists" ? ARTIST_COLS : TRACK_COLS}
+            visible={view === "albums" ? albumCols : view === "artists" ? artistCols : trackCols}
+            onToggle={view === "albums" ? toggleAlbumCol : view === "artists" ? toggleArtistCol : toggleTrackCol}
+            fullDates={fullDates}
+            onFullDates={setFullDates}
+          />
+        )}
         <button
           className="btn-ghost !py-1 text-xs"
           onClick={() => setStatsOpen(true)}
@@ -407,42 +536,39 @@ const toggleExpand = (path: string) =>
         )}
       </div>
 
-      {/* quick filter tabs */}
-      <div className="flex gap-1.5 flex-wrap">
-        {PRESETS.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => setPreset(p.id)}
-            className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
-              preset === p.id
-                ? p.id === "failing" || p.id === "explicit"
-                  ? "bg-red-900/60 text-red-200 border-red-800"
-                  : p.id === "cd"
-                    ? "bg-sky-900/60 text-sky-200 border-sky-800"
-                    : p.id === "digital"
-                      ? "bg-accent/15 text-accent-soft border-accent/40"
-                      : "bg-accent on-accent border-accent"
-                : "bg-raise text-zinc-400 border-border hover:text-white"
-            }`}
-          >
-            {p.label}
-            <span className="ml-1 opacity-60">
-              {p.id === "all"
-                ? filtered.albums.length
-                : p.id === "failing"
-                  ? filtered.albums.filter((a) => !a.pass).length
-                  : p.id === "cd"
-                    ? filtered.albums.filter((a) => (a.media ?? "").toUpperCase().includes("CD")).length
-                    : p.id === "digital"
-                      ? filtered.albums.filter((a) => (a.media ?? "").toUpperCase().includes("DIGITAL")).length
-                      : p.id === "explicit"
-                        ? filtered.tracks.filter((t) => t.tags.ITUNESADVISORY === "1").length
-                        : p.id === "instrumental"
-                          ? filtered.tracks.filter((t) => t.tags.INSTRUMENTAL === "1").length
-                          : filtered.tracks.filter((t) => !t.lyrics_present).length}
-            </span>
-          </button>
-        ))}
+      {/* quick filter — one dropdown instead of a chip row */}
+      <div className="relative w-fit">
+        <button
+          className="btn-ghost !py-1 text-xs"
+          onClick={() => setFilterOpen(!filterOpen)}
+          title="Filter the library"
+        >
+          <ListFilter className="h-3.5 w-3.5" />
+          {PRESETS.find((p) => p.id === preset)?.label}
+          <span className="text-zinc-600 font-mono">{presetCounts[preset] ?? ""}</span>
+        </button>
+        {filterOpen && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => setFilterOpen(false)} />
+            <div className="absolute left-0 top-full mt-1 z-30 w-52 rounded-lg border border-border bg-zinc-950 shadow-xl p-1">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    setPreset(p.id);
+                    setFilterOpen(false);
+                  }}
+                  className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs flex items-center justify-between gap-3 ${
+                    preset === p.id ? "bg-raise text-white" : "text-zinc-400 hover:text-white hover:bg-raise"
+                  }`}
+                >
+                  <span>{p.label}</span>
+                  <span className="text-zinc-600 font-mono">{presetCounts[p.id] ?? 0}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {/* selection toolbar */}
@@ -463,10 +589,19 @@ const toggleExpand = (path: string) =>
               onClick={() => removeAlbums(selectionAlbumDirs)}
               disabled={removing === "batch" || !selectionAlbumDirs.length}
               title={selectionAlbumDirs.length ? "Move selected albums to trash" : "Select albums or artists to remove"}
+              hidden={!selection.albums.length && !selection.artists.length}
             >
               <Trash2 className="h-3.5 w-3.5" /> Remove
             </button>
             <ScriptsDropdown onRun={runScriptsOnSelection} runAllIds={runAllIds} />
+            <button
+              className="btn-ghost !py-1 text-xs"
+              onClick={downloadLyricsSelection}
+              disabled={lyricsBusy}
+              title="Download missing lyrics from LRCLIB for the selection (skips instrumentals)"
+            >
+              <CloudDownload className="h-3.5 w-3.5" /> {lyricsBusy ? "Fetching…" : "Lyrics"}
+            </button>
             <button
               className="btn-ghost !py-1 text-xs"
               onClick={organizeSelection}
@@ -502,6 +637,232 @@ const toggleExpand = (path: string) =>
 
       {detailTrack && (
         <TrackDetails track={detailTrack.track} albumPath={detailTrack.albumPath} onClose={() => setDetailTrack(null)} />
+      )}
+
+      {/* ---------------- Grid browse view (Apple Music style, default) ---------------- */}
+      {view === "grid" && (
+        <div>
+          <div
+            className="grid gap-x-4 gap-y-5"
+            style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_SIZE_MIN[gridSize]}px, 1fr))` }}
+          >
+            {gridSections.map((sec) => (
+              <Fragment key={sec.artist ?? "all"}>
+                {sec.artist !== null && (
+                  <div className="col-span-full mt-3 first:mt-0">
+                    <div className="text-sm font-bold uppercase tracking-wider text-zinc-300">{sec.artist}</div>
+                    <div className="h-px bg-border mt-1" />
+                  </div>
+                )}
+                {sec.albums.map((al) => {
+                  const st = statusFor(!!al.pass, al.audit_summary);
+                  const sel = selection.albums.includes(al.path);
+                  return (
+                    <div key={al.path} className={`group relative rounded-xl p-2 transition-colors ${sel ? "bg-accent/10 ring-1 ring-accent/30" : "hover:bg-panel/70"}`}>
+                      <div className="relative">
+                        <Link to={albumRef(al)} title="Open album page" className="block">
+                          <CoverImg
+                            albumPath={al.path}
+                            coverFile={al.cover_file}
+                            wrapperClass="aspect-square w-full rounded-xl shadow-lg ring-1 ring-black/40 overflow-hidden"
+                          />
+                        </Link>
+                        <div
+                          className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 rounded-md px-1 py-0.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input type="checkbox" checked={sel} onChange={() => toggleAlbum(al.path)} title="Select album" />
+                        </div>
+                        {(() => {
+                          const ms = mediaShort(al.media || al.meta?.MEDIA);
+                          return ms ? (
+                            <span
+                              className="absolute bottom-1.5 right-1.5 bg-black/65 text-zinc-200 text-[9px] font-semibold tracking-wide rounded px-1 py-0.5 border border-white/10"
+                              title={`Media: ${al.media || al.meta?.MEDIA}`}
+                            >
+                              {ms}
+                            </span>
+                          ) : null;
+                        })()}
+                        <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <FavHeart kind="album" id={al.path} mbid={al.meta?.MUSICBRAINZ_ALBUMID} className="!p-1.5 bg-black/60" iconClass="h-4 w-4" />
+                        </div>
+                        <button
+                          className="btn-primary absolute left-2 bottom-3 !rounded-lg !p-3 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-2xl"
+                          title="Play album"
+                          onClick={() =>
+                            useStore.getState().playNow(
+                              (al.tracks ?? []).map((t) => ({
+                                path: t.path, file: t.file, albumPath: al.path,
+                                artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
+                              }))
+                            )
+                          }
+                        >
+                          <Play className="h-4 w-4 fill-current" />
+                        </button>
+                      </div>
+                      <div className="mt-2 px-0.5">
+                        <Link
+                          to={albumRef(al)}
+                          className="text-sm font-medium truncate block hover:text-accent-soft"
+                          title={al.meta?.ALBUM ?? al.path}
+                        >
+                          {al.meta?.ALBUM ?? al.path.split("/").pop()}
+                        </Link>
+                        <div className="text-[11px] text-zinc-500 truncate flex items-center gap-1.5 mt-0.5">
+                          <span className={`h-1.5 w-1.5 rounded-full ${st.edge} inline-block shrink-0`} title={st.label} />
+                          <span className="truncate">
+                            {al.artist}
+                            {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </Fragment>
+            ))}
+          </div>
+          <div className="h-2" />
+        </div>
+      )}
+
+      {/* ---------------- Compact status view ---------------- */}
+      {view === "compact" && (
+        <div className="space-y-1">
+          <div className="flex gap-4 flex-wrap text-[10px] text-zinc-500 items-center pb-1">
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500 inline-block" /> PASS — graded clean, audit OK</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-500 inline-block" /> FAIL — grading / audit problems (hover a row for details)</span>
+          </div>
+          {sortedAlbums.map((al) => {
+            const st = statusFor(!!al.pass, al.audit_summary);
+            const sel = selection.albums.includes(al.path);
+            const isExp = expanded.has(al.path);
+            const tracks = [...(al.tracks ?? [])].sort((a, b) =>
+              (a.discnumber ?? 99) - (b.discnumber ?? 99) ||
+              (a.tracknumber ?? 999) - (b.tracknumber ?? 999) ||
+              String(a.file).localeCompare(String(b.file))
+            );
+            return (
+              <div key={al.path}>
+                <div
+                  className={`group flex items-center gap-2.5 rounded-md border px-2 py-1.5 cursor-pointer transition-colors ${st.tint} ${sel ? "border-accent/50" : "border-transparent hover:border-border"}`}
+                  onClick={() => toggleExpand(al.path)}
+                >
+                  <button
+                    className="btn-ghost !px-1.5 !py-0.5 opacity-0 group-hover:opacity-100 shrink-0 transition-opacity"
+                    title="Play album"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      useStore.getState().playNow(
+                        tracks.map((t) => ({
+                          path: t.path, file: t.file, albumPath: al.path,
+                          artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
+                        }))
+                      );
+                    }}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                  </button>
+                  <div className={`w-1 self-stretch rounded-full ${st.edge} shrink-0`} title={st.label} />
+                  <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={sel} onChange={() => toggleAlbum(al.path)} />
+                  </div>
+                  <Link
+                    to={albumRef(al)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="shrink-0"
+                    title="Open album page"
+                  >
+                    <CoverImg
+                      albumPath={al.path}
+                      coverFile={al.cover_file}
+                      wrapperClass="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0"
+                    />
+                  </Link>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <Link
+                        to={albumRef(al)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-sm font-medium truncate hover:text-accent-soft"
+                        title={al.meta?.ALBUM ?? al.path}
+                      >
+                        {al.meta?.ALBUM ?? al.path.split("/").pop()}
+                      </Link>
+                      <span className="text-[11px] text-zinc-500 truncate">
+                        {al.artist}
+                        {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                  <span className={`text-[9px] font-mono shrink-0 ${st.text}`} title={st.label}>
+                    {gradeSliver(!!al.pass, al.audit_summary)}
+                  </span>
+                  <span className="text-[10px] text-zinc-600 shrink-0 w-8 text-right">{al.track_count}t</span>
+                  <div className="opacity-0 group-hover:opacity-100 flex gap-1 shrink-0 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                    <button className="btn-ghost !px-1.5 !py-0.5" title={isExp ? "Collapse" : "Show tracks"}>
+                      {isExp ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                </div>
+                {isExp && (
+                  <div className="ml-8 border-l border-border pl-3 py-1 space-y-0.5">
+                    {tracks.map((t) => {
+                      const ts = statusFor(!!t.grade_pass, t.audit);
+                      const tSel = selection.tracks.includes(t.path);
+                      return (
+                        <div key={t.path} className={`group flex items-center gap-2 text-xs py-0.5 rounded ${tSel ? "bg-accent/10" : ""}`}>
+                          <button
+                            className="btn-ghost !px-1 !py-0.5 opacity-0 group-hover:opacity-100 shrink-0 transition-opacity"
+                            title="Play from here"
+                            onClick={() =>
+                              useStore.getState().playNow(
+                                tracks.map((x) => ({
+                                  path: x.path, file: x.file, albumPath: al.path,
+                                  artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: x.tags.TITLE || undefined,
+                                })),
+                                tracks.findIndex((x) => x.path === t.path)
+                              )
+                            }
+                          >
+                            <Play className="h-3 w-3" />
+                          </button>
+                          <div className="shrink-0">
+                            <input type="checkbox" checked={tSel} onChange={() => toggleTrack(t.path)} />
+                          </div>
+                          <span className={`h-3 w-1 rounded-full ${ts.edge} shrink-0`} title={ts.label} />
+                          <span className="w-8 text-right text-zinc-600 font-mono shrink-0">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</span>
+                          <Link to={trackRef(t)} className="truncate hover:text-accent-soft flex-1 min-w-0">
+                            {t.tags.TITLE ?? t.file}
+                          </Link>
+                          <FavHeart kind="track" id={t.path} mbid={t.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                          {t.tags.INSTRUMENTAL === "1" && (
+                            <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[9px] shrink-0">INST</span>
+                          )}
+                          {!!t.issues?.length && (
+                            <button
+                              className="text-[9px] text-red-400 shrink-0 hover:underline"
+                              title={t.issues.join("\n")}
+                              onClick={() => setDetailTrack({ track: t, albumPath: al.path })}
+                            >
+                              {t.issues.length}✗
+                            </button>
+                          )}
+                          <span className={`text-[9px] font-mono shrink-0 ${ts.text}`} title={ts.label}>
+                            {gradeSliver(!!t.grade_pass, t.audit)}
+                          </span>
+                          <span className="text-[10px] text-zinc-600 font-mono w-10 text-right shrink-0">{fmtDuration(t.tech.length)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {/* ---------------- Albums table ---------------- */}
@@ -562,8 +923,9 @@ const toggleExpand = (path: string) =>
         <div className="bg-card rounded-lg border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-<thead className="bg-panel/60">
+              <thead className="bg-panel/60">
                 <tr>
+                  <th className="th w-12" title="Play all"></th>
                   <th className="th w-8">
                     <input type="checkbox" className="" checked={allArtistsSelected}
                       onChange={() => setSelection({ artists: allArtistsSelected ? [] : sortedArtists.map((a) => a.path) })} />
@@ -571,7 +933,6 @@ const toggleExpand = (path: string) =>
                   {ARTIST_COLS.filter((c) => artistCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort} />
                   ))}
-                  <th className="th text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -579,17 +940,22 @@ const toggleExpand = (path: string) =>
                   const all = a.albums.flatMap((al) =>
                     al.tracks.map((t) => ({
                       path: t.path, file: t.file, albumPath: al.path,
-                      artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined,
+                      artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
                     }))
                   );
                   const sel = selection.artists.includes(a.path);
                   return (
                     <tr key={a.path} className={`table-row group ${sel ? "bg-accent/15" : ""}`}>
+                      <td className="td">
+                        <button className="btn-ghost !px-1.5 !py-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Play all" onClick={() => playNow(all)}>
+                          <Play className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
                       <td className="td pr-0">
                         <input type="checkbox" className="" checked={sel} onChange={() => toggleArtist(a.path)} />
                       </td>
                       <td className="td">
-                        <Link to={`/artist/${encodeURIComponent(a.path)}`} className="font-medium hover:text-accent-soft">
+                        <Link to={artistRef(a)} className="font-medium hover:text-accent-soft">
                           {a.name}
                         </Link>
                       </td>
@@ -599,16 +965,8 @@ const toggleExpand = (path: string) =>
                         <td className="td text-zinc-500">{a.aggregate.pass_count}/{a.aggregate.total_checks}</td>
                       )}
                       {artistCols.includes("grade") && (
-                        <td className="td"><GradeBadge pass={(a.aggregate.grade_pct ?? 0) >= 100} score={a.aggregate.grade_pct} /></td>
+                        <td className="td"><GradeBadge pass={(a.aggregate.grade_pct ?? 0) >= 100} score={a.aggregate.grade_pct} audit={a.aggregate.audit_summary} /></td>
                       )}
-                      {artistCols.includes("audit") && <td className="td"><AuditBadge audit={a.aggregate.audit_summary} /></td>}
-                      <td className="td text-right">
-                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button className="btn-ghost !px-1.5 !py-1" title="Play all" onClick={() => playNow(all)}>
-                            <Play className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
                     </tr>
                   );
                 })}
@@ -625,6 +983,7 @@ const toggleExpand = (path: string) =>
             <table className="w-full text-sm">
               <thead className="bg-panel/60">
                 <tr>
+                  <th className="th w-12" title="Play"></th>
                   <th className="th w-8">
                     <input type="checkbox" className="" checked={allTracksSelected}
                       onChange={() => setSelection({ tracks: allTracksSelected ? [] : sortedTracks.map((t) => t.path) })} />
@@ -632,28 +991,71 @@ const toggleExpand = (path: string) =>
                   {TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort} />
                   ))}
-                  <th className="th text-right">Play</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedTracks.map((tr) => {
                   const sel = selection.tracks.includes(tr.path);
                   return (
-                    <tr key={tr.path} className={`table-row group ${sel ? "bg-accent/15" : ""}`}>
-                      <td className="td pr-0">
+                    <tr
+                      key={tr.path}
+                      className={`table-row group cursor-pointer ${sel ? "bg-accent/15" : ""}`}
+                      title="Click to play"
+                      onClick={() =>
+                        playNow(
+                          sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist, album: t.album, title: t.tags.TITLE || undefined })),
+                          sortedTracks.findIndex((t) => t.path === tr.path)
+                        )
+                      }
+                    >
+                      <td className="td" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            className="btn-ghost !px-1.5 !py-1"
+                            title="Play"
+                            onClick={() =>
+                              playNow(
+                                sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist, album: t.album, title: t.tags.TITLE || undefined })),
+                                sortedTracks.findIndex((t) => t.path === tr.path)
+                              )
+                            }
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                          </button>
+                          <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={() => addToPlaylist([tr.path])}>
+                            <ListPlus className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
                         <input type="checkbox" className="" checked={sel} onChange={() => toggleTrack(tr.path)} />
                       </td>
                       {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}</td>}
                       {trackCols.includes("title") && (
                         <td className="td max-w-[260px]">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <Link to={`/track/${encodeURIComponent(tr.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
+                            <Link
+                              to={trackRef(tr)}
+                              className="hover:text-accent-soft truncate inline-block max-w-full"
+                              title="Click to play · Ctrl-click to open track page"
+                              onClick={(e) => {
+                                // plain click plays (row handler); Ctrl/Shift/middle opens the page
+                                if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
+                                else e.preventDefault();
+                              }}
+                            >
                               {tr.tags.TITLE ?? tr.file}
                             </Link>
+                            <span className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                              <FavHeart kind="track" id={tr.path} mbid={tr.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" />
+                            </span>
                             <button
                               className="text-zinc-500 hover:text-accent-soft shrink-0"
                               title="Grading & audit details"
-                              onClick={() => setDetailTrack({ track: tr, albumPath: tr.path.split("/").slice(0, -1).join("/") })}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDetailTrack({ track: tr, albumPath: tr.path.split("/").slice(0, -1).join("/") });
+                              }}
                             >
                               <InfoIcon className="h-3.5 w-3.5" />
                             </button>
@@ -668,31 +1070,11 @@ const toggleExpand = (path: string) =>
                       {trackCols.includes("year") && <td className="td text-zinc-500" title={tr.tags.DATE ?? undefined}>{fmtDateCell(tr.tags.DATE, fullDates)}</td>}
                       {trackCols.includes("genre") && <td className="td text-zinc-500 truncate max-w-[130px]">{tr.tags.GENRE ?? "—"}</td>}
                       {trackCols.includes("media") && <td className="td"><MediaChip media={tr.tags.MEDIA} /></td>}
-                      {trackCols.includes("grade") && <td className="td"><GradeBadge pass={tr.grade_pass} score={tr.grade_pass ? 100 : null} size="sm" /></td>}
-                      {trackCols.includes("audit") && <td className="td"><AuditBadge audit={tr.audit} size="sm" /></td>}
+                      {trackCols.includes("grade") && <td className="td"><GradeBadge pass={!!tr.grade_pass && !auditFails(tr.audit)} score={null} audit={tr.audit} size="sm" /></td>}
                       {trackCols.includes("advisory") && <td className="td"><AdvisoryBadge value={tr.tags.ITUNESADVISORY} /></td>}
                       {trackCols.includes("duration") && <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>}
-                      {trackCols.includes("bitrate") && <td className="td text-zinc-500">{tr.tech.bitrate ? `${Math.round(tr.tech.bitrate / 1000)}k` : "—"}</td>}
+                      {trackCols.includes("bitrate") && <td className="td text-zinc-500">{tr.tech.bitrate ? `${tr.tech.codec ? tr.tech.codec + " · " : ""}${Math.round(tr.tech.bitrate / 1000)}k` : "—"}</td>}
                       {trackCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{tr.tags.SOURCE ?? "—"}</td>}
-                      <td className="td text-right">
-                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            className="btn-ghost !px-1.5 !py-1"
-                            title="Play"
-                            onClick={() =>
-                              playNow(
-                                sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist, album: t.album })),
-                                sortedTracks.findIndex((t) => t.path === tr.path)
-                              )
-                            }
-                          >
-                            <Play className="h-3.5 w-3.5" />
-                          </button>
-                          <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={() => addToPlaylist([tr.path])}>
-                            <ListPlus className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
                     </tr>
                   );
                 })}
@@ -745,6 +1127,22 @@ function AlbumRowGroup({
   return (
     <>
       <tr className={`table-row group ${selected ? "bg-accent/15" : ""}`} onClick={onToggle}>
+        <td className="td" onClick={(e) => e.stopPropagation()}>
+          <button
+            className="btn-ghost !px-1.5 !py-1 opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Play album"
+            onClick={() =>
+              useStore.getState().playNow(
+                tracks.map((t) => ({
+                  path: t.path, file: t.file, albumPath: album.path,
+                  artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
+                }))
+              )
+            }
+          >
+            <Play className="h-3.5 w-3.5" />
+          </button>
+        </td>
         <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
           <input type="checkbox" className="" checked={selected} onChange={onToggleSel} />
         </td>
@@ -754,12 +1152,19 @@ function AlbumRowGroup({
           </button>
         </td>
         <td className="td">
-          <CoverImg albumPath={album.path} coverFile={album.cover_file} />
+          <Link
+            to={albumRef(album)}
+            onClick={(e) => e.stopPropagation()}
+            title="Open album page"
+            className="inline-block"
+          >
+            <CoverImg albumPath={album.path} coverFile={album.cover_file} />
+          </Link>
         </td>
         {visibleCols.includes("album") && (
           <td className="td max-w-[280px]">
             <Link
-              to={`/album/${encodeURIComponent(album.path)}`}
+              to={albumRef(album)}
               onClick={(e) => e.stopPropagation()}
               className="font-medium hover:text-accent-soft truncate inline-block max-w-full"
             >
@@ -772,8 +1177,11 @@ function AlbumRowGroup({
                     <td className="td text-zinc-500" title={album.meta?.DATE ?? undefined}>{fmtDateCell(album.meta?.DATE, fullDates)}</td>
                   )}
         {visibleCols.includes("tracks") && <td className="td text-zinc-500">{album.track_count}</td>}
-        {visibleCols.includes("grade") && <td className="td"><GradeBadge pass={album.pass} score={album.grade_pct} /></td>}
-        {visibleCols.includes("audit") && <td className="td"><AuditBadge audit={album.audit_summary} /></td>}
+        {visibleCols.includes("grade") && (
+          <td className="td">
+            <GradeBadge pass={!!album.pass && !auditFails(album.audit_summary)} score={album.grade_pct} audit={album.audit_summary} />
+          </td>
+        )}
         {visibleCols.includes("media") && <td className="td"><MediaChip media={album.media} /></td>}
         {visibleCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{album.source_summary ?? "—"}</td>}
         <td className="td text-right">
@@ -785,7 +1193,7 @@ function AlbumRowGroup({
                 useStore.getState().playNow(
                   tracks.map((t) => ({
                     path: t.path, file: t.file, albumPath: album.path,
-                    artist: album.artist, album: album.meta?.ALBUM ?? undefined,
+                    artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
                   }))
                 )
               }
@@ -807,16 +1215,15 @@ function AlbumRowGroup({
             <table className="w-full">
               <thead className="bg-panel/60">
                 <tr>
+                  <th className="th w-12" title="Play from here"></th>
                   <th className="th w-8"></th>
                   <th className="th w-10">#</th>
                   <th className="th w-10"></th>
                   <th className="th">Title</th>
                   <th className="th">Genre</th>
                   <th className="th">Grade</th>
-                  <th className="th">Audit</th>
                   <th className="th">Advisory</th>
                   <th className="th">Dur</th>
-                  <th className="th text-right">Play</th>
                 </tr>
               </thead>
               <tbody>
@@ -827,14 +1234,44 @@ function AlbumRowGroup({
                     <Fragment key={g.disc ?? 0}>
                       {multiDisc && (
                         <tr className="bg-panel/60">
-                          <td colSpan={10} className="td text-[10px] uppercase tracking-wider text-zinc-500">
+                          <td colSpan={9} className="td text-[10px] uppercase tracking-wider text-zinc-500">
                             Disc {g.disc ?? "?"}
                           </td>
                         </tr>
                       )}
                       {g.tracks.map((t) => (
-                  <tr key={t.path} className={`table-row ${selTracks.has(t.path) ? "bg-accent/15" : ""}`}>
-                    <td className="td pr-0">
+                  <tr
+                    key={t.path}
+                    className={`table-row group cursor-pointer ${selTracks.has(t.path) ? "bg-accent/15" : ""}`}
+                    title="Click to play"
+                    onClick={() =>
+                      useStore.getState().playNow(
+                        tracks.map((x) => ({
+                          path: x.path, file: x.file, albumPath: album.path,
+                          artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: x.tags.TITLE || undefined,
+                        })),
+                        tracks.findIndex((x) => x.path === t.path)
+                      )
+                    }
+                  >
+                    <td className="td" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        className="btn-ghost !px-1.5 !py-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Play from here"
+                        onClick={() =>
+                          useStore.getState().playNow(
+                            tracks.map((x) => ({
+                              path: x.path, file: x.file, albumPath: album.path,
+                              artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: x.tags.TITLE || undefined,
+                            })),
+                            tracks.findIndex((x) => x.path === t.path)
+                          )
+                        }
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                    <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
                     </td>
                     <td className="td text-zinc-600">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</td>
@@ -849,13 +1286,27 @@ function AlbumRowGroup({
                     </td>
                     <td className="td max-w-[300px]">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <Link to={`/track/${encodeURIComponent(t.path)}`} className="hover:text-accent-soft truncate inline-block max-w-full">
+                        <Link
+                          to={trackRef(t)}
+                          className="hover:text-accent-soft truncate inline-block max-w-full"
+                          title="Click to play · Ctrl-click to open track page"
+                          onClick={(e) => {
+                            if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
+                            else e.preventDefault();
+                          }}
+                        >
                           {t.tags.TITLE ?? t.file}
                         </Link>
+                        <span className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                          <FavHeart kind="track" id={t.path} mbid={t.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" />
+                        </span>
                         <button
                           className="text-zinc-500 hover:text-accent-soft shrink-0"
                           title="Grading & audit details"
-                          onClick={() => onTrackDetails(t)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onTrackDetails(t);
+                          }}
                         >
                           <InfoIcon className="h-3.5 w-3.5" />
                         </button>
@@ -866,7 +1317,10 @@ function AlbumRowGroup({
                           <button
                             className="text-[9px] text-red-400 shrink-0 hover:underline"
                             title={t.issues.join("\n")}
-                            onClick={() => onTrackDetails(t)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onTrackDetails(t);
+                            }}
                           >
                             {t.issues.length}✗
                           </button>
@@ -874,26 +1328,9 @@ function AlbumRowGroup({
                       </div>
                     </td>
                     <td className="td text-zinc-500 truncate max-w-[150px]">{t.tags.GENRE ?? "—"}</td>
-                    <td className="td"><GradeBadge pass={t.grade_pass} score={t.grade_pass ? 100 : 0} size="sm" /></td>
-                    <td className="td"><AuditBadge audit={t.audit} size="sm" /></td>
+                    <td className="td"><GradeBadge pass={!!t.grade_pass && !auditFails(t.audit)} audit={t.audit} size="sm" /></td>
                     <td className="td"><AdvisoryBadge value={t.tags.ITUNESADVISORY} /></td>
                     <td className="td text-zinc-500">{fmtDuration(t.tech.length)}</td>
-                    <td className="td text-right">
-                      <button
-                        className="btn-ghost !px-1.5 !py-1"
-                        onClick={() =>
-                          useStore.getState().playNow(
-                            tracks.map((x) => ({
-                              path: x.path, file: x.file, albumPath: album.path,
-                              artist: album.artist, album: album.meta?.ALBUM ?? undefined,
-                            })),
-                            tracks.findIndex((x) => x.path === t.path)
-                          )
-                        }
-                      >
-                        <Play className="h-3.5 w-3.5" />
-                      </button>
-                    </td>
                   </tr>
                       ))}
                     </Fragment>
@@ -908,9 +1345,13 @@ function AlbumRowGroup({
   );
 }
 
-function ScriptsDropdown({ onRun, runAllIds }: { onRun: (ids: number[]) => void; runAllIds: number[] }) {
+function ScriptsDropdown({ onRun, runAllIds }: { onRun: (ids: number[], force?: boolean) => void; runAllIds: number[] }) {
   const [open, setOpen] = useState(false);
-  const items = [{ ids: runAllIds, label: "Run all" }, ...SCRIPTS];
+  const items: { ids: number[]; label: string; force?: boolean }[] = [
+    { ids: runAllIds, label: "Run all" },
+    { ids: runAllIds, label: "Run all (force)", force: true },
+    ...SCRIPTS,
+  ];
   return (
     <div className="relative">
       <button className="btn-ghost !py-1 text-xs" onClick={() => setOpen(!open)}>
@@ -923,10 +1364,10 @@ function ScriptsDropdown({ onRun, runAllIds }: { onRun: (ids: number[]) => void;
             {items.map((s) => (
               <button
                 key={s.label}
-                className="w-full text-left px-2.5 py-1.5 text-xs rounded hover:bg-panel text-zinc-300 hover:text-white"
+                className={`w-full text-left px-2.5 py-1.5 text-xs rounded hover:bg-panel ${s.force ? "text-accent-soft" : "text-zinc-300"} hover:text-white`}
                 onClick={() => {
                   setOpen(false);
-                  onRun(s.ids);
+                  onRun(s.ids, s.force);
                 }}
               >
                 {s.label}

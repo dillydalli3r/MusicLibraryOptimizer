@@ -210,6 +210,19 @@ def _format_audio_tags(path, cfg, force=False):
                     changed = True
                 else:
                     return (path, False, af.error or "set_tag failed")
+        # Optimization leaves only tags this app (and its graders) understand:
+        # anything outside TAG_MAP plus the encoder identity tags is removed.
+        if cfg.get("strip_unknown_tags", False):
+            from .audio import TAG_MAP
+            allowed = {k.upper() for k in TAG_MAP} | {
+                "ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"}
+            for key in list(af.all_tags().keys()):
+                if str(key).upper() not in allowed:
+                    try:
+                        if af.delete_tag(key):
+                            changed = True
+                    except Exception:
+                        pass
         if changed:
             return (path, True, None)
         return (path, False, None)
@@ -272,6 +285,15 @@ def run_format_all(config):
 
     log(f"found {len(accurip_files)} .accurip, {len(cue_files)} .cue, {len(lrc_files)} .lrc, {len(audio_to_check)} audio files")
 
+    # Per-family force switches (same keys the individual scripts use) — a
+    # forced family is rewritten even when it is already canonical.
+    force = {
+        "accurip": bool(config.get("force_accurip", False)),
+        "cue": bool(config.get("force_cue", False)),
+        "lrc": bool(config.get("force_lyrics", False)),
+        "tags": bool(config.get("force_auto_tag", False)),
+    }
+
     # Use thread pool for I/O-bound formatting
     workers = worker_count(config, default=8, maximum=16, items=total_tasks)
     counts = {"ok": 0, "skip": 0, "fail": 0}
@@ -293,7 +315,7 @@ def run_format_all(config):
         # .accurip
         futures = {}
         for f in accurip_files:
-            fut = ex.submit(_format_accurip_file, f, config, False)
+            fut = ex.submit(_format_accurip_file, f, config, force["accurip"])
             futures[fut] = f
         for fut in as_completed(futures):
             fn, ok, err = fut.result()
@@ -313,7 +335,7 @@ def run_format_all(config):
         # .cue
         futures = {}
         for f in cue_files:
-            fut = ex.submit(_format_cue_file, f, config, False)
+            fut = ex.submit(_format_cue_file, f, config, force["cue"])
             futures[fut] = f
         for fut in as_completed(futures):
             fn, ok, err = fut.result()
@@ -333,7 +355,7 @@ def run_format_all(config):
         # .lrc
         futures = {}
         for f in lrc_files:
-            fut = ex.submit(_format_lrc_file, f, config, False)
+            fut = ex.submit(_format_lrc_file, f, config, force["lrc"])
             futures[fut] = f
         for fut in as_completed(futures):
             fn, ok, err = fut.result()
@@ -353,7 +375,7 @@ def run_format_all(config):
         # audio tags
         futures = {}
         for f in audio_to_check:
-            fut = ex.submit(_format_audio_tags, f, config, False)
+            fut = ex.submit(_format_audio_tags, f, config, force["tags"])
             futures[fut] = f
         for fut in as_completed(futures):
             fn, ok, err = fut.result()

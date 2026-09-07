@@ -15,7 +15,7 @@ import httpx
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 LRCLIB_BASE = "https://lrclib.net/api"
-USER_AGENT = "MusicLibraryOptimizer/2.0 (https://github.com/dillydalli3r/MusicLibraryOptimizer)"
+USER_AGENT = "la-musica/2.0 (https://github.com/dillydalli3r/MusicLibraryOptimizer)"
 
 _last_request = 0.0
 _mb_lock = threading.Lock()
@@ -61,6 +61,36 @@ def mb_get(endpoint, params=None, timeout=30.0, retries=3):
                 continue
         r.raise_for_status()
         return r.json()
+
+
+# --------------------------------------------------------------------------- #
+# Tiny TTL cache for browse endpoints (release/artist pages get re-fetched on
+# every navigation; MB etiquette caps us at 1 req/s, so repeat views must not
+# re-hit the network). Keyed by (endpoint, sorted params), 10-minute TTL.
+# --------------------------------------------------------------------------- #
+_BROWSE_CACHE: dict = {}
+_BROWSE_LOCK = threading.Lock()
+_BROWSE_TTL = 600.0
+
+
+def mb_get_cached(endpoint, params=None, timeout=30.0, retries=5):
+    key = (endpoint, tuple(sorted((k, str(v)) for k, v in (params or {}).items())))
+    now = time.time()
+    with _BROWSE_LOCK:
+        hit = _BROWSE_CACHE.get(key)
+        if hit and now - hit[0] < _BROWSE_TTL:
+            return hit[1]
+    # MusicBrainz enforces ~1 req/s and answers occasional 503s even below
+    # it — browse/search calls get a couple of extra polite retries so a
+    # transient limit doesn't surface as an error in the UI.
+    data = mb_get(endpoint, params, timeout=timeout, retries=retries)
+    with _BROWSE_LOCK:
+        _BROWSE_CACHE[key] = (now, data)
+        # keep the cache from growing without bound
+        if len(_BROWSE_CACHE) > 300:
+            for k in list(_BROWSE_CACHE)[:100]:
+                _BROWSE_CACHE.pop(k, None)
+    return data
 
 
 def _mbid(value):
@@ -132,12 +162,16 @@ def release_lookup(mbid):
     secondary = [s.lower() for s in (rg_obj.get("secondary-types") or [])]
     release_type = "+".join([primary] + secondary) if primary else ""
 
-    # labels -> first catalog number
+    # labels -> label name + first catalog number
     catalog_number = ""
+    label_name = ""
     for lab in data.get("label-info", []) or []:
+        if not label_name:
+            label_name = str(((lab.get("label") or {}).get("name")) or "").strip()
         cn = (lab.get("catalog-number") or "").strip()
-        if cn:
+        if cn and not catalog_number:
             catalog_number = cn
+        if label_name and catalog_number:
             break
     country = data.get("country") or ""
 
@@ -148,6 +182,7 @@ def release_lookup(mbid):
         "barcode": (data.get("barcode") or ""),
         "country": country,
         "catalog_number": catalog_number,
+        "label": label_name,
         "release_group_id": (data.get("release-group") or {}).get("id"),
         "release_type": release_type,
         "artists": release_artists,
@@ -278,6 +313,207 @@ def search_artists(query, limit=5):
                 for a in data.get("artists", [])]
     except Exception as e:
         return {"error": str(e)}
+
+
+# --------------------------------------------------------------------------- #
+# Generic browse: search + artist / release-group / recording pages
+# (used by the in-app MusicBrainz browser)
+# --------------------------------------------------------------------------- #
+MB_ENTITIES = ("artist", "release-group", "release", "recording")
+
+
+def _credit(node):
+    return "".join(
+        (ac.get("name", "") + (ac.get("joinphrase", "") or ""))
+        for ac in (node.get("artist-credit") or [])
+    )
+
+
+def _media_summary(node):
+    """'2×CD + DVD' style summary of an entity's media list."""
+    parts = []
+    for m in node.get("media") or []:
+        fmt = m.get("format") or "Unknown"
+        if parts and parts[-1][0] == fmt:
+            parts[-1][1] += 1
+        else:
+            parts.append([fmt, 1])
+    return " + ".join((f"{n}×{f}" if n > 1 else f) for f, n in parts)
+
+
+def search_mb(entity, query, limit=12, mode="free"):
+    """Normalized MB search rows for the four browsable entities.
+
+    mode="free" is the plain full-text search; for releases, mode="catno" /
+    "barcode" search by catalog number / barcode (catalog numbers like
+    'SRCS 8757' are how pressings are identified)."""
+    if entity not in MB_ENTITIES:
+        raise ValueError("entity must be artist, release-group, release or recording")
+    q = query
+    if entity == "release" and mode == "catno":
+        q = f'catno:"{query}"'
+    elif entity == "release" and mode == "barcode":
+        q = f"barcode:{query}"
+    data = mb_get_cached(entity, {"query": q, "limit": limit, "fmt": "json"})
+    # MB search responses use plural collection keys
+    key = {"artist": "artists", "release-group": "release-groups",
+           "release": "releases", "recording": "recordings"}[entity]
+    rows = []
+    for item in data.get(key, []):
+        row = {
+            "id": item.get("id"),
+            "score": item.get("score"),
+            "title": item.get("title") or item.get("name"),
+            "disambiguation": item.get("disambiguation") or "",
+        }
+        if entity == "artist":
+            area = item.get("area") or {}
+            row.update({
+                "type": item.get("type") or "",
+                "country": area.get("name") or "",
+                "life_span": [
+                    (item.get("life-span") or {}).get("begin") or "",
+                    (item.get("life-span") or {}).get("end") or "",
+                ],
+                "tags": [t.get("name") for t in (item.get("tags") or [])[:3]],
+            })
+        elif entity == "release-group":
+            row.update({
+                "artist": _credit(item),
+                "primary_type": item.get("primary-type") or "",
+                "secondary_types": [s for s in (item.get("secondary-types") or [])],
+                "first_release_date": item.get("first-release-date") or "",
+            })
+        elif entity == "release":
+            catalog_number = ""
+            for li in item.get("label-info") or []:
+                if li.get("catalog-number"):
+                    catalog_number = li["catalog-number"]
+                    break
+            row.update({
+                "artist": _credit(item),
+                "date": item.get("date") or "",
+                "country": item.get("country") or "",
+                "status": item.get("status") or "",
+                "formats": _media_summary(item),
+                "track_count": sum((m.get("track-count") or 0) for m in item.get("media") or []),
+                "catalog_number": catalog_number,
+            })
+        else:  # recording
+            row.update({
+                "artist": _credit(item),
+                "length": item.get("length"),
+                "first_release_date": item.get("first-release-date") or "",
+            })
+        rows.append(row)
+    return rows
+
+
+def artist_browse(mbid):
+    """Artist page: identity + genres + discography (release groups)."""
+    data = mb_get_cached(
+        f"artist/{mbid}",
+        {"inc": "release-groups+genres+artist-credits", "fmt": "json"},
+    )
+    area = data.get("area") or {}
+    return {
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "disambiguation": data.get("disambiguation") or "",
+        "type": data.get("type") or "",
+        "country": area.get("name") or "",
+        "life_span": [
+            (data.get("life-span") or {}).get("begin") or "",
+            (data.get("life-span") or {}).get("end") or "",
+        ],
+        "genres": _title_genres(data),
+        "tags": [t.get("name") for t in (data.get("tags") or [])[:8]],
+        "release_groups": [
+            {
+                "id": rg.get("id"),
+                "title": rg.get("title"),
+                "primary_type": rg.get("primary-type") or "",
+                "secondary_types": rg.get("secondary-types") or [],
+                "first_release_date": rg.get("first-release-date") or "",
+            }
+            for rg in sorted(
+                data.get("release-groups") or [],
+                key=lambda g: g.get("first-release-date") or "9999",
+            )
+        ],
+    }
+
+
+def release_group_browse(mbid):
+    """Release-group page: identity + its releases (editions)."""
+    data = mb_get_cached(
+        f"release-group/{mbid}",
+        {"inc": "artist-credits+releases+genres", "fmt": "json"},
+    )
+    return {
+        "id": data.get("id"),
+        "title": data.get("title"),
+        "disambiguation": data.get("disambiguation") or "",
+        "artist": _credit(data),
+        "artist_mbid": next(
+            (ac["artist"]["id"] for ac in data.get("artist-credit") or [] if "artist" in ac), None
+        ),
+        "primary_type": data.get("primary-type") or "",
+        "secondary_types": data.get("secondary-types") or [],
+        "genres": _title_genres(data),
+        "first_release_date": data.get("first-release-date") or "",
+        "releases": [
+            {
+                "id": r.get("id"),
+                "title": r.get("title"),
+                "date": r.get("date") or "",
+                "country": r.get("country") or "",
+                "status": r.get("status") or "",
+                "formats": _media_summary(r),
+                "track_count": sum((m.get("track-count") or 0) for m in r.get("media") or []),
+                "barcode": r.get("barcode") or "",
+            }
+            for r in sorted(
+                data.get("releases") or [],
+                key=lambda r: r.get("date") or "9999",
+            )
+        ],
+    }
+
+
+def recording_browse(mbid):
+    """Recording ('track') page: identity + releases carrying it."""
+    data = mb_get_cached(
+        f"recording/{mbid}",
+        {"inc": "artist-credits+releases+release-groups+isrcs+genres", "fmt": "json"},
+    )
+    return {
+        "id": data.get("id"),
+        "title": data.get("title"),
+        "disambiguation": data.get("disambiguation") or "",
+        "artist": _credit(data),
+        "artist_mbid": next(
+            (ac["artist"]["id"] for ac in data.get("artist-credit") or [] if "artist" in ac), None
+        ),
+        "length": data.get("length"),
+        "genres": _title_genres(data),
+        "isrcs": [i.get("isrc") for i in data.get("isrcs") or [] if i.get("isrc")],
+        "releases": [
+            {
+                "id": r.get("id"),
+                "title": r.get("title"),
+                "date": r.get("date") or "",
+                "country": r.get("country") or "",
+                "status": r.get("status") or "",
+                "formats": _media_summary(r),
+                "release_group": (r.get("release-group") or {}).get("primary-type") or "",
+            }
+            for r in sorted(
+                data.get("releases") or [],
+                key=lambda r: r.get("date") or "9999",
+            )
+        ],
+    }
 
 
 # --------------------------------------------------------------------------- #
