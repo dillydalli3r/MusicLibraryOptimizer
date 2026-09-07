@@ -30,8 +30,7 @@ input[type="checkbox"] {
   accent-color: rgb(var(--accent));
 }
 
-/* ---- Range sliders: slim accent track + squared thumb (the app's
-   rectangular language applies to controls too) ---- */
+/* ---- Range sliders: slim accent track + round thumb ---- */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
@@ -46,7 +45,7 @@ input[type="range"]::-webkit-slider-thumb {
   appearance: none;
   width: 12px;
   height: 12px;
-  border-radius: 3px;
+  border-radius: 9999px;
   background: rgb(var(--accent));
   border: none;
   box-shadow: 0 0 0 3px rgb(var(--accent) / 0.15);
@@ -58,7 +57,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
 input[type="range"]::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  border-radius: 3px;
+  border-radius: 9999px;
   background: rgb(var(--accent));
   border: none;
   box-shadow: 0 0 0 3px rgb(var(--accent) / 0.15);
