@@ -261,12 +261,12 @@ export default function App() {
       </aside>
 
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden relative z-10">
-        {/* top bar (right of the sidebar): back / forward immediately left of
-            the global search, live progress on the right. */}
-        <header className="h-12 shrink-0 bg-bg flex items-center gap-3 px-4 z-30 relative">
-          <div className="flex items-center gap-1 shrink-0">
+        {/* floating top bar: transparent overlay on the content — only the
+            controls themselves catch the pointer */}
+        <header className="absolute inset-x-0 top-0 h-12 z-30 flex items-center gap-3 px-4 pointer-events-none">
+          <div className="flex items-center gap-1.5 shrink-0 pointer-events-auto">
             <button
-              className="p-1.5 rounded-lg text-zinc-300 hover:bg-raise hover:text-white disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              className="h-9 w-9 rounded-full border border-border bg-panel/60 backdrop-blur flex items-center justify-center text-zinc-300 hover:text-white hover:border-accent/50 disabled:opacity-30 disabled:pointer-events-none transition-colors"
               onClick={goBack}
               disabled={pos === 0}
               title="Back"
@@ -274,7 +274,7 @@ export default function App() {
               <ChevronLeft className="h-4 w-4" />
             </button>
             <button
-              className="p-1.5 rounded-lg text-zinc-300 hover:bg-raise hover:text-white disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              className="h-9 w-9 rounded-full border border-border bg-panel/60 backdrop-blur flex items-center justify-center text-zinc-300 hover:text-white hover:border-accent/50 disabled:opacity-30 disabled:pointer-events-none transition-colors"
               onClick={goForward}
               disabled={pos >= stackRef.current.length - 1}
               title="Forward"
@@ -283,10 +283,10 @@ export default function App() {
             </button>
           </div>
           {/* the search input spans the rest of the bar */}
-          <div className="relative flex-1">
+          <div className="relative flex-1 pointer-events-auto">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
             <input
-              className="input !py-2 !pl-10 text-xs w-full"
+              className="input !py-2 !pl-10 text-xs w-full !bg-panel/60 backdrop-blur"
               placeholder="Search for tracks, artists, albums…"
               value={query}
               onChange={(e) => onSearch(e.target.value)}
@@ -327,7 +327,7 @@ export default function App() {
           )}
         </header>
 
-        <main className="flex-1 overflow-auto min-w-0">
+        <main className="flex-1 overflow-auto min-w-0 pt-12">
           {/* keyed by pathname so each navigation eases the new page in */}
           <div key={location.pathname} className="page-enter">
             <Routes>
