@@ -744,7 +744,7 @@ const toggleExpand = (path: string) =>
               <div key={al.path}>
                 <div
                   className={`group flex items-center gap-2.5 rounded-md px-2 py-1.5 cursor-pointer transition-colors ${st.tint} ${sel ? "bg-accent/10" : "hover:bg-white/[0.06]"}`}
-                  onClick={() => toggleExpand(al.path)}
+                  onClick={() => (selectMode ? toggleAlbum(al.path) : toggleExpand(al.path))}
                 >
                   <div className={`w-1 self-stretch rounded-sm ${st.edge} shrink-0`} title={st.label} />
                   {selectMode && (
@@ -798,7 +798,11 @@ const toggleExpand = (path: string) =>
                       const ts = statusFor(!!t.grade_pass, t.audit);
                       const tSel = selection.tracks.includes(t.path);
                       return (
-                        <div key={t.path} className={`group flex items-center gap-2 text-xs py-0.5 rounded ${tSel ? "bg-accent/10" : "hover:bg-white/[0.06]"}`}>
+                        <div
+                          key={t.path}
+                          className={`group flex items-center gap-2 text-xs py-0.5 rounded cursor-pointer ${tSel ? "bg-accent/10" : "hover:bg-white/[0.06]"}`}
+                          onClick={selectMode ? () => toggleTrack(t.path) : undefined}
+                        >
                           {selectMode && (
                             <div className="shrink-0">
                               <input type="checkbox" checked={tSel} onChange={() => toggleTrack(t.path)} />
@@ -972,8 +976,8 @@ const toggleExpand = (path: string) =>
                     <tr
                       key={tr.path}
                       className={`table-row group cursor-pointer ${sel ? "bg-accent/15" : ""}`}
-                      title="Click to play"
-                      onClick={() =>
+                      title={selectMode ? "Click to select" : "Click to play"}
+                      onClick={selectMode ? () => toggleTrack(tr.path) : () =>
                         playNow(
                           sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist, album: t.album, title: t.tags.TITLE || undefined })),
                           sortedTracks.findIndex((t) => t.path === tr.path)
@@ -1083,7 +1087,7 @@ function AlbumRowGroup({
 
   return (
     <>
-      <tr className={`table-row group ${selected ? "bg-accent/15" : ""}`} onClick={onToggle}>
+      <tr className={`table-row group ${selected ? "bg-accent/15" : ""}`} onClick={selectMode ? onToggleSel : onToggle}>
         {selectMode && (
           <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
             <input type="checkbox" className="" checked={selected} onChange={onToggleSel} />
@@ -1097,8 +1101,13 @@ function AlbumRowGroup({
         <td className="td">
           <Link
             to={albumRef(album)}
-            onClick={(e) => e.stopPropagation()}
-            title="Open album page"
+            onClick={(e) => {
+              if (selectMode) {
+                e.preventDefault();
+                onToggleSel();
+              } else e.stopPropagation();
+            }}
+            title={selectMode ? "Click to select" : "Open album page"}
             className="inline-block"
           >
             <CoverImg albumPath={album.path} coverFile={album.cover_file} />
@@ -1108,7 +1117,12 @@ function AlbumRowGroup({
           <td className="td max-w-[280px]">
             <Link
               to={albumRef(album)}
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                if (selectMode) {
+                  e.preventDefault();
+                  onToggleSel();
+                } else e.stopPropagation();
+              }}
               className="font-medium hover:text-accent-soft truncate inline-block max-w-full"
             >
               {album.meta?.ALBUM ?? album.path.split("/").pop()}

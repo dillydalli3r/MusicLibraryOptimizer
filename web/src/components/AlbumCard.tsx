@@ -24,9 +24,17 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
   const artist = artistName ?? al.artist ?? al.album_artist ?? al.path.split(/[\\/]/).slice(0, -1).pop() ?? "";
   const ms = mediaShort(al.media || al.meta?.MEDIA);
   return (
-    <div className={`group relative rounded-xl p-2 transition-all hover:-translate-y-0.5 hover:bg-panel/70 ${selected ? "bg-accent/10 ring-1 ring-accent/30" : ""}`}>
+    <div
+      className={`group relative rounded-xl p-2 transition-all hover:-translate-y-0.5 hover:bg-panel/70 ${selected ? "bg-accent/10 ring-1 ring-accent/30" : ""} ${selectable ? "cursor-pointer" : ""}`}
+      onClick={selectable ? () => onSelect?.(al.path) : undefined}
+    >
       <div className="relative">
-        <Link to={albumRef(al)} title="Open album page" className="block">
+        <Link
+          to={albumRef(al)}
+          onClick={selectable ? (e) => e.preventDefault() : undefined}
+          title={selectable ? "Click to select" : "Open album page"}
+          className="block"
+        >
           <CoverImg
             albumPath={al.path}
             coverFile={al.cover_file}
@@ -71,14 +79,15 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
         <button
           className="btn-primary absolute left-2 bottom-3 !rounded-lg !p-3 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-2xl"
           title="Play album"
-          onClick={() =>
+          onClick={(e) => {
+            e.stopPropagation();
             useStore.getState().playNow(
               (al.tracks ?? []).map((t) => ({
                 path: t.path, file: t.file, albumPath: al.path,
                 artist, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
               }))
-            )
-          }
+            );
+          }}
         >
           <Play className="h-4 w-4 fill-current" />
         </button>

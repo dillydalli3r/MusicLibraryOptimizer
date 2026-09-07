@@ -602,8 +602,8 @@ export default function AlbumPage() {
               <tr
                 key={tr.path}
                 className="table-row group cursor-pointer"
-                title="Click to play"
-                onClick={() =>
+                title={selectMode ? "Click to select" : "Click to play"}
+                onClick={selectMode ? () => toggleTrack(tr.path) : () =>
                   playNow(
                     data.tracks.map((t) => ({
                       path: t.path, file: t.file, albumPath: data.path,
