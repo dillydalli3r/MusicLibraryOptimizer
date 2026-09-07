@@ -149,8 +149,10 @@ body {
   }
 }
 
+/* Borderless data rows: tables blend into the page — the only line is the
+   hairline under the column headers. Rows read through hover + spacing. */
 .table-row {
-  @apply border-t border-border/60 hover:bg-panel transition-colors cursor-pointer;
+  @apply hover:bg-raise/40 transition-colors cursor-pointer;
 }
 
 /* ------------------------------------------------------------------ */

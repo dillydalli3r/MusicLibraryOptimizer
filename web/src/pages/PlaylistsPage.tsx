@@ -246,7 +246,7 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
   }, [lib]);
 
   return (
-    <div className="bg-card rounded-lg border border-border overflow-hidden">
+    <div>
       <div className="flex items-center gap-3 px-4 py-2">
         <div className="flex items-center gap-1.5">
           <button className="btn-ghost !px-2 !py-1 text-xs" title="Play playlist" onClick={() => onPlay(tracks)}><Play className="h-3.5 w-3.5" /></button>

@@ -1,7 +1,7 @@
 ﻿import { Fragment, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ChevronDown, ChevronRight, CircleAlert, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, ImageUp, Image as ImageIcon, FileVideo, Disc3, CloudDownload, Sparkles, ListPlus, ListStart, ShieldCheck, FileMusic } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, ImageUp, Image as ImageIcon, FileVideo, Disc3, CloudDownload, Sparkles, ListPlus, ListStart, ShieldCheck, FileMusic, ListChecks } from "lucide-react";
 import { api } from "../api";
 import { LinkChips, LinkEditorButton } from "../components/Links";
 import { SubtitledVideo } from "../components/SubtitledVideo";
@@ -44,6 +44,8 @@ export default function AlbumPage() {
   const [lyricsBusy, setLyricsBusy] = useState(false);
   const [aiSyncBusy, setAiSyncBusy] = useState(false);
   const [issuesOpen, setIssuesOpen] = useState(false);
+  // track checkboxes (and the selection toolbar) only exist in select mode
+  const [selectMode, setSelectMode] = useState(false);
   const coverInput = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
 
@@ -299,12 +301,22 @@ export default function AlbumPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <>
+      {/* ambient blurred album cover behind the whole page */}
+      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden" aria-hidden>
+        <CoverImg
+          albumPath={data.path}
+          coverFile={data.cover_file}
+          wrapperClass="w-full h-full blur-[90px] opacity-25 scale-125"
+        />
+        <div className="absolute inset-0 bg-bg/50" />
+      </div>
+      <div className="relative z-10 p-6 space-y-6">
       <div
-        className="rounded-xl p-5 border border-border relative"
+        className="rounded-xl p-5 relative"
         style={
           coverColor
-            ? { background: `linear-gradient(135deg, ${coverColor}33 0%, transparent 60%)` }
+            ? { background: `linear-gradient(135deg, ${coverColor}22 0%, transparent 60%)` }
             : undefined
         }
       >
@@ -313,7 +325,7 @@ export default function AlbumPage() {
             <CoverImg
               albumPath={data.path}
               coverFile={data.cover_file}
-              wrapperClass="h-56 w-56 rounded-lg border border-border bg-raise overflow-hidden"
+              wrapperClass="h-56 w-56 rounded-md bg-raise overflow-hidden shadow-2xl"
             />
             <input
               ref={coverInput}
@@ -441,10 +453,24 @@ export default function AlbumPage() {
               className="!p-2 !rounded-md border border-border bg-panel/60 hover:!bg-raise"
               iconClass="h-4 w-4"
             />
+            <button
+              className={`p-2 rounded-md border bg-panel/60 transition-colors ${
+                selectMode ? "text-accent border-accent/50" : "border-border text-zinc-400 hover:text-white hover:bg-raise"
+              }`}
+              onClick={() =>
+                setSelectMode((v) => {
+                  if (v) clearSelection();
+                  return !v;
+                })
+              }
+              title="Select tracks — show checkboxes for batch actions"
+              aria-label="Select tracks"
+            >
+              <ListChecks className="h-4 w-4" />
+            </button>
             <OverflowMenu
               buttonClass={iconBtn}
-              buttonTitle="All album actions"
-              sections={[
+              buttonTitle="All album actions"              sections={[
                 {
                   items: [
                     { label: "Play next", icon: ListStart, onClick: () => enqueue("next") },
@@ -538,12 +564,11 @@ export default function AlbumPage() {
         </div>
       )}
 
-      <div className="bg-card rounded-lg border border-border overflow-hidden">
+      <div>
         <table className="w-full text-sm">
-          <thead className="bg-panel/60">
+          <thead className="border-b border-border">
             <tr>
-              <th className="th w-12" title="Play from here"></th>
-              <th className="th w-10"></th>
+              {selectMode && <th className="th w-10"></th>}
               <SortHeader label="#" sort={sort} sortKey="tracknumber" onSort={(k) => setSort(toggleSort(sort, k))} className="w-14" />
               <th className="th w-10"></th>
               <SortHeader label="Title" sort={sort} sortKey="tags.TITLE" onSort={(k) => setSort(toggleSort(sort, k))} />
@@ -559,8 +584,8 @@ export default function AlbumPage() {
               return groups.map((g) => (
                 <Fragment key={g.disc ?? 0}>
                   {multiDisc && (
-                    <tr className="bg-panel/60">
-                      <td colSpan={8} className="td !py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                    <tr>
+                      <td colSpan={selectMode ? 7 : 6} className="td !py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
                         Disc {g.disc ?? "—"}
                       </td>
                     </tr>
@@ -581,42 +606,26 @@ export default function AlbumPage() {
                   )
                 }
               >
-                <td className="td" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                {tr.file.toLowerCase().endsWith(".mp4") && (
+                  <td className="td" onClick={(e) => e.stopPropagation()}>
                     <button
-                      className="btn-ghost !px-2 !py-1"
-                      title="Play from here"
-                      onClick={() =>
-                        playNow(
-                          data.tracks.map((t) => ({
-                            path: t.path, file: t.file, albumPath: data.path,
-                            artist: data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? undefined,
-                            album: data.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
-                          })),
-                          data.tracks.findIndex((t) => t.path === tr.path)
-                        )
-                      }
+                      className="btn-ghost !px-2 !py-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Watch music video"
+                      onClick={() => setVideoOpen(tr.path)}
                     >
-                      <Play className="h-3.5 w-3.5" />
+                      <FileVideo className="h-3.5 w-3.5" />
                     </button>
-                    {tr.file.toLowerCase().endsWith(".mp4") && (
-                      <button
-                        className="btn-ghost !px-2 !py-1"
-                        title="Watch music video"
-                        onClick={() => setVideoOpen(tr.path)}
-                      >
-                        <FileVideo className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </td>
-                <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
-                  <input
-                    type="checkbox"
-                    checked={selection.tracks.includes(tr.path)}
-                    onChange={() => toggleTrack(tr.path)}
-                  />
-                </td>
+                  </td>
+                )}
+                {selectMode && (
+                  <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selection.tracks.includes(tr.path)}
+                      onChange={() => toggleTrack(tr.path)}
+                    />
+                  </td>
+                )}
                 <td className="td text-zinc-500">
                   <div className="flex items-center gap-1.5">
                     <span className="tabular-nums">{tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}</span>
@@ -693,6 +702,7 @@ export default function AlbumPage() {
           }}
         />
       )}
-    </div>
+      </div>
+    </>
   );
 }

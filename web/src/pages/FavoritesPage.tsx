@@ -137,7 +137,7 @@ function LikedTracks() {
     );
 
   return (
-    <div className="bg-card rounded-lg border border-border overflow-hidden">
+    <div>
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border">
         <span className="text-xs text-zinc-500">
           {rows.length} liked track{rows.length === 1 ? "" : "s"}
@@ -146,11 +146,8 @@ function LikedTracks() {
           <Play className="h-3.5 w-3.5" /> Play all
         </button>
       </div>
-      {rows.map((r, i) => (
-        <div key={r.path} className="group flex items-center gap-3 px-3 py-1 text-sm border-t border-border/40 first:border-t-0 hover:bg-panel">
-          <button className="btn-ghost !px-1.5 !py-1 shrink-0 opacity-0 group-hover:opacity-100 transition-colors" title="Play from here" onClick={() => play(i)} disabled={r.missing}>
-            <Play className="h-3.5 w-3.5" />
-          </button>
+      {rows.map((r) => (
+        <div key={r.path} className="group flex items-center gap-3 px-3 py-1 text-sm hover:bg-raise/40 transition-colors">
           {r.missing ? (
             <span className="truncate min-w-0 flex-1 text-zinc-500" title={r.path}>
               {r.title}
@@ -234,7 +231,7 @@ function FavArtists() {
           }))
         );
         return (
-          <div key={a.path} className="group flex items-center gap-3 bg-card border border-border rounded-lg px-3 py-1.5 hover:border-accent/40 transition-colors">
+          <div key={a.path} className="group flex items-center gap-3 rounded-lg px-3 py-1.5 hover:border-accent/40 transition-colors">
             <button className="btn-ghost !px-1.5 !py-1 shrink-0 opacity-0 group-hover:opacity-100 transition-colors" title="Play all" onClick={() => q.length && playNow(q)}>
               <Play className="h-3.5 w-3.5" />
             </button>
@@ -300,7 +297,7 @@ function FavPlaylists() {
   return (
     <div className="space-y-1">
       {rows.map((p) => (
-        <div key={p.id} className="group flex items-center gap-3 bg-card border border-border rounded-lg px-3 py-1.5 hover:border-accent/40 transition-colors">
+        <div key={p.id} className="group flex items-center gap-3 rounded-lg px-3 py-1.5 hover:border-accent/40 transition-colors">
           <button className="btn-ghost !px-1.5 !py-1 shrink-0 opacity-0 group-hover:opacity-100 transition-colors" title="Play playlist" onClick={() => play(p)}>
             <Play className="h-3.5 w-3.5" />
           </button>

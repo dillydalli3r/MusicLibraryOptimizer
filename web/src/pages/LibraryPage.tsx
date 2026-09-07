@@ -2,7 +2,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {  FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Info as InfoIcon, CloudDownload,
-  ListFilter,
+  ListFilter, ListChecks,
 } from "lucide-react";
 import { api } from "../api";
 import { SCRIPTS, DEFAULT_RUN_ALL } from "../lib/scripts";
@@ -120,6 +120,14 @@ export default function LibraryPage() {
     selection, setSelection, toggleTrack, toggleAlbum, toggleArtist, clearSelection, playNow,
   } = useStore();
   const [view, setView] = useState<View>(() => (localStorage.getItem("mlo.defaultView.v2") as View) ?? "grid");
+  // checkboxes (and the batch toolbar they feed) only exist in select mode
+  const [selectMode, setSelectMode] = useState(false);
+  const toggleSelectMode = () => {
+    setSelectMode((v) => {
+      if (v) clearSelection();
+      return !v;
+    });
+  };
   const [preset, setPreset] = useState<Preset>("all");
   const [filterOpen, setFilterOpen] = useState(false);
   const [albumSort, setAlbumSort] = useLocalSort("album");
@@ -448,7 +456,7 @@ const toggleExpand = (path: string) =>
     }
   }
 
-  const albumColSpan = 4 + albumCols.length + 1; // play, checkbox, chevron+cover, cols, actions
+  const albumColSpan = 3 + albumCols.length + (selectMode ? 1 : 0); // checkbox?, chevron+cover, cols, actions
 
   const allAlbumsSelected = sortedAlbums.length > 0 && sortedAlbums.every((a) => selection.albums.includes(a.path));
   const allArtistsSelected = sortedArtists.length > 0 && sortedArtists.every((a) => selection.artists.includes(a.path));
@@ -526,6 +534,13 @@ const toggleExpand = (path: string) =>
           title={selectionCount ? "Statistics for the current selection" : "Library-wide statistics"}
         >
           <BarChart3 className="h-3.5 w-3.5" /> Stats
+        </button>
+        <button
+          className={`btn-ghost !py-1 text-xs ${selectMode ? "!text-accent !border-accent/50" : ""}`}
+          onClick={toggleSelectMode}
+          title="Select mode — show checkboxes for batch actions"
+        >
+          <ListChecks className="h-3.5 w-3.5" /> Select
         </button>
 
         <span className="text-xs text-zinc-500 whitespace-nowrap">
@@ -662,7 +677,7 @@ const toggleExpand = (path: string) =>
                     <AlbumCard
                       key={al.path}
                       al={al}
-                      selectable
+                      selectable={selectMode}
                       selected={sel}
                       onSelect={toggleAlbum}
                     />
@@ -694,28 +709,15 @@ const toggleExpand = (path: string) =>
             return (
               <div key={al.path}>
                 <div
-                  className={`group flex items-center gap-2.5 rounded-md border px-2 py-1.5 cursor-pointer transition-colors ${st.tint} ${sel ? "border-accent/50" : "border-transparent hover:border-border"}`}
+                  className={`group flex items-center gap-2.5 rounded-md px-2 py-1.5 cursor-pointer transition-colors ${st.tint} ${sel ? "bg-accent/10" : "hover:bg-raise/40"}`}
                   onClick={() => toggleExpand(al.path)}
                 >
-                  <button
-                    className="btn-ghost !px-1.5 !py-0.5 opacity-0 group-hover:opacity-100 shrink-0 transition-opacity"
-                    title="Play album"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      useStore.getState().playNow(
-                        tracks.map((t) => ({
-                          path: t.path, file: t.file, albumPath: al.path,
-                          artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
-                        }))
-                      );
-                    }}
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                  </button>
                   <div className={`w-1 self-stretch rounded-sm ${st.edge} shrink-0`} title={st.label} />
-                  <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={sel} onChange={() => toggleAlbum(al.path)} />
-                  </div>
+                  {selectMode && (
+                    <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={sel} onChange={() => toggleAlbum(al.path)} />
+                    </div>
+                  )}
                   <Link
                     to={albumRef(al)}
                     onClick={(e) => e.stopPropagation()}
@@ -762,25 +764,12 @@ const toggleExpand = (path: string) =>
                       const ts = statusFor(!!t.grade_pass, t.audit);
                       const tSel = selection.tracks.includes(t.path);
                       return (
-                        <div key={t.path} className={`group flex items-center gap-2 text-xs py-0.5 rounded ${tSel ? "bg-accent/10" : ""}`}>
-                          <button
-                            className="btn-ghost !px-1 !py-0.5 opacity-0 group-hover:opacity-100 shrink-0 transition-opacity"
-                            title="Play from here"
-                            onClick={() =>
-                              useStore.getState().playNow(
-                                tracks.map((x) => ({
-                                  path: x.path, file: x.file, albumPath: al.path,
-                                  artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: x.tags.TITLE || undefined,
-                                })),
-                                tracks.findIndex((x) => x.path === t.path)
-                              )
-                            }
-                          >
-                            <Play className="h-3 w-3" />
-                          </button>
-                          <div className="shrink-0">
-                            <input type="checkbox" checked={tSel} onChange={() => toggleTrack(t.path)} />
-                          </div>
+                        <div key={t.path} className={`group flex items-center gap-2 text-xs py-0.5 rounded ${tSel ? "bg-accent/10" : "hover:bg-raise/40"}`}>
+                          {selectMode && (
+                            <div className="shrink-0">
+                              <input type="checkbox" checked={tSel} onChange={() => toggleTrack(t.path)} />
+                            </div>
+                          )}
                           <span className={`h-3 w-1 rounded-sm ${ts.edge} shrink-0`} title={ts.label} />
                           <span className="w-8 text-right text-zinc-600 font-mono shrink-0">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</span>
                           <Link to={trackRef(t)} className="truncate hover:text-accent-soft flex-1 min-w-0">
@@ -816,16 +805,17 @@ const toggleExpand = (path: string) =>
 
       {/* ---------------- Albums table ---------------- */}
       {view === "albums" && (
-        <div className="bg-card rounded-lg border border-border overflow-hidden">
+        <div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-panel/60">
+              <thead className="border-b border-border">
                 <tr>
-                  <th className="th w-8">
-                    <input type="checkbox" className="" checked={allAlbumsSelected}
-                      onChange={() => setSelection({ albums: allAlbumsSelected ? [] : sortedAlbums.map((a) => a.path) })} />
-                  </th>
-                  <th className="th w-8"></th>
+                  {selectMode && (
+                    <th className="th w-8">
+                      <input type="checkbox" className="" checked={allAlbumsSelected}
+                        onChange={() => setSelection({ albums: allAlbumsSelected ? [] : sortedAlbums.map((a) => a.path) })} />
+                    </th>
+                  )}
                   <th className="th w-12"></th>
                   {ALBUM_COLS.filter((c) => albumCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={albumSort} sortKey={c.sortKey} onSort={setAlbumSort} />
@@ -858,6 +848,7 @@ const toggleExpand = (path: string) =>
                       onTrackDetails={(t) => setDetailTrack({ track: t, albumPath: row.album.path })}
                       colSpan={albumColSpan}
                       fullDates={fullDates}
+                      selectMode={selectMode}
                     />
                   )
                 )}
@@ -869,16 +860,17 @@ const toggleExpand = (path: string) =>
 
       {/* ---------------- Artists table ---------------- */}
       {view === "artists" && (
-        <div className="bg-card rounded-lg border border-border overflow-hidden">
+        <div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-panel/60">
+              <thead className="border-b border-border">
                 <tr>
-                  <th className="th w-12" title="Play all"></th>
-                  <th className="th w-8">
-                    <input type="checkbox" className="" checked={allArtistsSelected}
-                      onChange={() => setSelection({ artists: allArtistsSelected ? [] : sortedArtists.map((a) => a.path) })} />
-                  </th>
+                  {selectMode && (
+                    <th className="th w-8">
+                      <input type="checkbox" className="" checked={allArtistsSelected}
+                        onChange={() => setSelection({ artists: allArtistsSelected ? [] : sortedArtists.map((a) => a.path) })} />
+                    </th>
+                  )}
                   {ARTIST_COLS.filter((c) => artistCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort} />
                   ))}
@@ -886,23 +878,14 @@ const toggleExpand = (path: string) =>
               </thead>
               <tbody>
                 {sortedArtists.map((a) => {
-                  const all = a.albums.flatMap((al) =>
-                    al.tracks.map((t) => ({
-                      path: t.path, file: t.file, albumPath: al.path,
-                      artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
-                    }))
-                  );
                   const sel = selection.artists.includes(a.path);
                   return (
                     <tr key={a.path} className={`table-row group ${sel ? "bg-accent/15" : ""}`}>
-                      <td className="td">
-                        <button className="btn-ghost !px-1.5 !py-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Play all" onClick={() => playNow(all)}>
-                          <Play className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                      <td className="td pr-0">
-                        <input type="checkbox" className="" checked={sel} onChange={() => toggleArtist(a.path)} />
-                      </td>
+                      {selectMode && (
+                        <td className="td pr-0">
+                          <input type="checkbox" className="" checked={sel} onChange={() => toggleArtist(a.path)} />
+                        </td>
+                      )}
                       <td className="td">
                         <Link to={artistRef(a)} className="font-medium hover:text-accent-soft">
                           {a.name}
@@ -927,16 +910,17 @@ const toggleExpand = (path: string) =>
 
       {/* ---------------- Tracks table ---------------- */}
       {view === "tracks" && (
-        <div className="bg-card rounded-lg border border-border overflow-hidden">
+        <div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-panel/60">
+              <thead className="border-b border-border">
                 <tr>
-                  <th className="th w-12" title="Play"></th>
-                  <th className="th w-8">
-                    <input type="checkbox" className="" checked={allTracksSelected}
-                      onChange={() => setSelection({ tracks: allTracksSelected ? [] : sortedTracks.map((t) => t.path) })} />
-                  </th>
+                  {selectMode && (
+                    <th className="th w-8">
+                      <input type="checkbox" className="" checked={allTracksSelected}
+                        onChange={() => setSelection({ tracks: allTracksSelected ? [] : sortedTracks.map((t) => t.path) })} />
+                    </th>
+                  )}
                   {TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort} />
                   ))}
@@ -957,28 +941,11 @@ const toggleExpand = (path: string) =>
                         )
                       }
                     >
-                      <td className="td" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            className="btn-ghost !px-1.5 !py-1"
-                            title="Play"
-                            onClick={() =>
-                              playNow(
-                                sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist, album: t.album, title: t.tags.TITLE || undefined })),
-                                sortedTracks.findIndex((t) => t.path === tr.path)
-                              )
-                            }
-                          >
-                            <Play className="h-3.5 w-3.5" />
-                          </button>
-                          <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={() => addToPlaylist([tr.path])}>
-                            <ListPlus className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" className="" checked={sel} onChange={() => toggleTrack(tr.path)} />
-                      </td>
+                      {selectMode && (
+                        <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
+                          <input type="checkbox" className="" checked={sel} onChange={() => toggleTrack(tr.path)} />
+                        </td>
+                      )}
                       {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}</td>}
                       {trackCols.includes("title") && (
                         <td className="td max-w-[260px]">
@@ -1051,6 +1018,7 @@ function AlbumRowGroup({
   onTrackDetails,
   colSpan,
   fullDates,
+  selectMode,
 }: {
   album: FlatAlbum;
   expanded: boolean;
@@ -1066,6 +1034,7 @@ function AlbumRowGroup({
   onTrackDetails: (t: Track) => void;
   colSpan: number;
   fullDates: boolean;
+  selectMode: boolean;
 }) {
   const tracks = [...(album.tracks ?? [])].sort((a, b) =>
     (a.discnumber ?? 99) - (b.discnumber ?? 99) ||
@@ -1076,25 +1045,11 @@ function AlbumRowGroup({
   return (
     <>
       <tr className={`table-row group ${selected ? "bg-accent/15" : ""}`} onClick={onToggle}>
-        <td className="td" onClick={(e) => e.stopPropagation()}>
-          <button
-            className="btn-ghost !px-1.5 !py-1 opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Play album"
-            onClick={() =>
-              useStore.getState().playNow(
-                tracks.map((t) => ({
-                  path: t.path, file: t.file, albumPath: album.path,
-                  artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
-                }))
-              )
-            }
-          >
-            <Play className="h-3.5 w-3.5" />
-          </button>
-        </td>
-        <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
-          <input type="checkbox" className="" checked={selected} onChange={onToggleSel} />
-        </td>
+        {selectMode && (
+          <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
+            <input type="checkbox" className="" checked={selected} onChange={onToggleSel} />
+          </td>
+        )}
         <td className="td pr-0">
           <button className="p-1 text-zinc-500 hover:text-white" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
             {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -1135,20 +1090,6 @@ function AlbumRowGroup({
         {visibleCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{album.source_summary ?? "—"}</td>}
         <td className="td text-right">
           <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-            <button
-              className="btn-ghost !px-1.5 !py-1"
-              title="Play album"
-              onClick={() =>
-                useStore.getState().playNow(
-                  tracks.map((t) => ({
-                    path: t.path, file: t.file, albumPath: album.path,
-                    artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
-                  }))
-                )
-              }
-            >
-              <Play className="h-3.5 w-3.5" />
-            </button>
             <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={onPlaylist}>
               <ListPlus className="h-3.5 w-3.5" />
             </button>
@@ -1162,10 +1103,9 @@ function AlbumRowGroup({
         <tr className="bg-panel/30">
           <td colSpan={colSpan} className="p-0">
             <table className="w-full">
-              <thead className="bg-panel/60">
+              <thead className="border-b border-border">
                 <tr>
-                  <th className="th w-12" title="Play from here"></th>
-                  <th className="th w-8"></th>
+                  {selectMode && <th className="th w-8"></th>}
                   <th className="th w-10">#</th>
                   <th className="th w-10"></th>
                   <th className="th">Title</th>
@@ -1182,8 +1122,8 @@ function AlbumRowGroup({
                   return groups.map((g) => (
                     <Fragment key={g.disc ?? 0}>
                       {multiDisc && (
-                        <tr className="bg-panel/60">
-                          <td colSpan={9} className="td text-[10px] uppercase tracking-wider text-zinc-500">
+                        <tr>
+                          <td colSpan={selectMode ? 8 : 7} className="td text-[10px] uppercase tracking-wider text-zinc-500">
                             Disc {g.disc ?? "?"}
                           </td>
                         </tr>
@@ -1203,26 +1143,11 @@ function AlbumRowGroup({
                       )
                     }
                   >
-                    <td className="td" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className="btn-ghost !px-1.5 !py-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Play from here"
-                        onClick={() =>
-                          useStore.getState().playNow(
-                            tracks.map((x) => ({
-                              path: x.path, file: x.file, albumPath: album.path,
-                              artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: x.tags.TITLE || undefined,
-                            })),
-                            tracks.findIndex((x) => x.path === t.path)
-                          )
-                        }
-                      >
-                        <Play className="h-3.5 w-3.5" />
-                      </button>
-                    </td>
-                    <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
-                      <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
-                    </td>
+                    {selectMode && (
+                      <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
+                      </td>
+                    )}
                     <td className="td text-zinc-600">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</td>
                     <td className="td pr-0">
                       {t.cover_file && (

@@ -23,7 +23,7 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
   const artist = artistName ?? al.artist ?? al.album_artist ?? al.path.split(/[\\/]/).slice(0, -1).pop() ?? "";
   const ms = mediaShort(al.media || al.meta?.MEDIA);
   return (
-    <div className={`group relative rounded-xl p-2 transition-colors ${selected ? "bg-accent/10 ring-1 ring-accent/30" : "hover:bg-panel/70"}`}>
+    <div className={`group relative rounded-xl p-2 transition-all hover:-translate-y-0.5 hover:bg-panel/70 ${selected ? "bg-accent/10 ring-1 ring-accent/30" : ""}`}>
       <div className="relative">
         <Link to={albumRef(al)} title="Open album page" className="block">
           <CoverImg
