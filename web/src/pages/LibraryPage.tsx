@@ -701,7 +701,7 @@ const toggleExpand = (path: string) =>
               <Fragment key={sec.artist ?? "all"}>
                 {sec.artist !== null && (
                   <div className="col-span-full mt-3 first:mt-0">
-                    <div className="text-sm font-bold uppercase tracking-wider text-zinc-300">{sec.artist}</div>
+                    <div className="text-sm font-bold tracking-wide text-zinc-300">{sec.artist}</div>
                     <div className="h-px bg-border mt-1" />
                   </div>
                 )}
@@ -863,7 +863,7 @@ const toggleExpand = (path: string) =>
                 {(groupByArtist ? albumRows : sortedAlbums.map((al) => ({ kind: "album" as const, album: al }))).map((row) =>
                   row.kind === "header" ? (
                     <tr key={`h-${row.artist}`} className="bg-panel/70">
-                      <td colSpan={albumColSpan} className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-zinc-300">
+                      <td colSpan={albumColSpan} className="px-3 py-1.5 text-xs font-bold tracking-wide text-zinc-300">
                         {row.artist}
                       </td>
                     </tr>
