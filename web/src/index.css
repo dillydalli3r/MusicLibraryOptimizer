@@ -30,12 +30,13 @@ input[type="checkbox"] {
   accent-color: rgb(var(--accent));
 }
 
-/* ---- Range sliders: slim accent track + round thumb ---- */
+/* ---- Range sliders: slim accent track + squared thumb (the app's
+   rectangular language applies to controls too) ---- */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
-  border-radius: 9999px;
+  border-radius: 2px;
   background: #27272a;
   outline: none;
   cursor: pointer;
@@ -45,7 +46,7 @@ input[type="range"]::-webkit-slider-thumb {
   appearance: none;
   width: 12px;
   height: 12px;
-  border-radius: 9999px;
+  border-radius: 3px;
   background: rgb(var(--accent));
   border: none;
   box-shadow: 0 0 0 3px rgb(var(--accent) / 0.15);
@@ -57,14 +58,14 @@ input[type="range"]::-webkit-slider-thumb:hover {
 input[type="range"]::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  border-radius: 9999px;
+  border-radius: 3px;
   background: rgb(var(--accent));
   border: none;
   box-shadow: 0 0 0 3px rgb(var(--accent) / 0.15);
 }
 input[type="range"]::-moz-range-track {
   height: 4px;
-  border-radius: 9999px;
+  border-radius: 2px;
   background: #27272a;
 }
 
@@ -97,7 +98,7 @@ input[type="range"]:focus-visible {
 }
 ::-webkit-scrollbar-thumb {
   background: #2c2c33;
-  border-radius: 5px;
+  border-radius: 3px;
   border: 2px solid #0a0a0c;
 }
 ::-webkit-scrollbar-thumb:hover {

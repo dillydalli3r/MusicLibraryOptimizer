@@ -190,7 +190,7 @@ export default function App() {
           <img
             src="/icon.png"
             alt="la musica"
-            className="h-7 w-7 rounded-lg object-cover ring-1 ring-border shadow-sm shrink-0"
+            className="h-7 w-7 rounded-md object-cover ring-1 ring-border shadow-sm shrink-0"
           />
           {!collapsed && <span className="flex-1 font-bold tracking-tight text-sm truncate">la musica</span>}
           <button

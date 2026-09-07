@@ -146,7 +146,7 @@ export default function SetupPage() {
           <img
             src="/icon.png"
             alt="la musica"
-            className="h-9 w-9 rounded-lg object-cover ring-1 ring-border shadow-sm"
+            className="h-9 w-9 rounded-md object-cover ring-1 ring-border shadow-sm"
           />
           <div>
             <div className="font-bold tracking-wide">la musica</div>
@@ -158,7 +158,7 @@ export default function SetupPage() {
           {([1, 2, 3, 4] as Step[]).map((s) => (
             <div key={s} className="flex items-center gap-2">
               <span
-                className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] border ${
+                className={`h-5 w-5 rounded-sm flex items-center justify-center text-[10px] border ${
                   step === s ? "bg-accent text-[var(--accent-fg)] border-accent" : step > s ? "bg-emerald-900/60 text-emerald-300 border-emerald-800" : "bg-panel border-border text-zinc-500"
                 }`}
               >

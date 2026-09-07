@@ -7,6 +7,11 @@ import { fmtDuration } from "../pages/LibraryPage";
 import NowPlayingView from "./NowPlayingView";
 import TrackDownloadExport from "./TrackDownloadExport";
 
+/** Thin vertical rule separating functional groups in the bar. */
+function BarDivider() {
+  return <div className="w-px h-6 bg-border/80 shrink-0" aria-hidden />;
+}
+
 export default function PlayerBar() {
   const { queue, index, setIndex, playing, setPlaying, queueId, vol, setVol } = useStore();
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -20,6 +25,7 @@ export default function PlayerBar() {
   const qc = useQueryClient();
 
   const current = queue[index] ?? null;
+  const idle = !current;
 
   // Queue entries built outside the library pages (e.g. .m3u8 playlist rows)
   // carry no title — fetch the tag lazily so the bar shows the song title,
@@ -229,228 +235,255 @@ export default function PlayerBar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue.length, index, shuffle, loop]);
 
-  if (!current) {
-    return (
-      <div className="shrink-0 px-3 pb-3 pt-1">
-        <div className="h-12 rounded-2xl border border-border bg-panel flex items-center px-4 text-xs text-zinc-600">
-          No track playing — use Play on an album, artist or track.
-        </div>
-      </div>
-    );
-  }
+  const togglePlay = () => {
+    const a = audioRef.current;
+    if (!a || !current) return;
+    if (playing) {
+      a.pause();
+      setPlaying(null);
+    } else {
+      a.play().catch(() => {});
+      setPlaying(current.path);
+    }
+  };
 
+  // ONE bar for both states — same height, radius and layout whether or not
+  // something is playing; idle just disables the transport and shows a hint.
   return (
-    // Floating rounded bar: margins + pill radius instead of a full-bleed
-    // strip, lifted with a border and shadow. Center column: the seek bar
-    // sits ABOVE the transport controls; the right cluster keeps like /
-    // volume / fullscreen.
     <div className="shrink-0 px-3 pb-3 pt-1">
-    <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 px-4">
-      <audio
-        ref={audioRef}
-        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-      />
+      <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 px-4">
+        <audio
+          ref={audioRef}
+          onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        />
 
-      <button
-        className="relative h-16 w-16 rounded-lg overflow-hidden border border-border bg-raise shrink-0 flex items-center justify-center hover:scale-[1.03] transition-transform"
-        onClick={() => setFullscreen(true)}
-        title="Album art — click for the fullscreen player"
-      >
-        {!thumbFailed ? (
-          <img
-            src={api.coverUrl(current.albumPath)}
-            alt=""
-            onError={() => setThumbFailed(true)}
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <Disc3 className="h-4 w-4 text-zinc-600" />
-        )}
-      </button>
+        {/* left: cover art (or placeholder) + title block */}
+        <button
+          className={`relative h-16 w-16 rounded-lg overflow-hidden border border-border bg-raise shrink-0 flex items-center justify-center ${
+            idle ? "cursor-default" : "hover:scale-[1.03] transition-transform"
+          }`}
+          onClick={() => !idle && setFullscreen(true)}
+          title={idle ? "Nothing playing" : "Album art — click for the fullscreen player"}
+          disabled={idle}
+        >
+          {current && !thumbFailed ? (
+            <img
+              src={api.coverUrl(current.albumPath)}
+              alt=""
+              onError={() => setThumbFailed(true)}
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <Disc3 className={`h-5 w-5 ${idle ? "text-zinc-700" : "text-zinc-600"}`} />
+          )}
+        </button>
 
-      <div className="min-w-0 w-52 shrink-0">
-        <div className="text-sm truncate font-semibold">{displayTitle}</div>
-        <div className="text-[11px] text-zinc-500 truncate">
-          {[current.artist ?? current.albumPath.split("/").pop(), current.album]
-            .filter(Boolean)
-            .join(" · ")}
-          <span className="ml-2">{queue.length > 1 ? `${index + 1}/${queue.length}` : ""}</span>
-          {techStr && (
-            <span className="ml-2 font-mono text-[10px] text-zinc-600" title="Bitrate · sample rate · bit depth">
-              {techStr}
-            </span>
+        <div className="min-w-0 w-52 shrink-0">
+          {current ? (
+            <>
+              <div className="text-sm truncate font-semibold">{displayTitle}</div>
+              <div className="text-[11px] text-zinc-500 truncate">
+                {[current.artist ?? current.albumPath.split("/").pop(), current.album]
+                  .filter(Boolean)
+                  .join(" · ")}
+                <span className="ml-2">{queue.length > 1 ? `${index + 1}/${queue.length}` : ""}</span>
+                {techStr && (
+                  <span className="ml-2 font-mono text-[10px] text-zinc-600" title="Bitrate · sample rate · bit depth">
+                    {techStr}
+                  </span>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-sm truncate font-semibold text-zinc-500">Nothing playing</div>
+              <div className="text-[11px] text-zinc-600 truncate">
+                Play an album, artist or playlist to start
+              </div>
+            </>
           )}
         </div>
-      </div>
 
-      {/* center: seek bar above the transport controls */}
-      <div className="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5">
-        <div className="flex items-center gap-2 w-full max-w-2xl text-[10px] text-zinc-500 tabular-nums">
-          <span className="w-10 text-right shrink-0">{fmtDuration(time)}</span>
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step={0.05}
-            value={Math.min(time, duration || 0)}
-            onChange={(e) => {
+        {/* center: seek bar above the transport controls */}
+        <div className="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5">
+          <div className="flex items-center gap-2 w-full max-w-2xl text-[10px] text-zinc-500 tabular-nums">
+            <span className="w-10 text-right shrink-0">{fmtDuration(time)}</span>
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={0.05}
+              value={Math.min(time, duration || 0)}
+              onChange={(e) => {
+                const a = audioRef.current;
+                if (!a) return;
+                a.currentTime = Number(e.target.value);
+                setTime(Number(e.target.value));
+              }}
+              className="flex-1"
+              disabled={idle}
+              title="Seek — ← / → nudge 5s"
+            />
+            <span className="w-10 shrink-0">{fmtDuration(duration)}</span>
+          </div>
+          <div className="flex items-center gap-0.5">
+            <button
+              className={`p-2 rounded-lg hover:bg-raise ${shuffle ? "text-accent" : "text-zinc-500"}`}
+              onClick={() => setShuffle(!shuffle)}
+              disabled={idle}
+              title="Shuffle"
+            >
+              <Shuffle className="h-4 w-4" />
+            </button>
+            <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(-1)} disabled={idle}>
+              <SkipBack className="h-4 w-4" />
+            </button>
+            <button
+              className={`p-2.5 rounded-lg bg-accent on-accent hover:bg-accent-soft active:scale-95 transition-transform ${
+                idle ? "opacity-40 pointer-events-none" : ""
+              }`}
+              onClick={togglePlay}
+              disabled={idle}
+            >
+              {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
+            </button>
+            <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(1)} disabled={idle}>
+              <SkipForward className="h-4 w-4" />
+            </button>
+            <button
+              className={`p-2 rounded-lg hover:bg-raise ${loop ? "text-accent" : "text-zinc-500"}`}
+              onClick={() => setLoop(!loop)}
+              disabled={idle}
+              title="Repeat one"
+            >
+              <Repeat className="h-4 w-4" />
+            </button>
+            <button
+              className={`p-1.5 rounded-lg hover:bg-raise text-xs font-mono text-zinc-400 min-w-[46px] ${
+                idle ? "opacity-40 pointer-events-none" : ""
+              }`}
+              onClick={cycleSpeed}
+              disabled={idle}
+              title="Playback speed — [ slower · ] faster · 0 reset to 1×"
+            >
+              {fmtSpeed(speed)}
+            </button>
+          </div>
+        </div>
+
+        {/* right cluster, grouped: track actions · volume · view */}
+        <div className="flex items-center gap-1 shrink-0">
+          <div className="relative">
+            <button
+              className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
+                plOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
+              } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+              onClick={() => setPlOpen(!plOpen)}
+              disabled={idle}
+              title="Add to playlist"
+              aria-label="Add to playlist"
+            >
+              <ListPlus className="h-4 w-4" />
+            </button>
+            {plOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setPlOpen(false)} />
+                <div className="absolute right-0 bottom-full mb-2 z-50 w-56 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-64 overflow-auto">
+                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Add to playlist</div>
+                  <button
+                    className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-accent-soft"
+                    onClick={newPlaylistAndAdd}
+                  >
+                    <ListPlus className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" /> New playlist…
+                  </button>
+                  {(playlists ?? []).map((p) => (
+                    <button
+                      key={p.id}
+                      className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300 flex items-center justify-between gap-2"
+                      onClick={() => addToPlaylist(p.id, p.name)}
+                    >
+                      <span className="truncate">{p.name}</span>
+                      <span className="text-[10px] text-zinc-600 shrink-0">{p.track_count}</span>
+                    </button>
+                  ))}
+                  {(playlists ?? []).length === 0 && (
+                    <div className="text-[10px] text-zinc-600 px-2 py-1">No playlists yet — create one above.</div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {current && <TrackDownloadExport path={current.path} iconOnly />}
+
+          <button
+            className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
+              liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"
+            } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+            onClick={toggleLike}
+            disabled={idle}
+            title={liked ? "Unlike" : "Like this track"}
+          >
+            <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
+          </button>
+
+          <BarDivider />
+
+          <div className="flex items-center gap-2 text-zinc-400 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
+            <Volume2 className="h-4 w-4 text-zinc-500" />
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={vol}
+              onChange={(e) => setVol(Number(e.target.value))}
+              className="w-28"
+              title="Volume — shared by the whole app"
+            />
+          </div>
+
+          <BarDivider />
+
+          <button
+            className={`p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white shrink-0 ${
+              idle ? "opacity-40 pointer-events-none" : ""
+            }`}
+            onClick={() => setFullscreen(true)}
+            disabled={idle}
+            title="Fullscreen player with lyrics"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
+        </div>
+
+        {fullscreen && current && (
+          <NowPlayingView
+            current={current}
+            queuePos={queue.length > 1 ? `${index + 1}/${queue.length}` : ""}
+            playing={!!playing}
+            time={time}
+            duration={duration}
+            shuffle={shuffle}
+            loop={loop}
+            liked={liked}
+            onTogglePlay={togglePlay}
+            onSeek={(t) => {
               const a = audioRef.current;
               if (!a) return;
-              a.currentTime = Number(e.target.value);
-              setTime(Number(e.target.value));
+              a.currentTime = t;
+              setTime(t);
             }}
-            className="flex-1"
-            title="Seek — ← / → nudge 5s"
+            onStep={step}
+            onToggleShuffle={() => setShuffle(!shuffle)}
+            onToggleLoop={() => setLoop(!loop)}
+            onToggleLike={toggleLike}
+            onClose={() => setFullscreen(false)}
+            getAudioTime={() => audioRef.current?.currentTime ?? 0}
           />
-          <span className="w-10 shrink-0">{fmtDuration(duration)}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <button className={`p-2 rounded-lg hover:bg-raise ${shuffle ? "text-accent" : "text-zinc-500"}`} onClick={() => setShuffle(!shuffle)} title="Shuffle">
-            <Shuffle className="h-4 w-4" />
-          </button>
-          <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(-1)}>
-            <SkipBack className="h-4 w-4" />
-          </button>
-          <button
-            className="p-2.5 rounded-lg bg-accent on-accent hover:bg-accent-soft active:scale-95 transition-transform"
-            onClick={() => {
-              const a = audioRef.current;
-              if (!a) return;
-              if (playing) {
-                a.pause();
-                setPlaying(null);
-              } else {
-                a.play().catch(() => {});
-                setPlaying(current.path);
-              }
-            }}
-          >
-            {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
-          </button>
-          <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(1)}>
-            <SkipForward className="h-4 w-4" />
-          </button>
-          <button className={`p-2 rounded-lg hover:bg-raise ${loop ? "text-accent" : "text-zinc-500"}`} onClick={() => setLoop(!loop)} title="Repeat one">
-            <Repeat className="h-4 w-4" />
-          </button>
-          <button
-            className="p-1.5 rounded-lg hover:bg-raise text-xs font-mono text-zinc-400 min-w-[46px]"
-            onClick={cycleSpeed}
-            title="Playback speed — [ slower · ] faster · 0 reset to 1×"
-          >
-            {fmtSpeed(speed)}
-          </button>
-        </div>
-      </div>
-
-      {/* right cluster: add to playlist · download/export · like · volume · fullscreen */}
-      <div className="relative">
-        <button
-          className={`p-2 rounded-lg hover:bg-raise shrink-0 ${plOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"}`}
-          onClick={() => setPlOpen(!plOpen)}
-          title="Add to playlist"
-          aria-label="Add to playlist"
-        >
-          <ListPlus className="h-4 w-4" />
-        </button>
-        {plOpen && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setPlOpen(false)} />
-            <div className="absolute right-0 bottom-full mb-2 z-50 w-56 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-64 overflow-auto">
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Add to playlist</div>
-              <button
-                className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-accent-soft"
-                onClick={newPlaylistAndAdd}
-              >
-                <ListPlus className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" /> New playlist…
-              </button>
-              {(playlists ?? []).map((p) => (
-                <button
-                  key={p.id}
-                  className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300 flex items-center justify-between gap-2"
-                  onClick={() => addToPlaylist(p.id, p.name)}
-                >
-                  <span className="truncate">{p.name}</span>
-                  <span className="text-[10px] text-zinc-600 shrink-0">{p.track_count}</span>
-                </button>
-              ))}
-              {(playlists ?? []).length === 0 && (
-                <div className="text-[10px] text-zinc-600 px-2 py-1">No playlists yet — create one above.</div>
-              )}
-            </div>
-          </>
         )}
       </div>
-
-      <TrackDownloadExport path={current.path} iconOnly />
-
-      <button
-        className={`p-2 rounded-lg hover:bg-raise shrink-0 ${liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"}`}
-        onClick={toggleLike}
-        title={liked ? "Unlike" : "Like this track"}
-      >
-        <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
-      </button>
-
-      <div className="flex items-center gap-2 text-zinc-400 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
-        <Volume2 className="h-4 w-4 text-zinc-500" />
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={vol}
-          onChange={(e) => setVol(Number(e.target.value))}
-          className="w-32"
-          title="Volume — shared by the whole app"
-        />
-      </div>
-
-      <button
-        className="p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white shrink-0"
-        onClick={() => setFullscreen(true)}
-        title="Fullscreen player with lyrics"
-      >
-        <Maximize2 className="h-4 w-4" />
-      </button>
-
-      {fullscreen && (
-        <NowPlayingView
-          current={current}
-          queuePos={queue.length > 1 ? `${index + 1}/${queue.length}` : ""}
-          playing={!!playing}
-          time={time}
-          duration={duration}
-          shuffle={shuffle}
-          loop={loop}
-          liked={liked}
-          onTogglePlay={() => {
-            const a = audioRef.current;
-            if (!a) return;
-            if (playing) {
-              a.pause();
-              setPlaying(null);
-            } else {
-              a.play().catch(() => {});
-              setPlaying(current.path);
-            }
-          }}
-          onSeek={(t) => {
-            const a = audioRef.current;
-            if (!a) return;
-            a.currentTime = t;
-            setTime(t);
-          }}
-          onStep={step}
-          onToggleShuffle={() => setShuffle(!shuffle)}
-          onToggleLoop={() => setLoop(!loop)}
-          onToggleLike={toggleLike}
-          onClose={() => setFullscreen(false)}
-          getAudioTime={() => audioRef.current?.currentTime ?? 0}
-        />
-      )}
-    </div>
     </div>
   );
 }

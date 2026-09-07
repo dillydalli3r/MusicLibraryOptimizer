@@ -3,6 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Link2, Loader2 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
+import mbLogo from "../assets/musicbrainz.png";
+import rymLogo from "../assets/rym.png";
 
 /* MusicBrainz / RateYourMusic identity links.
  *
@@ -54,33 +56,29 @@ const MB_URL: Record<string, (v: string) => string> = {
   MUSICBRAINZ_ALBUMARTISTID: (v) => `https://musicbrainz.org/artist/${v}`,
 };
 
-/** MusicBrainz mark: the stylized eighth-note in a circle. */
+/** Official MusicBrainz mark (2016 hexagon logo). */
 export function MbIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
-      <path d="M12 1.5C6.2 1.5 1.5 6.2 1.5 12S6.2 22.5 12 22.5 22.5 17.8 22.5 12 17.8 1.5 12 1.5Zm0 2.1a8.4 8.4 0 1 1 0 16.8 8.4 8.4 0 0 1 0-16.8Z" />
-      <path d="M10.2 7.2 16.3 5.6v8.6a2.2 2.2 0 1 1-1.4-2V8.9l-3.3.9v6.4a2.2 2.2 0 1 1-1.4-2V7.2Z" />
-    </svg>
+    <img
+      src={mbLogo}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className={`${className} object-contain select-none`}
+    />
   );
 }
 
-/** RateYourMusic mark: the angled "RYM" wordmark block. */
+/** Official RateYourMusic mark (wave logo). */
 export function RymIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 32 24" className={className} fill="currentColor" aria-hidden>
-      <rect x="1" y="4" width="30" height="16" rx="3" fill="none" stroke="currentColor" strokeWidth="2" />
-      <text
-        x="16"
-        y="15.8"
-        textAnchor="middle"
-        fontSize="8.5"
-        fontWeight="800"
-        fontFamily="ui-sans-serif, system-ui"
-        fill="currentColor"
-      >
-        RYM
-      </text>
-    </svg>
+    <img
+      src={rymLogo}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className={`${className} object-contain select-none`}
+    />
   );
 }
 
@@ -135,9 +133,9 @@ export function LinkChips({ tags, only }: { tags: Record<string, unknown>; only?
           target="_blank"
           rel="noreferrer"
           title={`Open ${it.label}`}
-          className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-raise transition-colors inline-flex items-center"
+          className="p-1.5 rounded-lg hover:bg-raise transition-transform hover:scale-110 inline-flex items-center"
         >
-          {it.service === "mb" ? <MbIcon /> : <RymIcon className="h-4 w-5" />}
+          {it.service === "mb" ? <MbIcon className="h-4 w-4" /> : <RymIcon className="h-4 w-4" />}
         </a>
       ))}
     </span>
@@ -208,7 +206,7 @@ export function LinkEditorButton({
   return (
     <div className="relative">
       <button
-        className={iconOnly ? "p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white" : "btn-ghost !py-1.5 text-xs"}
+        className={iconOnly ? "p-2 rounded-md border border-border bg-panel/60 text-zinc-400 hover:text-white hover:bg-raise transition-colors" : "btn-ghost !py-1.5 text-xs"}
         onClick={() => setOpen(!open)}
         title="Paste MusicBrainz / RateYourMusic links"
         aria-label="Links"

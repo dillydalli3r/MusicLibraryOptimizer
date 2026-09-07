@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Music2, BarChart3 } from "lucide-react";
 import { api } from "../api";
 import { LinkChips, LinkEditorButton } from "../components/Links";
-import { EmptyState, GradeBadge, ScoreRing } from "../components/Badges";
+import { EmptyState, GradeBadge, GradeBar } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
 import FavHeart from "../components/FavHeart";
 import { albumRef, artistMbid } from "../lib/refs";
@@ -99,7 +99,7 @@ export default function ArtistPage() {
               coverFile={al.cover_file}
               wrapperClass="h-14 w-14 rounded-md bg-raise border border-border overflow-hidden shrink-0"
             />
-            <ScoreRing pct={al.grade_pct} size={40} />
+            <GradeBar pct={al.grade_pct} />
             <div className="flex-1 min-w-0">
               <Link to={albumRef(al)} className="font-semibold hover:text-accent-soft">
                 {al.meta?.ALBUM ?? al.path.split("/").pop()}

@@ -18,13 +18,15 @@ export function auditFails(audit: string | null | undefined): boolean {
 }
 
 export function statusFor(pass: boolean, audit: string | null | undefined): TrackStatus {
+  // Grading marks stay deliberately quiet: a passed album is barely tinted,
+  // failures get a muted red — details live in hover titles, not loud chips.
   if (!pass)
-    return { key: "fail", label: "FAIL — grading found problems", edge: "bg-red-500", tint: "bg-red-950/25", text: "text-red-300" };
+    return { key: "fail", label: "FAIL — grading found problems", edge: "bg-red-500/70", tint: "bg-red-950/20", text: "text-red-400/80" };
   if (auditFails(audit)) {
     const a = (audit ?? "").trim().toUpperCase();
-    return { key: "fail", label: `FAIL — audit ${a}`, edge: "bg-red-500", tint: "bg-red-950/25", text: "text-red-300" };
+    return { key: "fail", label: `FAIL — audit ${a}`, edge: "bg-red-500/70", tint: "bg-red-950/20", text: "text-red-400/80" };
   }
-  return { key: "pass", label: "PASS", edge: "bg-emerald-500", tint: "", text: "text-emerald-300" };
+  return { key: "pass", label: "PASS", edge: "bg-emerald-600/50", tint: "", text: "text-emerald-400/60" };
 }
 
 /** Tiny mono grade sliver: just "PASS" or "FAIL" (audit detail on hover). */

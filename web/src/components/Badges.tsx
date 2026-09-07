@@ -1,7 +1,8 @@
 import { Check, X, Disc3, CircleAlert } from "lucide-react";
 
-/** The one condensed grade verdict: PASS or FAIL. `score` (the old
- * percentage) and `audit` survive only as hover details. */
+/** The one condensed grade verdict: a small check (pass) or cross (fail)
+ * and nothing else — grading stays out of the way; `score` (the old
+ * percentage) and `audit` survive as hover details. */
 export function GradeBadge({
   pass,
   score,
@@ -13,37 +14,37 @@ export function GradeBadge({
   audit?: string | null;
   size?: "sm" | "md";
 }) {
-  const cls = size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-xs";
   const detail: string[] = [];
   if (score != null && !pass) detail.push(`${score}% of checks passed`);
   const a = (audit ?? "").trim().toUpperCase();
   if (a) detail.push(`audit ${a}`);
   return (
     <span
-      className={`chip ${cls} font-semibold ${
-        pass
-          ? "bg-green-900/60 text-green-300 border border-green-800"
-          : "bg-red-900/50 text-red-300 border border-red-900"
+      className={`inline-flex items-center shrink-0 ${
+        pass ? "text-emerald-600/70" : "text-red-400/90"
       }`}
       title={detail.length ? detail.join(" · ") : pass ? "All checks passed" : "Grading failed — see details"}
     >
-      {pass ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-      {pass ? "PASS" : "FAIL"}
+      {pass ? (
+        <Check className={size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5"} />
+      ) : (
+        <X className={size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5"} />
+      )}
     </span>
   );
 }
 
 export function AuditBadge({ audit, size = "md" }: { audit: string | null; size?: "sm" | "md" }) {
-  const cls = size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-xs";
+  const cls = size === "sm" ? "text-[9px]" : "text-[10px]";
   switch ((audit || "").toUpperCase()) {
     case "REAL":
-      return <span className={`chip ${cls} bg-emerald-900/60 text-emerald-300 border border-emerald-800`}>AUDIT REAL</span>;
+      return <span className={`${cls} font-mono text-emerald-600/60`} title="Audio audit: REAL">REAL</span>;
     case "FAKE":
-      return <span className={`chip ${cls} bg-red-900/50 text-red-300 border border-red-900`}>AUDIT FAKE</span>;
+      return <span className={`${cls} font-mono text-red-400/80`} title="Audio audit: FAKE">FAKE</span>;
     case "MIX":
-      return <span className={`chip ${cls} bg-amber-900/50 text-amber-300 border border-amber-900`}>AUDIT MIX</span>;
+      return <span className={`${cls} font-mono text-amber-400/70`} title="Audio audit: MIX">MIX</span>;
     default:
-      return <span className={`chip ${cls} bg-zinc-800 text-zinc-500 border border-border`}>AUDIT —</span>;
+      return <span className={`${cls} font-mono text-zinc-700`} title="Not audited yet">AUDIT —</span>;
   }
 }
 
@@ -91,8 +92,23 @@ export function InstrumentalBadge({ value }: { value: string | null | undefined 
   return null;
 }
 
-export function ScoreRing({ pct, size = 44 }: { pct: number | null; size?: number }) {
-  const r = (size - 6) / 2;
+/** Linear grade meter (rectangular language — no progress rings): a slim
+ * bar filled by the % of checks passed, quiet colors, details on hover. */
+export function GradeBar({ pct, width = 64 }: { pct: number | null; width?: number }) {
+  const v = Math.max(0, Math.min(100, pct ?? 0));
+  const color = v >= 100 ? "bg-emerald-600/60" : v >= 80 ? "bg-amber-500/60" : "bg-red-500/70";
+  return (
+    <span
+      className="inline-block h-1 rounded-sm bg-border/80 overflow-hidden align-middle shrink-0"
+      style={{ width }}
+      title={pct == null ? "Not graded" : `${pct}% of checks passed`}
+    >
+      <span className={`block h-full ${color}`} style={{ width: `${v}%` }} />
+    </span>
+  );
+}
+
+export function ScoreRing({ pct, size = 44 }: { pct: number | null; size?: number }) {  const r = (size - 6) / 2;
   const c = 2 * Math.PI * r;
   const v = pct ?? 0;
   const ok = v >= 100;

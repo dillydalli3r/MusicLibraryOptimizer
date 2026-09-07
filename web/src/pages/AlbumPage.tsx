@@ -101,6 +101,11 @@ export default function AlbumPage() {
     qc.invalidateQueries({ queryKey: ["library"] });
   };
 
+  // One shared square icon-button style for the header action row — play is
+  // the only accent-filled button, everything else stays quiet and boxed.
+  const iconBtn =
+    "p-2 rounded-md border border-border bg-panel/60 text-zinc-400 hover:text-white hover:bg-raise transition-colors";
+
   /** The library artist page for this album's artist: by album-artist MBID
    * when tagged, else the artist folder (the album's parent directory). */
   const artistHref = data.meta?.MUSICBRAINZ_ALBUMARTISTID
@@ -340,7 +345,7 @@ export default function AlbumPage() {
             <h1 className="text-3xl font-bold tracking-tight truncate">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
             {/* verdict sits right of the title — click for the problems */}
             <button
-              className={`h-2.5 w-2.5 rounded-full shrink-0 ${verdictPass ? "bg-emerald-400" : "bg-red-500"}`}
+              className={`h-2 w-2 rounded-[1px] shrink-0 transition-opacity ${verdictPass ? "bg-emerald-500/70" : "bg-red-500/80"}`}
               title={verdictPass ? `Pass — ${data.grade_pct ?? "?"}% of checks` : `Fail — ${data.grade_pct ?? "?"}% · ${issueEntries.length} problem type(s)`}
               onClick={() => setIssuesOpen(!issuesOpen)}
             />
@@ -364,7 +369,7 @@ export default function AlbumPage() {
           {issueEntries.length > 0 && (
             <div className="mt-2.5">
               <button
-                className="inline-flex items-center gap-1.5 text-xs text-red-300/90 hover:text-red-200"
+                className="inline-flex items-center gap-1.5 text-xs text-red-400/80 hover:text-red-300"
                 onClick={() => setIssuesOpen(!issuesOpen)}
               >
                 <CircleAlert className="h-3.5 w-3.5" />
@@ -405,7 +410,7 @@ export default function AlbumPage() {
             />
             <span className="w-px h-5 bg-border mx-0.5" />
             <button
-              className="btn-primary !p-2.5"
+              className="btn-primary !p-2.5 !rounded-md"
               onClick={() => playNow(queueTracks)}
               title="Play the album from the top"
               aria-label="Play album"
@@ -422,10 +427,11 @@ export default function AlbumPage() {
               kind="album"
               id={data.path}
               mbid={data.meta?.MUSICBRAINZ_ALBUMID}
-              className="!p-2 border border-border rounded-lg hover:!bg-raise"
+              className="!p-2 !rounded-md border border-border bg-panel/60 hover:!bg-raise"
               iconClass="h-4 w-4"
             />
             <OverflowMenu
+              buttonClass={iconBtn}
               buttonTitle="All album actions"
               sections={[
                 {
@@ -606,9 +612,9 @@ export default function AlbumPage() {
                     {multiDisc && (
                       <span className="text-[9px] text-zinc-600 uppercase tracking-wide">cd{g.disc ?? "?"}</span>
                     )}
-                    {/* verdict dot — click for grading & audit details */}
+                    {/* verdict mark — click for grading & audit details */}
                     <button
-                      className={`h-2 w-2 rounded-full shrink-0 ${verdictTrack(tr) ? "bg-emerald-400/80" : "bg-red-500"}`}
+                      className={`h-1.5 w-1.5 rounded-[1px] shrink-0 ${verdictTrack(tr) ? "bg-emerald-500/60" : "bg-red-500/80"}`}
                       title={verdictTrack(tr) ? "Pass" : "Fail — grading & audit details"}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -616,7 +622,7 @@ export default function AlbumPage() {
                       }}
                     />
                     {!!tr.issues?.length && (
-                      <span className="text-[9px] text-red-400 shrink-0" title={tr.issues.join("\n")}>
+                      <span className="text-[9px] text-red-400/70 shrink-0" title={tr.issues.join("\n")}>
                         {tr.issues.length}✗
                       </span>
                     )}

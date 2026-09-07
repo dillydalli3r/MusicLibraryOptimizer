@@ -677,9 +677,9 @@ const toggleExpand = (path: string) =>
       {/* ---------------- Compact status view ---------------- */}
       {view === "compact" && (
         <div className="space-y-1">
-          <div className="flex gap-4 flex-wrap text-[10px] text-zinc-500 items-center pb-1">
-            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500 inline-block" /> PASS — graded clean, audit OK</span>
-            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-500 inline-block" /> FAIL — grading / audit problems (hover a row for details)</span>
+          <div className="flex gap-4 flex-wrap text-[10px] text-zinc-600 items-center pb-1">
+            <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-[1px] bg-emerald-600/60 inline-block" /> PASS — graded clean, audit OK</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-[1px] bg-red-500/70 inline-block" /> FAIL — grading / audit problems (hover a row for details)</span>
           </div>
           {sortedAlbums.map((al) => {
             const st = statusFor(!!al.pass, al.audit_summary);
@@ -711,7 +711,7 @@ const toggleExpand = (path: string) =>
                   >
                     <Play className="h-3.5 w-3.5" />
                   </button>
-                  <div className={`w-1 self-stretch rounded-full ${st.edge} shrink-0`} title={st.label} />
+                  <div className={`w-1 self-stretch rounded-sm ${st.edge} shrink-0`} title={st.label} />
                   <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
                     <input type="checkbox" checked={sel} onChange={() => toggleAlbum(al.path)} />
                   </div>
@@ -746,7 +746,7 @@ const toggleExpand = (path: string) =>
                     </div>
                   </div>
                   <span className={`text-[9px] font-mono shrink-0 ${st.text}`} title={st.label}>
-                    {gradeSliver(!!al.pass, al.audit_summary)}
+                    {st.key === "fail" ? gradeSliver(!!al.pass, al.audit_summary) : ""}
                   </span>
                   <span className="text-[10px] text-zinc-600 shrink-0 w-8 text-right">{al.track_count}t</span>
                   <div className="opacity-0 group-hover:opacity-100 flex gap-1 shrink-0 transition-opacity" onClick={(e) => e.stopPropagation()}>
@@ -780,7 +780,7 @@ const toggleExpand = (path: string) =>
                           <div className="shrink-0">
                             <input type="checkbox" checked={tSel} onChange={() => toggleTrack(t.path)} />
                           </div>
-                          <span className={`h-3 w-1 rounded-full ${ts.edge} shrink-0`} title={ts.label} />
+                          <span className={`h-3 w-1 rounded-sm ${ts.edge} shrink-0`} title={ts.label} />
                           <span className="w-8 text-right text-zinc-600 font-mono shrink-0">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</span>
                           <Link to={trackRef(t)} className="truncate hover:text-accent-soft flex-1 min-w-0">
                             {t.tags.TITLE ?? t.file}
@@ -791,7 +791,7 @@ const toggleExpand = (path: string) =>
                           )}
                           {!!t.issues?.length && (
                             <button
-                              className="text-[9px] text-red-400 shrink-0 hover:underline"
+                              className="text-[9px] text-red-400/70 shrink-0 hover:underline"
                               title={t.issues.join("\n")}
                               onClick={() => setDetailTrack({ track: t, albumPath: al.path })}
                             >
@@ -799,7 +799,7 @@ const toggleExpand = (path: string) =>
                             </button>
                           )}
                           <span className={`text-[9px] font-mono shrink-0 ${ts.text}`} title={ts.label}>
-                            {gradeSliver(!!t.grade_pass, t.audit)}
+                            {ts.key === "fail" ? gradeSliver(!!t.grade_pass, t.audit) : ""}
                           </span>
                           <span className="text-[10px] text-zinc-600 font-mono w-10 text-right shrink-0">{fmtDuration(t.tech.length)}</span>
                         </div>
@@ -1263,7 +1263,7 @@ function AlbumRowGroup({
                         )}
                         {!!t.issues?.length && (
                           <button
-                            className="text-[9px] text-red-400 shrink-0 hover:underline"
+                            className="text-[9px] text-red-400/70 shrink-0 hover:underline"
                             title={t.issues.join("\n")}
                             onClick={(e) => {
                               e.stopPropagation();

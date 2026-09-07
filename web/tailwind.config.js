@@ -16,17 +16,17 @@ export default {
         sans: ["Inter", "Segoe UI", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "Consolas", "monospace"],
       },
-      // Monochrome-style softness: the default radii are nudged up so every
-      // card / popover / cover across the app reads rounder without having
-      // to touch each component's classes.
+      // Rectangular design language: radii are kept tight so every card /
+      // popover / cover reads squared-off with only a subtle edge soften.
+      // Circles are reserved for spinners alone.
       borderRadius: {
-        sm: "5px",
-        DEFAULT: "6px",
-        md: "9px",
-        lg: "13px",
-        xl: "17px",
-        "2xl": "22px",
-        "3xl": "28px",
+        sm: "2px",
+        DEFAULT: "3px",
+        md: "4px",
+        lg: "6px",
+        xl: "8px",
+        "2xl": "10px",
+        "3xl": "12px",
       },
     },
   },
