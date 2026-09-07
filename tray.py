@@ -264,46 +264,47 @@ def make_icon():
     return img
 
 
-def _pid_alive(pid):
-    if os.name == "nt":
-        import ctypes
-        SYNCHRONIZE = 0x00100000
-        h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, int(pid))
-        if h:
-            ctypes.windll.kernel32.CloseHandle(h)
-            return True
-        return False
+LOCK_PATH = os.path.join(ROOT, "server", "data", "tray.lock")
+_lock_fh = None
+
+
+def _acquire_single_instance():
+    """True when this process is the only tray instance.
+
+    Uses a real OS lock on the lockfile (msvcrt.locking on Windows,
+    flock elsewhere) instead of comparing PIDs: the OS releases the lock the
+    moment the owning process dies, so a crashed tray can never block the
+    next launch. The old PID-liveness check produced false positives — a
+    recycled PID made every future launch believe a tray was already
+    running, silently reducing it to "open browser and exit".
+    """
+    global _lock_fh
     try:
-        os.kill(int(pid), 0)
+        os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
+        fh = open(LOCK_PATH, "a+")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            return False  # a live tray holds the lock
+        fh.seek(0)
+        fh.truncate()
+        fh.write(str(os.getpid()))
+        fh.flush()
+        _lock_fh = fh  # keep the handle (and the lock) for this process's life
         return True
     except OSError:
         return False
 
 
-LOCK_PATH = os.path.join(ROOT, "server", "data", "tray.lock")
-
-
-def _another_tray_running():
-    """Single-instance guard via a PID lockfile (stale locks are reclaimed)."""
-    try:
-        os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
-        if os.path.exists(LOCK_PATH):
-            try:
-                with open(LOCK_PATH, "r") as f:
-                    pid = int(f.read().strip() or 0)
-                if pid and pid != os.getpid() and _pid_alive(pid):
-                    return True
-            except (ValueError, OSError):
-                pass
-        with open(LOCK_PATH, "w") as f:
-            f.write(str(os.getpid()))
-        return False
-    except OSError:
-        return False
-
-
 def run_tray():
-    if _another_tray_running():
+    if not _acquire_single_instance():
         # A tray instance already manages the backend — just open the app.
         webbrowser.open(URL)
         return
