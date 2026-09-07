@@ -56,7 +56,14 @@ const LYRIC_SIZES = {
 } as const;
 
 /** Ease for the active line's growth — slow out, no snap. */
-const LINE_EASE = "transition-[font-size,color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]";
+const LINE_EASE = "transition-[transform,color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]";
+
+/** How much smaller an inactive line renders next to the active one. The
+ * layout is ALWAYS the active size — inactive lines shrink via transform
+ * scale, which is GPU-composited and never re-wraps text. Animating
+ * font-size instead re-flows and re-wraps the line every frame (the janky,
+ * jumpy growth this replaced). */
+const INACTIVE_SCALE = { sm: 0.88, md: 0.84, lg: 0.8 } as const;
 
 /** Non-current synced lines read greyed-out (a slight blur + dim grey);
  * hovering a line reveals it in full detail. Plain-text lyrics are never
@@ -465,12 +472,20 @@ export default function NowPlayingView(p: Props) {
         onClick={synced ? () => p.onSeek(l.time) : undefined}
         title={synced ? "Click to seek" : undefined}
       >
+        {/* One layout for every state: the line block is laid out at the
+            active size and scaled down when inactive — a compositor-only
+            animation, so text never re-wraps mid-growth and the scroll
+            target never shifts under it. Weight is constant for the same
+            reason (weight changes re-flow glyph widths). */}
         <div
-          className={`leading-snug ${LINE_EASE} ${
-            isActive
-              ? `${size.active} font-semibold text-white`
-              : `${size.line} ${synced ? "text-zinc-500" : "text-zinc-200"}`
+          className={`${size.active} leading-snug ${synced ? `${LINE_EASE} font-semibold` : ""} ${
+            isActive ? "text-white" : synced ? "text-zinc-500" : "text-zinc-200"
           }`}
+          style={
+            synced
+              ? { transform: `scale(${isActive ? 1 : INACTIVE_SCALE[lyricSize]})`, transformOrigin: "0 50%" }
+              : { transform: `scale(${INACTIVE_SCALE[lyricSize]})`, transformOrigin: "0 50%" }
+          }
         >
           {!replaced && isActive && karaoke && l.words?.length
             ? l.words.map((w, wi) => {
@@ -484,8 +499,10 @@ export default function NowPlayingView(p: Props) {
                 );
               })
             : primary}
+          {trans && !transDup && (
+            <div className={`${size.xlit} font-normal text-accent-soft/70 mt-0.5 leading-snug`}>{trans}</div>
+          )}
         </div>
-        {trans && !transDup && <div className={`${size.xlit} text-accent-soft/70 mt-0.5 leading-snug`}>{trans}</div>}
       </div>
     );
   };
