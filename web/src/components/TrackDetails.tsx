@@ -5,19 +5,22 @@ import TrackDownloadExport from "./TrackDownloadExport";
 
 function fmtTech(tech: Track["tech"]): string {
   const parts: string[] = [];
-  if ((tech as { codec?: string }).codec) parts.push((tech as { codec?: string }).codec!);
+  const pair =
+    tech.bits_per_sample && tech.sample_rate
+      ? `${Math.round(tech.bits_per_sample)}/${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`
+      : tech.bits_per_sample
+        ? `${Math.round(tech.bits_per_sample)} bit`
+        : tech.sample_rate
+          ? `${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`
+          : "";
+  if (tech.codec) parts.push(`${tech.codec}${pair ? ` ${pair}` : ""}`);
+  else if (pair) parts.push(pair);
   if (tech.length) {
     const m = Math.floor(tech.length / 60);
     const s = Math.round(tech.length % 60);
     parts.push(`${m}:${String(s).padStart(2, "0")}`);
   }
   if (tech.bitrate) parts.push(`${Math.round(tech.bitrate / 1000)}k`);
-  if (tech.bits_per_sample && tech.sample_rate) {
-    parts.push(`${Math.round(tech.bits_per_sample)}/${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`);
-  } else {
-    if (tech.bits_per_sample) parts.push(`${Math.round(tech.bits_per_sample)} bit`);
-    if (tech.sample_rate) parts.push(`${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
-  }
   if (tech.channels) parts.push(tech.channels === 1 ? "mono" : tech.channels === 2 ? "stereo" : `${tech.channels} ch`);
   return parts.join(" · ");
 }

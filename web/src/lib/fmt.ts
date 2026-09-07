@@ -1,5 +1,5 @@
-/** Shared compact audio-format readout: "FLAC · 1022k · 16/44.1".
- * (codec · bitrate in kbps · bit depth/sample rate in kHz) */
+/** Shared compact audio-format readout: "FLAC 16/44.1 · 1022k" —
+ * codec with its bit depth/sample rate first, bitrate last. */
 export interface TechInfo {
   codec?: string;
   bitrate?: number;
@@ -9,22 +9,25 @@ export interface TechInfo {
 
 export function fmtTech(t?: TechInfo | null): string {
   if (!t) return "";
+  const pair =
+    t.bits_per_sample && t.sample_rate
+      ? `${Math.round(t.bits_per_sample)}/${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`
+      : t.bits_per_sample
+        ? `${Math.round(t.bits_per_sample)} bit`
+        : t.sample_rate
+          ? `${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`
+          : "";
   const parts: string[] = [];
-  if (t.codec) parts.push(String(t.codec));
+  if (t.codec) parts.push(`${t.codec}${pair ? ` ${pair}` : ""}`);
+  else if (pair) parts.push(pair);
   if (t.bitrate) parts.push(`${Math.round(t.bitrate / 1000)}k`);
-  if (t.bits_per_sample && t.sample_rate) {
-    parts.push(`${Math.round(t.bits_per_sample)}/${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`);
-  } else {
-    if (t.bits_per_sample) parts.push(`${Math.round(t.bits_per_sample)} bit`);
-    if (t.sample_rate) parts.push(`${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
-  }
   return parts.join(" · ");
 }
 
-/** Aggregated album-level readout from the album's tracks: codecs, a
- * bitrate figure (mean when the tracks are close, min–max range when they
- * drift) and the depth/rate pair — "FLAC · 1022k · 16/44.1". `short`
- * drops the bitrate (for badges): "FLAC · 16/44.1". */
+/** Aggregated album-level readout from the album's tracks — codecs with
+ * their depth/rate pair first, bitrate figure last (mean when the tracks
+ * are close, min–max range when they drift): "FLAC 16/44.1 · 904–1079k".
+ * `short` drops the bitrate (for badges): "FLAC 16/44.1". */
 export function albumTech(
   tracks?: { tech?: TechInfo & { length?: number; channels?: number } }[] | null,
   short = false
@@ -41,8 +44,10 @@ export function albumTech(
         .map((t) => `${Math.round(t.bits_per_sample!)}/${(t.sample_rate! / 1000).toFixed(1).replace(/\.0$/, "")}`)
     ),
   ];
+  const pair = pairs.length === 1 ? pairs[0] : pairs.length > 1 ? "mixed" : "";
   const parts: string[] = [];
-  if (codecs.length) parts.push(codecs.join("/"));
+  if (codecs.length) parts.push(`${codecs.join("/")}${pair ? ` ${pair}` : ""}`);
+  else if (pair) parts.push(pair);
   if (!short) {
     const brs = techs.map((t) => t.bitrate).filter((b): b is number => !!b);
     if (brs.length) {
@@ -55,7 +60,5 @@ export function albumTech(
       );
     }
   }
-  if (pairs.length === 1) parts.push(pairs[0]);
-  else if (pairs.length > 1) parts.push("mixed");
   return parts.join(" · ");
 }
