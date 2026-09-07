@@ -301,7 +301,7 @@ export default function PlayerBar() {
   // ONE bar for both states — same height, radius and layout whether or not
   // something is playing; idle just disables the transport and shows a hint.
   return (
-    <div className="shrink-0 px-3 pb-3 pt-1">
+    <div className="shrink-0 px-3 pb-3 pt-1 relative z-10">
       <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 pr-4">
         <audio
           ref={audioRef}
@@ -633,7 +633,6 @@ export default function PlayerBar() {
               lyricsOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
             }`}
             onClick={() => setLyricsOpen(!lyricsOpen)}
-            disabled={idle}
             title="Lyrics — open the sidebar"
             aria-label="Lyrics"
           >
@@ -678,7 +677,7 @@ export default function PlayerBar() {
           />
         )}
 
-        {lyricsOpen && current && (
+        {lyricsOpen && (
           <LyricsSidebar
             current={current}
             playing={!!playing}

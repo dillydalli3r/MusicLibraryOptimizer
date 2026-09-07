@@ -20,7 +20,8 @@ export default function LyricsSidebar({
   getAudioTime,
   onClose,
 }: {
-  current: { path: string; title?: string; file: string; albumPath: string; artist?: string; album?: string };
+  /** Null when nothing is playing — the panel still opens, showing a hint. */
+  current: { path: string; title?: string; file: string; albumPath: string; artist?: string; album?: string } | null;
   playing: boolean;
   time: number;
   onSeek: (t: number) => void;
@@ -35,11 +36,16 @@ export default function LyricsSidebar({
     album?: string;
   } | null>(null);
 
+  const path = current?.path ?? null;
   useEffect(() => {
+    if (!path) {
+      setPayload(null);
+      return;
+    }
     let dead = false;
     setPayload(null);
     api
-      .tags(current.path)
+      .tags(path)
       .then((t) => {
         if (dead) return;
         const splitStored = (s: string): string[] =>
@@ -61,7 +67,7 @@ export default function LyricsSidebar({
       dead = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current.path]);
+  }, [path]);
 
   const instrumental = false; // the fullscreen player owns INSTRUMENTAL handling
   const lines: LrcLine[] = useMemo(
@@ -125,10 +131,10 @@ export default function LyricsSidebar({
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
-  }, [current.path]);
+  }, [path]);
 
-  const title = payload?.title || current.title || current.file.replace(/\.[^.]+$/, "");
-  const album = payload?.album || current.album || "";
+  const title = payload?.title || current?.title || (current ? current.file.replace(/\.[^.]+$/, "") : "Lyrics");
+  const album = payload?.album || current?.album || "";
 
   return (
     <aside className="fixed top-12 bottom-[5.75rem] right-0 w-[380px] z-30 bg-panel/95 backdrop-blur border-l border-border shadow-2xl flex flex-col">
@@ -184,7 +190,11 @@ export default function LyricsSidebar({
         ) : (
           <div className="h-full flex items-center justify-center text-center px-6">
             {payload === null ? (
-              <span className="text-xs text-zinc-600">Loading lyrics…</span>
+              <span className="text-xs text-zinc-600">
+                {!current
+                  ? "Nothing playing — play an album, artist or playlist and its lyrics appear here."
+                  : "Loading lyrics…"}
+              </span>
             ) : (
               <span className="text-xs text-zinc-600">
                 No lyrics stored for this track — fetch or generate them from the track or album page.

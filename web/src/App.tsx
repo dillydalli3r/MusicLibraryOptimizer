@@ -178,7 +178,7 @@ export default function App() {
     // its right.
     <div className="h-screen overflow-hidden bg-bg text-zinc-100 flex">
       <aside
-        className={`${collapsed ? "w-14" : "w-48"} h-full shrink-0 border-r border-border bg-panel p-2 flex flex-col gap-1 overflow-y-auto transition-[width] duration-150`}
+        className={`${collapsed ? "w-14" : "w-48"} h-full shrink-0 border-r border-border bg-panel p-2 flex flex-col gap-1 overflow-y-auto transition-[width] duration-150 relative z-20`}
       >
         {/* sidebar header: brand + collapse toggle, split from the nav by a
             hairline. Collapses to a stacked icon rail. */}
@@ -230,7 +230,7 @@ export default function App() {
         )}
       </aside>
 
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden relative z-10">
         {/* top bar (right of the sidebar): back / forward immediately left of
             the global search, live progress on the right. */}
         <header className="h-12 shrink-0 bg-bg flex items-center gap-3 px-4 z-30 relative">
