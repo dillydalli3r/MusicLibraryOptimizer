@@ -176,7 +176,11 @@ export default function NowPlayingView(p: Props) {
       }
       if (bloomRef.current) bloomRef.current.style.opacity = "0";
       if (orbsRef.current) {
-        for (const el of orbsRef.current.children) (el as HTMLElement).style.opacity = "";
+        orbsRef.current.style.transform = "";
+        orbsRef.current.style.filter = "";
+        for (const el of orbsRef.current.querySelectorAll<HTMLElement>(".orb")) {
+          el.style.opacity = "";
+        }
       }
       return;
     }
@@ -184,6 +188,9 @@ export default function NowPlayingView(p: Props) {
     const bps = bpm > 0 ? Math.min(2.2, bpm / 60) : 1.4; // beats per second
     let raf = 0;
     const t0 = performance.now();
+    const orbEls = orbsRef.current
+      ? Array.from(orbsRef.current.querySelectorAll<HTMLElement>(".orb"))
+      : [];
     const tick = () => {
       const t = (performance.now() - t0) / 1000;
       const frac = p.playing ? (t * bps) % 1 : 0;
@@ -193,24 +200,25 @@ export default function NowPlayingView(p: Props) {
       const breathe = 0.5 + 0.5 * Math.sin(t * 0.21);
       if (bgRef.current) {
         bgRef.current.style.transform = `scale(${(1.08 + 0.05 * breathe + 0.035 * env).toFixed(4)})`;
-        bgRef.current.style.opacity = String(0.24 + 0.05 * env);
+        bgRef.current.style.opacity = String(0.26 + 0.04 * breathe + 0.02 * env);
       }
       // bloom ring behind the artwork
       eased.current.bloom += (env - eased.current.bloom) * 0.12;
       if (bloomRef.current) {
-        bloomRef.current.style.opacity = String(0.15 + 0.5 * eased.current.bloom);
-        bloomRef.current.style.transform = `scale(${(0.92 + 0.22 * eased.current.bloom).toFixed(4)})`;
+        bloomRef.current.style.opacity = String(0.18 + 0.3 * eased.current.bloom);
+        bloomRef.current.style.transform = `scale(${(0.94 + 0.16 * eased.current.bloom).toFixed(4)})`;
       }
-      // color orbs: phase-shifted waves instead of one shared pulse
+      // Color field: the orbs drift and hue-shift via CSS; the beat only
+      // pumps the field's scale and brightness a touch — never opacity, so
+      // the background can't flash dark. Each orb keeps its own slow,
+      // desynced breathing so light keeps circulating between colors.
       if (orbsRef.current) {
-        const els = orbsRef.current.children;
-        const depths = [0.35, 0.28, 0.22];
-        const phases = [0, Math.PI / 2, Math.PI];
-        for (let i = 0; i < els.length; i++) {
-          const wave = 0.5 + 0.5 * Math.sin(t * bps * Math.PI + phases[i % 3]);
-          const el = els[i] as HTMLElement;
-          el.style.opacity = String(Math.min(1, 0.45 + depths[i % 3] * wave + 0.15 * env));
-        }
+        orbsRef.current.style.transform = `scale(${(1 + 0.025 * env).toFixed(4)})`;
+        orbsRef.current.style.filter = `brightness(${(1 + 0.09 * env).toFixed(3)}) saturate(${(1 + 0.18 * env).toFixed(3)})`;
+        orbEls.forEach((el, i) => {
+          const wave = 0.5 + 0.5 * Math.sin(t * (0.45 + i * 0.17) + i * 2.1);
+          el.style.opacity = String(0.6 + 0.25 * wave);
+        });
       }
       raf = requestAnimationFrame(tick);
     };
@@ -511,18 +519,26 @@ export default function NowPlayingView(p: Props) {
       </div>
       {orbs && (
         <div ref={orbsRef} className="absolute inset-0 pointer-events-none">
-          <div
-            className="orb orb-a w-[55vw] h-[55vw] -top-[15vw] -left-[10vw]"
-            style={{ background: `radial-gradient(circle at 35% 35%, rgb(${rgb.join(" ")}), transparent 65%)` }}
-          />
-          <div
-            className="orb orb-b w-[48vw] h-[48vw] bottom-[-14vw] right-[-8vw]"
-            style={{ background: `radial-gradient(circle at 60% 40%, rgb(${rgb.join(" ")}), transparent 62%)` }}
-          />
-          <div
-            className="orb orb-c w-[38vw] h-[38vw] top-[30%] left-[38%] opacity-30"
-            style={{ background: `radial-gradient(circle at 50% 50%, rgb(${rgb.map((v) => Math.min(255, v + 40)).join(" ")}), transparent 60%)` }}
-          />
+          {/* .orb-field carries the slow hue-cycle CSS animation; the beat
+              pump (JS) stays on the outer container so the two never fight */}
+          <div className="orb-field absolute inset-0">
+            <div
+              className="orb orb-a w-[55vw] h-[55vw] -top-[15vw] -left-[10vw]"
+              style={{ background: `radial-gradient(circle at 35% 35%, rgb(${rgb.join(" ")} / 0.9), transparent 65%)` }}
+            />
+            <div
+              className="orb orb-b w-[48vw] h-[48vw] bottom-[-14vw] right-[-8vw]"
+              style={{ background: `radial-gradient(circle at 60% 40%, rgb(${rgb.join(" ")} / 0.85), transparent 62%)`, filter: "blur(90px) hue-rotate(55deg)" }}
+            />
+            <div
+              className="orb orb-c w-[38vw] h-[38vw] top-[28%] left-[36%]"
+              style={{ background: `radial-gradient(circle at 50% 50%, rgb(${rgb.map((v) => Math.min(255, v + 40)).join(" ")} / 0.8), transparent 60%)`, filter: "blur(90px) hue-rotate(-65deg)" }}
+            />
+            <div
+              className="orb orb-d w-[30vw] h-[30vw] top-[-8vw] right-[12vw]"
+              style={{ background: `radial-gradient(circle at 45% 55%, rgb(${rgb.map((v) => Math.max(0, v - 20)).join(" ")} / 0.75), transparent 58%)`, filter: "blur(70px) hue-rotate(150deg)" }}
+            />
+          </div>
         </div>
       )}
       {/* bloom ring behind the artwork — swells on the beat when the
@@ -536,7 +552,9 @@ export default function NowPlayingView(p: Props) {
           opacity: 0.15,
         }}
       />
-      <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/75 via-zinc-950/35 to-zinc-950/90" />
+      {/* legibility wash — deliberately light so the animated color field
+          stays visible; only the very top and bottom darken for the bars */}
+      <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/55 via-zinc-950/20 to-zinc-950/80" />
 
       <div className="relative h-full flex flex-col">
         {/* top bar — right-aligned cluster only: the queue position sits as a

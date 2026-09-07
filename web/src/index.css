@@ -163,32 +163,55 @@ body {
   position: absolute;
   border-radius: 9999px;
   filter: blur(90px);
-  opacity: 0.5;
-  will-change: transform;
+  opacity: 0.6;
+  /* additive color mixing: overlapping fields add light instead of turning
+     muddy, which is what keeps the backdrop colorful rather than grey */
+  mix-blend-mode: screen;
+  will-change: transform, opacity;
   pointer-events: none;
 }
 .orb-a {
-  animation: orb-drift-a 26s ease-in-out infinite alternate;
+  animation: orb-drift-a 22s ease-in-out infinite alternate;
 }
 .orb-b {
-  animation: orb-drift-b 34s ease-in-out infinite alternate;
+  animation: orb-drift-b 30s ease-in-out infinite alternate;
 }
 .orb-c {
-  animation: orb-drift-c 42s ease-in-out infinite alternate;
+  animation: orb-drift-c 17s ease-in-out infinite alternate;
+}
+.orb-d {
+  animation: orb-drift-d 26s ease-in-out infinite alternate;
+}
+/* The whole field slowly cycles its hue so the palette keeps evolving even
+   while every orb drifts on its own path. */
+.orb-field {
+  animation: orb-hue-cycle 38s ease-in-out infinite alternate;
+}
+@keyframes orb-hue-cycle {
+  from { filter: hue-rotate(-20deg) saturate(1.05); }
+  to   { filter: hue-rotate(28deg) saturate(1.25); }
 }
 @keyframes orb-drift-a {
-  0% { transform: translate(-10%, -6%) scale(1); }
-  50% { transform: translate(14%, 10%) scale(1.25); }
-  100% { transform: translate(-6%, 16%) scale(0.9); }
+  0% { transform: translate(-14%, -10%) scale(1); }
+  33% { transform: translate(10%, 6%) scale(1.2); }
+  66% { transform: translate(18%, 18%) scale(0.92); }
+  100% { transform: translate(-8%, 20%) scale(1.1); }
 }
 @keyframes orb-drift-b {
-  0% { transform: translate(8%, 12%) scale(1.1); }
-  50% { transform: translate(-16%, -8%) scale(0.85); }
-  100% { transform: translate(10%, -14%) scale(1.2); }
+  0% { transform: translate(10%, 14%) scale(1.1); }
+  33% { transform: translate(-6%, -4%) scale(0.85); }
+  66% { transform: translate(-20%, -10%) scale(1.18); }
+  100% { transform: translate(12%, -18%) scale(0.95); }
 }
 @keyframes orb-drift-c {
-  0% { transform: translate(0%, 10%) scale(0.9) rotate(0deg); }
-  100% { transform: translate(-12%, -12%) scale(1.3) rotate(20deg); }
+  0% { transform: translate(2%, 12%) scale(0.9); }
+  50% { transform: translate(-16%, -8%) scale(1.28); }
+  100% { transform: translate(14%, -14%) scale(0.98); }
+}
+@keyframes orb-drift-d {
+  0% { transform: translate(0%, 0%) scale(0.95); }
+  40% { transform: translate(-18%, 14%) scale(1.15); }
+  100% { transform: translate(16%, 22%) scale(0.85); }
 }
 /* gentle breathing on the artwork glow */
 @keyframes glow-pulse {
