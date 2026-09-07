@@ -50,16 +50,9 @@ export function AuditBadge({ audit, size = "md" }: { audit: string | null; size?
 
 export function MediaChip({ media }: { media: string | null | undefined }) {
   if (!media) return null;
-  const cd = media.toUpperCase().includes("CD");
-  return (
-    <span
-      className={`chip ${
-        cd ? "bg-sky-900/50 text-sky-300 border border-sky-900" : "bg-accent/10 text-accent-soft border border-accent/25"
-      }`}
-    >
-      {media}
-    </span>
-  );
+  // Colorless by design: media type is metadata, not a status — the same
+  // neutral look everywhere (album header, tables, cards).
+  return <span className="chip bg-zinc-800/70 text-zinc-300 border border-border">{media}</span>;
 }
 
 /** Compact media label for album cards/icons: "CD", "DIGITAL", "VINYL", …

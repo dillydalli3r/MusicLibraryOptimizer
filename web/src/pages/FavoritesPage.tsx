@@ -147,7 +147,7 @@ function LikedTracks() {
         </button>
       </div>
       {rows.map((r) => (
-        <div key={r.path} className="group flex items-center gap-3 px-3 py-1 text-sm hover:bg-raise/40 transition-colors">
+        <div key={r.path} className="group flex items-center gap-3 px-3 py-1 text-sm hover:bg-white/[0.06] transition-colors">
           {r.missing ? (
             <span className="truncate min-w-0 flex-1 text-zinc-500" title={r.path}>
               {r.title}

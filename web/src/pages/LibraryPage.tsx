@@ -709,7 +709,7 @@ const toggleExpand = (path: string) =>
             return (
               <div key={al.path}>
                 <div
-                  className={`group flex items-center gap-2.5 rounded-md px-2 py-1.5 cursor-pointer transition-colors ${st.tint} ${sel ? "bg-accent/10" : "hover:bg-raise/40"}`}
+                  className={`group flex items-center gap-2.5 rounded-md px-2 py-1.5 cursor-pointer transition-colors ${st.tint} ${sel ? "bg-accent/10" : "hover:bg-white/[0.06]"}`}
                   onClick={() => toggleExpand(al.path)}
                 >
                   <div className={`w-1 self-stretch rounded-sm ${st.edge} shrink-0`} title={st.label} />
@@ -764,7 +764,7 @@ const toggleExpand = (path: string) =>
                       const ts = statusFor(!!t.grade_pass, t.audit);
                       const tSel = selection.tracks.includes(t.path);
                       return (
-                        <div key={t.path} className={`group flex items-center gap-2 text-xs py-0.5 rounded ${tSel ? "bg-accent/10" : "hover:bg-raise/40"}`}>
+                        <div key={t.path} className={`group flex items-center gap-2 text-xs py-0.5 rounded ${tSel ? "bg-accent/10" : "hover:bg-white/[0.06]"}`}>
                           {selectMode && (
                             <div className="shrink-0">
                               <input type="checkbox" checked={tSel} onChange={() => toggleTrack(t.path)} />
@@ -1118,16 +1118,13 @@ function AlbumRowGroup({
               <tbody>
                 {(() => {
                   const groups = groupByDisc(tracks);
-                  const multiDisc = groups.length > 1;
                   return groups.map((g) => (
                     <Fragment key={g.disc ?? 0}>
-                      {multiDisc && (
-                        <tr>
-                          <td colSpan={selectMode ? 8 : 7} className="td text-[10px] uppercase tracking-wider text-zinc-500">
-                            Disc {g.disc ?? "?"}
-                          </td>
-                        </tr>
-                      )}
+                      <tr>
+                        <td colSpan={selectMode ? 8 : 7} className="td !py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                          Disc {g.disc ?? (groups.length === 1 ? 1 : "—")}
+                        </td>
+                      </tr>
                       {g.tracks.map((t) => (
                   <tr
                     key={t.path}

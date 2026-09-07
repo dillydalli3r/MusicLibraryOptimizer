@@ -592,13 +592,12 @@ export default function AlbumPage() {
               const multiDisc = groups.length > 1;
               return groups.map((g) => (
                 <Fragment key={g.disc ?? 0}>
-                  {multiDisc && (
-                    <tr>
-                      <td colSpan={selectMode ? 7 : 6} className="td !py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                        Disc {g.disc ?? "—"}
-                      </td>
-                    </tr>
-                  )}
+                  {/* disc header above EVERY disc, single or multi */}
+                  <tr>
+                    <td colSpan={selectMode ? 7 : 6} className="td !py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                      Disc {g.disc ?? (groups.length === 1 ? 1 : "—")}
+                    </td>
+                  </tr>
                   {g.tracks.map((tr) => (
               <tr
                 key={tr.path}

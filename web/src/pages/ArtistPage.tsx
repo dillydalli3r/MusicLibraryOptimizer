@@ -93,7 +93,7 @@ export default function ArtistPage() {
 
       <div className="space-y-3">
         {data.albums.map((al) => (
-          <div key={al.path} className="px-3 py-3 rounded-lg hover:bg-raise/40 transition-colors flex items-center gap-4">
+          <div key={al.path} className="px-3 py-3 rounded-lg hover:bg-white/[0.06] transition-colors flex items-center gap-4">
             <CoverImg
               albumPath={al.path}
               coverFile={al.cover_file}
