@@ -344,13 +344,23 @@ export default function AlbumPage() {
               ? `Original ${data.meta?.ORIGINALDATE} · Released ${data.meta?.DATE ?? "—"}`
               : data.meta?.DATE ?? "—"}
           </div>
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <h1 className="text-3xl font-bold tracking-tight truncate">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
             {/* verdict sits right of the title — click for the problems */}
             <button
               className={`h-2 w-2 rounded-full shrink-0 transition-opacity ${verdictPass ? "bg-emerald-500/70" : "bg-red-500/80"}`}
               title={verdictPass ? `Pass — ${data.grade_pct ?? "?"}% of checks` : `Fail — ${data.grade_pct ?? "?"}% · ${issueEntries.length} problem type(s)`}
               onClick={() => setIssuesOpen(!issuesOpen)}
+            />
+            {/* MusicBrainz / RateYourMusic identity links, right of the title:
+                exactly one of each — prefer the release over its group */}
+            <LinkChips
+              tags={(data.meta ?? {}) as Record<string, unknown>}
+              only={[
+                ...(data.meta?.MUSICBRAINZ_ALBUMID ? [] : ["MUSICBRAINZ_RELEASEGROUPID"]),
+                "MUSICBRAINZ_ALBUMID",
+                "RATEYOURMUSIC_ALBUM",
+              ]}
             />
           </div>
           {/* artist opens the library's artist page */}
@@ -406,19 +416,9 @@ export default function AlbumPage() {
               )}
             </div>
           )}
-          {/* bottom action row: identity links + every primary button */}
+          {/* bottom action row: play + every primary button (identity links
+              live next to the album title now) */}
           <div className="mt-4 pt-3 border-t border-border/60 flex flex-wrap items-center gap-2">
-            {/* exactly one MusicBrainz + one RateYourMusic link: prefer the
-                release over its release group */}
-            <LinkChips
-              tags={(data.meta ?? {}) as Record<string, unknown>}
-              only={[
-                ...(data.meta?.MUSICBRAINZ_ALBUMID ? [] : ["MUSICBRAINZ_RELEASEGROUPID"]),
-                "MUSICBRAINZ_ALBUMID",
-                "RATEYOURMUSIC_ALBUM",
-              ]}
-            />
-            <span className="w-px h-5 bg-border mx-0.5" />
             <button
               className="btn-primary !p-2.5 !rounded-md"
               onClick={() => playNow(queueTracks)}
