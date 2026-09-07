@@ -29,6 +29,7 @@ async function json<T>(url: string, init?: RequestInit, timeoutMs = 20000): Prom
 export const api = {
   health: () => json<{ status: string; version: string }>(`${API}/health`),
   config: () => json<Record<string, unknown>>(`${API}/config`),
+  configDefaults: () => json<Record<string, unknown>>(`${API}/config/defaults`),
   saveConfig: (cfg: Record<string, unknown>) =>
     json<Record<string, unknown>>(`${API}/config`, {
       method: "POST",

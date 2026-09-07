@@ -508,6 +508,35 @@ export default function SettingsPage() {
     }
   };
 
+  const { data: configDefaults } = useQuery({
+    queryKey: ["configDefaults"],
+    queryFn: api.configDefaults,
+  });
+
+  /** Restore factory defaults for everything the settings form edits.
+   * Identity-critical values the user configured are kept: music folder,
+   * first-run flag and the whole AI connection (endpoint, model, key).
+   * Persisted via the normal Save. */
+  const resetAllDefaults = () => {
+    const d = configDefaults as Record<string, unknown> | undefined;
+    if (!d) return;
+    if (!window.confirm("Reset ALL settings to their defaults?\n\nKept: your music folder, the first-run flag and the AI connection (endpoint, model, key).")) return;
+    const cur = scriptCfg as Record<string, unknown>;
+    const next: Record<string, unknown> = { ...d };
+    for (const k of ["music_folder", "first_run_done", "ai_api_key", "ai_base_url", "ai_model"]) {
+      if (cur[k] !== undefined) next[k] = cur[k];
+    }
+    setScriptCfg(next);
+    if (d.encoder_tags) setEncoderTags(d.encoder_tags as Record<string, Record<string, boolean>>);
+    if (d.audio_tag_writes) setAudioTagWrites(d.audio_tag_writes as Record<string, Record<string, boolean>>);
+    if (typeof d.lyrics_format === "string") setLyricsFormat(d.lyrics_format);
+    if (d.worker_limit !== undefined) setWorkerLimit(Number(d.worker_limit));
+    if (typeof d.naming_script === "string") setNamingScript(d.naming_script);
+    setShortFolderNames(!!d.short_folder_names);
+    if (Array.isArray(d.run_all_order)) setRunAll((d.run_all_order as number[]).map(Number));
+    toast("Settings reset to defaults — click Save all settings to persist");
+  };
+
   const save = async () => {
     try {
       await api.saveConfig({
@@ -1155,9 +1184,19 @@ export default function SettingsPage() {
             </details>
           )}
 
-          <button className="btn-primary" onClick={save}>
-            <Save className="h-4 w-4" /> Save all settings
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn-ghost"
+              onClick={resetAllDefaults}
+              disabled={!configDefaults}
+              title="Restore factory defaults for every setting (music folder, first-run flag and AI key are kept)"
+            >
+              <RotateCcw className="h-4 w-4" /> Reset to defaults
+            </button>
+            <button className="btn-primary" onClick={save}>
+              <Save className="h-4 w-4" /> Save all settings
+            </button>
+          </div>
 
           <details className="bg-card rounded-lg border border-border p-4">
             <summary className="text-sm font-semibold cursor-pointer">Raw config (advanced)</summary>

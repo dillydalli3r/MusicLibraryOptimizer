@@ -216,6 +216,12 @@ def set_config(cfg: dict):
     return load_config()
 
 
+@app.get("/api/config/defaults")
+def get_config_defaults():
+    """Factory defaults — powers the settings UI's reset-to-defaults actions."""
+    return DEFAULT_CONFIG
+
+
 # --------------------------------------------------------------------------- #
 # Library
 # --------------------------------------------------------------------------- #

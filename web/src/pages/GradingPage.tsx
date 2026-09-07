@@ -137,8 +137,15 @@ const NUMBERS: { k: string; label: string; desc: string; min: number; max: numbe
   },
 ];
 
+/** Every grading key this page owns — the reset-to-defaults scope. */
+const GRADING_KEYS = [
+  ...GROUPS.flatMap((g) => g.items.map((i) => i.k)),
+  ...NUMBERS.map((n) => n.k),
+];
+
 export default function GradingPage() {
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
+  const { data: defaults } = useQuery({ queryKey: ["configDefaults"], queryFn: api.configDefaults });
   const qc = useQueryClient();
   const [local, setLocal] = useState<Record<string, unknown> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -175,6 +182,18 @@ export default function GradingPage() {
     toast("Changes discarded");
   };
 
+  const resetDefaults = () => {
+    const d = defaults as Record<string, unknown> | undefined;
+    if (!d) return;
+    if (!window.confirm("Reset all grading checks to their defaults?")) return;
+    setLocal((c) => {
+      const next = { ...(c ?? {}) };
+      for (const k of GRADING_KEYS) if (d[k] !== undefined) next[k] = d[k];
+      return next;
+    });
+    toast("Grading checks reset to defaults — Save to apply");
+  };
+
   const val = (k: string) => !!local?.[k];
   const aiReady = !!String(local?.ai_base_url ?? "").trim() && !!String(local?.ai_model ?? "").trim();
 
@@ -190,6 +209,14 @@ export default function GradingPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {dirty && <span className="text-[10px] font-mono text-amber-400/80">unsaved changes</span>}
+          <button
+            className="btn-ghost !py-1.5 text-xs"
+            onClick={resetDefaults}
+            disabled={!defaults || saving}
+            title="Restore factory defaults for every grading check"
+          >
+            <RotateCcw className="h-3.5 w-3.5" /> Reset to defaults
+          </button>
           <button className="btn-ghost !py-1.5 text-xs" onClick={discard} disabled={!dirty || saving}>
             <RotateCcw className="h-3.5 w-3.5" /> Discard
           </button>
