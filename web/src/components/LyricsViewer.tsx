@@ -82,6 +82,19 @@ export function parseLrc(lrc: string): LrcLine[] {
   });
 }
 
+/** parseLrc plus the clickable [00:00.00] leader: LRC parsing drops blank
+ * lines, which leaves songs with an instrumental intro no top target —
+ * synthesize one whenever the first real line arrives late. Both players'
+ * lines and stored-transform seeding go through this, so their line
+ * indexes always stay aligned. */
+export function parsePlayerLrc(text: string): LrcLine[] {
+  const parsed = parseLrc(text);
+  if (parsed.length && parsed[0].time > 0.35) {
+    parsed.unshift({ ts: "[00:00.00]", time: 0, text: "" });
+  }
+  return parsed;
+}
+
 export function serializeLrc(lines: LrcLine[], decimals = 2): string {
   return lines
     .map((l) => {

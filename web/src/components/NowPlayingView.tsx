@@ -8,7 +8,7 @@ import { api } from "../api";
 import { toast, useStore } from "../store";
 import CoverImg from "./CoverImg";
 import { SubtitledVideo } from "./SubtitledVideo";
-import { parseLrc, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
+import { parsePlayerLrc, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
 
 const XLIT_KEY = "mlo.np.xlit";
 const TRANS_KEY = "mlo.np.trans";
@@ -68,19 +68,6 @@ const INACTIVE_SCALE = { sm: 0.88, md: 0.84, lg: 0.8 } as const;
  * hovering a line reveals it in full detail. Plain-text lyrics are never
  * styled — only synced lines get the active/inactive treatment. */
 const LINE_BLUR = "blur-[2px] opacity-60 hover:blur-none hover:opacity-100 transition-[opacity,filter] duration-300";
-
-/** parseLrc plus the clickable [00:00.00] leader: LRC parsing drops blank
- * lines, which leaves songs with an instrumental intro no top target —
- * synthesize one whenever the first real line arrives late. Both the
- * player's lines and the stored-transform seeding go through this, so
- * their line indexes always stay aligned. */
-function parsePlayerLrc(text: string): LrcLine[] {
-  const parsed = parseLrc(text);
-  if (parsed.length && parsed[0].time > 0.35) {
-    parsed.unshift({ ts: "[00:00.00]", time: 0, text: "" });
-  }
-  return parsed;
-}
 
 export default function NowPlayingView(p: Props) {
   const { vol, setVol } = useStore();

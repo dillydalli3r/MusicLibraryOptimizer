@@ -22,6 +22,10 @@ interface Store {
   setQueue: (q: QueueTrack[]) => void;
   /** Append to the queue without restarting the current track. */
   queueAdd: (tracks: QueueTrack[], position?: "next" | "end") => void;
+  /** Remove one queue row (queue popover ✕) without interrupting playback —
+   * deliberately does not bump queueId. Removing a row before the playing
+   * one shifts the index so the same track keeps playing. */
+  queueRemoveAt: (i: number) => void;
   index: number;
   setIndex: (i: number) => void;
   queueId: number; // bumped on every queue replacement — player reloads even
@@ -82,6 +86,14 @@ export const useStore = create<Store>((set) => ({
         return { queue };
       }
       return { queue: [...st.queue, ...tracks] };
+    }),
+  queueRemoveAt: (i) =>
+    set((st) => {
+      if (i < 0 || i >= st.queue.length) return {};
+      const queue = [...st.queue];
+      queue.splice(i, 1);
+      const index = i < st.index ? st.index - 1 : st.index;
+      return { queue, index };
     }),
   index: 0,
   setIndex: (index) => set({ index }),

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Disc3, Heart, ListPlus, Maximize2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2 } from "lucide-react";
+import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Timer, Volume2, X } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
 import NowPlayingView from "./NowPlayingView";
+import LyricsSidebar from "./LyricsSidebar";
 import TrackDownloadExport from "./TrackDownloadExport";
 
 /** Thin vertical rule separating functional groups in the bar. */
@@ -13,7 +14,7 @@ function BarDivider() {
 }
 
 export default function PlayerBar() {
-  const { queue, index, setIndex, playing, setPlaying, queueId, vol, setVol } = useStore();
+  const { queue, index, setIndex, setQueue, queueRemoveAt, playing, setPlaying, queueId, vol, setVol } = useStore();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -22,6 +23,13 @@ export default function PlayerBar() {
   const [speed, setSpeed] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
   const [plOpen, setPlOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  // sleep timer: an epoch-ms deadline, or "pause when this track ends"
+  const [sleepOpen, setSleepOpen] = useState(false);
+  const [sleepAt, setSleepAt] = useState<number | null>(null);
+  const [sleepStopNext, setSleepStopNext] = useState(false);
+  const [, setSleepTick] = useState(0);
   const qc = useQueryClient();
 
   const current = queue[index] ?? null;
@@ -219,8 +227,60 @@ export default function PlayerBar() {
   };
   stepRef.current = step;
 
+  // ---- sleep timer ---------------------------------------------------------
+  const SLEEP_CHOICES = [5, 15, 30, 45, 60];
+  const armSleep = (mins: number) => {
+    setSleepAt(Date.now() + mins * 60000);
+    setSleepStopNext(false);
+    setSleepOpen(false);
+    toast(`Sleep timer — pausing in ${mins} min`);
+  };
+  const armSleepEndOfTrack = () => {
+    setSleepStopNext(true);
+    setSleepAt(null);
+    setSleepOpen(false);
+    toast("Sleep timer — pausing after this track");
+  };
+  const cancelSleep = () => {
+    setSleepAt(null);
+    setSleepStopNext(false);
+    setSleepOpen(false);
+    toast("Sleep timer cancelled");
+  };
+  const sleepRemaining = sleepAt !== null ? Math.max(0, sleepAt - Date.now()) : null;
+  const fmtRemaining = (ms: number) => {
+    const s = Math.ceil(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    return h
+      ? `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+      : `${m}:${String(ss).padStart(2, "0")}`;
+  };
+  // countdown ticker + the actual pause when the deadline passes
+  useEffect(() => {
+    if (sleepAt === null) return;
+    const iv = setInterval(() => {
+      if (Date.now() >= sleepAt) {
+        audioRef.current?.pause();
+        useStore.getState().setPlaying(null);
+        setSleepAt(null);
+        toast("Sleep timer — playback paused");
+      }
+      setSleepTick((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [sleepAt]);
+
   useEffect(() => {
     const onEnded = () => {
+      if (sleepStopNext) {
+        audioRef.current?.pause();
+        useStore.getState().setPlaying(null);
+        setSleepStopNext(false);
+        toast("Sleep timer — playback paused");
+        return;
+      }
       if (loop) {
         const a = audioRef.current;
         if (a) {
@@ -233,7 +293,7 @@ export default function PlayerBar() {
     audio?.addEventListener("ended", onEnded);
     return () => audio?.removeEventListener("ended", onEnded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue.length, index, shuffle, loop]);
+  }, [queue.length, index, shuffle, loop, sleepStopNext]);
 
   const togglePlay = () => {
     const a = audioRef.current;
@@ -290,7 +350,6 @@ export default function PlayerBar() {
               </div>
               <div className="text-[11px] text-zinc-500 truncate">
                 {[current.album ?? current.artist ?? current.albumPath.split("/").pop()].filter(Boolean).join(" · ")}
-                <span className="ml-2 font-mono text-[10px] text-zinc-600">{queue.length > 1 ? `${index + 1}/${queue.length}` : ""}</span>
               </div>
             </>
           ) : (
@@ -370,8 +429,140 @@ export default function PlayerBar() {
           </div>
         </div>
 
-        {/* right cluster, grouped: track actions · volume · view */}
+        {/* right cluster, grouped: queue · track actions · volume · view */}
         <div className="flex items-center gap-1 shrink-0">
+          {/* queue position — the fraction lives here, left of the playlist
+              button; clicking it (or the queue button) opens the queue */}
+          {current && queue.length > 1 && (
+            <button
+              className={`px-1.5 py-1 rounded-md font-mono text-[10px] tabular-nums shrink-0 transition-colors ${
+                queueOpen ? "text-accent bg-raise" : "text-zinc-500 hover:text-white hover:bg-raise"
+              }`}
+              onClick={() => setQueueOpen(!queueOpen)}
+              title={`Queue position — ${index + 1} of ${queue.length} · click to view the queue`}
+            >
+              {index + 1}/{queue.length}
+            </button>
+          )}
+
+          {/* queue popover: upcoming tracks, click to jump, ✕ to remove */}
+          <div className="relative">
+            <button
+              className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
+                queueOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
+              } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+              onClick={() => setQueueOpen(!queueOpen)}
+              disabled={idle}
+              title="Queue"
+              aria-label="Queue"
+            >
+              <ListMusic className="h-4 w-4" />
+            </button>
+            {queueOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setQueueOpen(false)} />
+                <div className="absolute right-0 bottom-full mb-2 z-50 w-80 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-80 overflow-auto">
+                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1 flex items-center justify-between">
+                    Queue
+                    {queue.length > index + 1 && (
+                      <button
+                        className="text-[10px] normal-case text-zinc-500 hover:text-white"
+                        onClick={() => setQueue(queue.slice(0, index + 1))}
+                        title="Remove upcoming tracks"
+                      >
+                        clear upcoming
+                      </button>
+                    )}
+                  </div>
+                  {current && (
+                    <div className="px-2 py-1.5 rounded-md bg-raise/60 flex items-center gap-2">
+                      <Play className="h-3 w-3 text-accent shrink-0" />
+                      <span className="text-xs text-zinc-200 truncate flex-1">{displayTitle}</span>
+                      <span className="text-[10px] text-zinc-600 shrink-0">playing</span>
+                    </div>
+                  )}
+                  {queue.slice(index + 1).map((t, off) => {
+                    const i = index + 1 + off;
+                    return (
+                      <div key={`${t.path}-${i}`} className="group/qr flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10">
+                        <button
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => {
+                            setIndex(i);
+                            setPlaying(t.path);
+                            setQueueOpen(false);
+                          }}
+                          title="Play this track now"
+                        >
+                          <div className="text-xs text-zinc-300 truncate">{t.title || t.file.replace(/\.[^.]+$/, "")}</div>
+                          <div className="text-[10px] text-zinc-600 truncate">
+                            {[t.artist, t.album].filter(Boolean).join(" · ")}
+                          </div>
+                        </button>
+                        <button
+                          className="p-1 rounded text-zinc-600 hover:text-red-300 hover:bg-white/5 opacity-0 group-hover/qr:opacity-100 transition-opacity shrink-0"
+                          onClick={() => queueRemoveAt(i)}
+                          title="Remove from queue"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {queue.length <= index + 1 && (
+                    <div className="text-[10px] text-zinc-600 px-2 py-1">Nothing up next — it ends after this track.</div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* sleep timer */}
+          <div className="relative">
+            <button
+              className={`p-2 rounded-lg hover:bg-raise shrink-0 flex items-center gap-1 ${
+                sleepAt !== null || sleepStopNext
+                  ? "text-accent bg-raise"
+                  : "text-zinc-400 hover:text-white"
+              } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+              onClick={() => setSleepOpen(!sleepOpen)}
+              disabled={idle}
+              title={sleepAt !== null ? `Sleep timer — ${fmtRemaining(sleepRemaining ?? 0)} left` : sleepStopNext ? "Sleep timer — stops after this track" : "Sleep timer"}
+              aria-label="Sleep timer"
+            >
+              <Timer className="h-4 w-4" />
+              {sleepAt !== null && (
+                <span className="text-[10px] font-mono tabular-nums">{fmtRemaining(sleepRemaining ?? 0)}</span>
+              )}
+              {sleepStopNext && <span className="text-[10px] font-mono">1t</span>}
+            </button>
+            {sleepOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setSleepOpen(false)} />
+                <div className="absolute right-0 bottom-full mb-2 z-50 w-48 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Sleep timer</div>
+                  <button className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300" onClick={armSleepEndOfTrack}>
+                    After this track
+                  </button>
+                  {SLEEP_CHOICES.map((m) => (
+                    <button
+                      key={m}
+                      className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300 flex items-center justify-between"
+                      onClick={() => armSleep(m)}
+                    >
+                      <span>{m} minutes</span>
+                    </button>
+                  ))}
+                  {(sleepAt !== null || sleepStopNext) && (
+                    <button className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-red-300" onClick={cancelSleep}>
+                      Cancel timer
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
           <div className="relative">
             <button
               className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
@@ -445,6 +636,18 @@ export default function PlayerBar() {
           <BarDivider />
 
           <button
+            className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
+              lyricsOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
+            }`}
+            onClick={() => setLyricsOpen(!lyricsOpen)}
+            disabled={idle}
+            title="Lyrics — open the sidebar"
+            aria-label="Lyrics"
+          >
+            <Mic2 className="h-4 w-4" />
+          </button>
+
+          <button
             className={`p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white shrink-0 ${
               idle ? "opacity-40 pointer-events-none" : ""
             }`}
@@ -479,6 +682,22 @@ export default function PlayerBar() {
             onToggleLike={toggleLike}
             onClose={() => setFullscreen(false)}
             getAudioTime={() => audioRef.current?.currentTime ?? 0}
+          />
+        )}
+
+        {lyricsOpen && current && (
+          <LyricsSidebar
+            current={current}
+            playing={!!playing}
+            time={time}
+            onSeek={(t) => {
+              const a = audioRef.current;
+              if (!a) return;
+              a.currentTime = t;
+              setTime(t);
+            }}
+            getAudioTime={() => audioRef.current?.currentTime ?? 0}
+            onClose={() => setLyricsOpen(false)}
           />
         )}
       </div>
