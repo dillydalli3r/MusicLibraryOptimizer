@@ -43,11 +43,12 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
         )}
         {(() => {
           const tech = albumTech(al.tracks, true);
-          return ms || tech ? (
-            <div className="absolute bottom-1.5 right-1.5 flex items-center gap-1">
+          return (
+            <>
+              {/* quality bottom-left · media type bottom-right */}
               {tech && (
                 <span
-                  className="bg-black/65 text-zinc-300 text-[9px] font-mono tracking-wide rounded px-1 py-0.5 border border-white/10"
+                  className="absolute bottom-1.5 left-1.5 bg-black/65 text-zinc-300 text-[9px] font-mono tracking-wide rounded px-1 py-0.5 border border-white/10"
                   title={`Formats: ${albumTech(al.tracks)}`}
                 >
                   {tech}
@@ -55,14 +56,14 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
               )}
               {ms ? (
                 <span
-                  className="bg-black/65 text-zinc-200 text-[9px] font-semibold tracking-wide rounded px-1 py-0.5 border border-white/10"
+                  className="absolute bottom-1.5 right-1.5 bg-black/65 text-zinc-200 text-[9px] font-semibold tracking-wide rounded px-1 py-0.5 border border-white/10"
                   title={`Media: ${al.media || al.meta?.MEDIA}`}
                 >
                   {ms}
                 </span>
               ) : null}
-            </div>
-          ) : null;
+            </>
+          );
         })()}
         <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <FavHeart kind="album" id={al.path} mbid={al.meta?.MUSICBRAINZ_ALBUMID} className="!p-1.5 bg-black/60" iconClass="h-4 w-4" />
