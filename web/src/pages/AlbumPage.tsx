@@ -345,7 +345,7 @@ export default function AlbumPage() {
             <h1 className="text-3xl font-bold tracking-tight truncate">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
             {/* verdict sits right of the title — click for the problems */}
             <button
-              className={`h-2 w-2 rounded-[1px] shrink-0 transition-opacity ${verdictPass ? "bg-emerald-500/70" : "bg-red-500/80"}`}
+              className={`h-2 w-2 rounded-full shrink-0 transition-opacity ${verdictPass ? "bg-emerald-500/70" : "bg-red-500/80"}`}
               title={verdictPass ? `Pass — ${data.grade_pct ?? "?"}% of checks` : `Fail — ${data.grade_pct ?? "?"}% · ${issueEntries.length} problem type(s)`}
               onClick={() => setIssuesOpen(!issuesOpen)}
             />
@@ -614,7 +614,7 @@ export default function AlbumPage() {
                     )}
                     {/* verdict mark — click for grading & audit details */}
                     <button
-                      className={`h-1.5 w-1.5 rounded-[1px] shrink-0 ${verdictTrack(tr) ? "bg-emerald-500/60" : "bg-red-500/80"}`}
+                      className={`h-1.5 w-1.5 rounded-full shrink-0 ${verdictTrack(tr) ? "bg-emerald-500/60" : "bg-red-500/80"}`}
                       title={verdictTrack(tr) ? "Pass" : "Fail — grading & audit details"}
                       onClick={(e) => {
                         e.stopPropagation();

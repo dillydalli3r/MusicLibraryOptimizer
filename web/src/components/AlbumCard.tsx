@@ -75,7 +75,7 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
           {al.meta?.ALBUM ?? al.path.split("/").pop()}
         </Link>
         <div className="text-[11px] text-zinc-500 truncate flex items-center gap-1.5 mt-0.5">
-          <span className={`h-1.5 w-1.5 rounded-[1px] ${st.edge} inline-block shrink-0`} title={st.label} />
+          <span className={`h-1.5 w-1.5 rounded-full ${st.edge} inline-block shrink-0`} title={st.label} />
           <span className="truncate">
             {artist}
             {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}

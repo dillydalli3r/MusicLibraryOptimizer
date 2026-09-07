@@ -678,8 +678,8 @@ const toggleExpand = (path: string) =>
       {view === "compact" && (
         <div className="space-y-1">
           <div className="flex gap-4 flex-wrap text-[10px] text-zinc-600 items-center pb-1">
-            <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-[1px] bg-emerald-600/60 inline-block" /> PASS — graded clean, audit OK</span>
-            <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-[1px] bg-red-500/70 inline-block" /> FAIL — grading / audit problems (hover a row for details)</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-600/60 inline-block" /> PASS — graded clean, audit OK</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-red-500/70 inline-block" /> FAIL — grading / audit problems (hover a row for details)</span>
           </div>
           {sortedAlbums.map((al) => {
             const st = statusFor(!!al.pass, al.audit_summary);
