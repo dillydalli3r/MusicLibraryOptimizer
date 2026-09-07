@@ -179,6 +179,9 @@ def release_lookup(mbid):
         "id": data.get("id"),
         "title": data.get("title"),
         "date": (data.get("date") or ""),
+        # the release-group's first-release-date — the "original" release
+        # date shown next to this specific release's own date
+        "originaldate": (rg_obj.get("first-release-date") or ""),
         "barcode": (data.get("barcode") or ""),
         "country": country,
         "catalog_number": catalog_number,

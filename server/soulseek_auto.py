@@ -427,6 +427,7 @@ def _stamp_mb_tags(album_dir, release, cfg):
         "LABEL": release.get("label", ""),
         "BARCODE": release.get("barcode", ""),
         "DATE": release.get("date", ""),
+        "ORIGINALDATE": release.get("originaldate", ""),
         "COUNTRY": release.get("country", ""),
     }
 

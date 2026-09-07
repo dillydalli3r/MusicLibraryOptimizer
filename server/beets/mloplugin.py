@@ -323,5 +323,17 @@ class MloPlugin(BeetsPlugin):
                 except Exception as e:  # noqa: BLE001
                     self._log.warning("work-rels lookup failed for {0}: {1}", path, e)
 
+            # 3) Original release date (release-group first release). Beets
+            #    knows it and the naming script uses it for folder names,
+            #    but beets never writes the tag itself — Picard does.
+            orig = _date_str(item.original_year, item.original_month, item.original_day)
+            if orig and str(af.get_tag("ORIGINALDATE") or "").strip() != orig:
+                af.set_tag("ORIGINALDATE", orig)
+                changed = True
+            orig_year = f"{item.original_year:04d}" if item.original_year else ""
+            if orig_year and str(af.get_tag("ORIGINALYEAR") or "").strip() != orig_year:
+                af.set_tag("ORIGINALYEAR", orig_year)
+                changed = True
+
             if changed:
                 self._log.info("mloplugin touched tags: {0}", os.path.basename(path))
