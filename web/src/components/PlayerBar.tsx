@@ -9,11 +9,6 @@ import NowPlayingView from "./NowPlayingView";
 import LyricsSidebar from "./LyricsSidebar";
 import TrackDownloadExport from "./TrackDownloadExport";
 
-/** Thin vertical rule separating functional groups in the bar. */
-function BarDivider() {
-  return <div className="w-px h-6 bg-border/80 shrink-0" aria-hidden />;
-}
-
 export default function PlayerBar() {
   const { queue, index, setIndex, setQueue, queueRemoveAt, playing, setPlaying, queueId, vol, setVol } = useStore();
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -610,8 +605,6 @@ export default function PlayerBar() {
             <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
           </button>
 
-          <BarDivider />
-
           <div className="flex items-center gap-2 text-zinc-400 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
             <Volume2 className="h-4 w-4 text-zinc-500" />
             <input
@@ -625,8 +618,6 @@ export default function PlayerBar() {
               title="Volume — shared by the whole app"
             />
           </div>
-
-          <BarDivider />
 
           <button
             className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
