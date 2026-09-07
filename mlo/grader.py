@@ -968,6 +968,22 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         track["issues"].append(t)
 
         # Key & BPM (script 12 output) — required when the check is on.
+        # Excess tags: anything the optimizer's strip pass would remove —
+        # every key outside TAG_MAP plus the encoder identity tags. Their
+        # presence counts against grading so unoptimized files surface.
+        if cfg.get("grade_check_excess_tags", True):
+            from .audio import TAG_MAP as _TAG_MAP
+            _allowed_keys = {k.upper() for k in _TAG_MAP} | {
+                "ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"}
+            _raw_keys = [str(k) for k in af.all_tags().keys()]
+            _extra = sorted({k for k in _raw_keys if k.upper() not in _allowed_keys})
+            if _extra:
+                total_checks += 1
+                failed_checks += 1
+                shown = ", ".join(_extra[:6]) + ("…" if len(_extra) > 6 else "")
+                add_issue(f"Excess tags: {shown}", basename)
+                track["issues"].append("TAGS")
+
         if cfg.get("grade_check_key_bpm", True):
             for t in ("INITIALKEY", "BPM"):
                 if not should_write_audio_tag(cfg, t, filepath=ap):

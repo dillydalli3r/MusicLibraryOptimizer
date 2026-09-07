@@ -288,6 +288,9 @@ DEFAULT_CONFIG = {
     "grade_check_naming": True,
     # INITIALKEY + BPM tags (written by script 12, Key & BPM) are required.
     "grade_check_key_bpm": True,
+    # Excess tags: any key the optimizer's strip pass would remove (outside
+    # TAG_MAP + encoder identity tags) fails grading — run Optimize to strip.
+    "grade_check_excess_tags": True,
     # Raw, un-remuxed video files (VOB/AVI/WMV/TS...) fail grading — run
     # script 11 to normalize them to MKV. Remuxed MKV/MP4 videos are fine.
     "grade_check_raw_video": True,

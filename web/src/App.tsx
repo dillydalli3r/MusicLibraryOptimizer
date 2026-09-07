@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ArrowDownUp, ChevronLeft, ChevronRight, Gauge, HardDriveDownload, Heart, Import,
+  ArrowDownUp, ChevronLeft, ChevronRight, ClipboardCheck, Gauge, HardDriveDownload, Heart, Import,
   Library, ListMusic, Music4, PanelLeftClose, PanelLeftOpen, Search,
   Settings as SettingsIcon, Wrench,
 } from "lucide-react";
@@ -18,6 +18,7 @@ import SettingsPage from "./pages/SettingsPage";
 import SetupPage from "./pages/SetupPage";
 import SoulseekPage from "./pages/SoulseekPage";
 import ExportPage from "./pages/ExportPage";
+import GradingPage from "./pages/GradingPage";
 import OptimizationPage from "./pages/OptimizationPage";
 import DependenciesPage from "./pages/DependenciesPage";
 import {
@@ -35,6 +36,7 @@ const NAV = [
   { to: "/soulseek", label: "Soulseek", icon: ArrowDownUp, end: false },
   { to: "/export", label: "Export", icon: HardDriveDownload, end: false },
   { to: "/optimize", label: "Optimization", icon: Gauge, end: false },
+  { to: "/grading", label: "Grading", icon: ClipboardCheck, end: false },
   { to: "/dependencies", label: "Dependencies", icon: Wrench, end: false },
   { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
 ];
@@ -311,6 +313,7 @@ export default function App() {
             <Route path="/soulseek" element={<SoulseekPage />} />
             <Route path="/export" element={<ExportPage />} />
             <Route path="/optimize" element={<OptimizationPage />} />
+            <Route path="/grading" element={<GradingPage />} />
             <Route path="/dependencies" element={<DependenciesPage />} />
             {/* MusicBrainz browser */}
             <Route path="/mb" element={<Navigate to="/mb/search" replace />} />
