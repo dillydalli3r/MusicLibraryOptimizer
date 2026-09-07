@@ -343,6 +343,7 @@ export default function NowPlayingView(p: Props) {
   // and resumes on leave, re-centering on the active line.
   const [lyricsHover, setLyricsHover] = useState(false);
 
+  const lastLineRef = useRef(-2);
   useEffect(() => {
     if (activeLine < 0 || lyricsHover) return;
     // Center the active line INSIDE the lyrics scroller only. scrollIntoView
@@ -352,17 +353,25 @@ export default function NowPlayingView(p: Props) {
     const c = lyricsScrollRef.current;
     const el = lineRefs.current[activeLine];
     if (!c || !el) return;
+    const prev = lastLineRef.current;
+    lastLineRef.current = activeLine;
+    // A seek (or track change) moves the active line by more than one step:
+    // snap there instantly. Animating a long distance both looks broken and
+    // gets restarted by every following line change mid-flight — the classic
+    // jumpy-scroll. Adjacent steps still glide.
+    const jumped = prev < -1 || Math.abs(activeLine - prev) > 1;
     const top =
       el.getBoundingClientRect().top -
       c.getBoundingClientRect().top +
       c.scrollTop -
       c.clientHeight / 2 +
       el.clientHeight / 2;
-    c.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    c.scrollTo({ top: Math.max(0, top), behavior: jumped ? "auto" : "smooth" });
   }, [activeLine, lyricsHover]);
 
   // New track → rewind the lyrics pane to the top.
   useEffect(() => {
+    lastLineRef.current = -2;
     lyricsScrollRef.current?.scrollTo({ top: 0 });
   }, [p.current.path]);
 

@@ -297,7 +297,7 @@ export default function AlbumPage() {
   return (
     <div className="p-6 space-y-6">
       <div
-        className="rounded-xl p-5 border border-border relative overflow-hidden"
+        className="rounded-xl p-5 border border-border relative"
         style={
           coverColor
             ? { background: `linear-gradient(135deg, ${coverColor}33 0%, transparent 60%)` }
