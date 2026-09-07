@@ -18,6 +18,7 @@ export interface AlbumMeta {
   ALBUMARTIST?: string | null;
   ARTIST?: string | null;
   DATE?: string | null;
+  ORIGINALDATE?: string | null;
   MUSICBRAINZ_ALBUMID?: string | null;
   MUSICBRAINZ_ALBUMARTISTID?: string | null;
   MUSICBRAINZ_RELEASEGROUPID?: string | null;

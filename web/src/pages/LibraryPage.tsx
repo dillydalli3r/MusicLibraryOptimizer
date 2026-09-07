@@ -715,6 +715,8 @@ const toggleExpand = (path: string) =>
                           <span className="truncate">
                             {al.artist}
                             {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}
+                            {al.meta?.ORIGINALDATE && String(al.meta.ORIGINALDATE).slice(0, 4) !== String(al.meta?.DATE ?? "").slice(0, 4)
+                              ? ` (orig. ${String(al.meta.ORIGINALDATE).slice(0, 4)})` : ""}
                           </span>
                         </div>
                       </div>
@@ -794,6 +796,8 @@ const toggleExpand = (path: string) =>
                       <span className="text-[11px] text-zinc-500 truncate">
                         {al.artist}
                         {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}
+                        {al.meta?.ORIGINALDATE && String(al.meta.ORIGINALDATE).slice(0, 4) !== String(al.meta?.DATE ?? "").slice(0, 4)
+                          ? ` (orig. ${String(al.meta.ORIGINALDATE).slice(0, 4)})` : ""}
                       </span>
                     </div>
                   </div>

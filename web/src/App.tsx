@@ -298,7 +298,9 @@ export default function App() {
         </header>
 
         <main className="flex-1 overflow-auto min-w-0">
-          <Routes>
+          {/* keyed by pathname so each navigation eases the new page in */}
+          <div key={location.pathname} className="page-enter">
+            <Routes>
             <Route path="/" element={<LibraryPage />} />
             <Route path="/artist/:path" element={<ArtistPage />} />
             <Route path="/album/:path" element={<AlbumPage />} />
@@ -332,6 +334,7 @@ export default function App() {
               }
             />
           </Routes>
+          </div>
         </main>
 
         <PlayerBar />

@@ -54,29 +54,77 @@ const MB_URL: Record<string, (v: string) => string> = {
   MUSICBRAINZ_ALBUMARTISTID: (v) => `https://musicbrainz.org/artist/${v}`,
 };
 
-/** Icon row opening every identity link present in `tags`. */
-export function LinkChips({ tags }: { tags: Record<string, unknown> }) {
-  const items: { href: string; label: string; text?: string; icon?: "mb" }[] = [];
-  for (const [tag, build] of Object.entries(MB_URL)) {
+/** MusicBrainz mark: the stylized eighth-note in a circle. */
+export function MbIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
+      <path d="M12 1.5C6.2 1.5 1.5 6.2 1.5 12S6.2 22.5 12 22.5 22.5 17.8 22.5 12 17.8 1.5 12 1.5Zm0 2.1a8.4 8.4 0 1 1 0 16.8 8.4 8.4 0 0 1 0-16.8Z" />
+      <path d="M10.2 7.2 16.3 5.6v8.6a2.2 2.2 0 1 1-1.4-2V8.9l-3.3.9v6.4a2.2 2.2 0 1 1-1.4-2V7.2Z" />
+    </svg>
+  );
+}
+
+/** RateYourMusic mark: the angled "RYM" wordmark block. */
+export function RymIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 24" className={className} fill="currentColor" aria-hidden>
+      <rect x="1" y="4" width="30" height="16" rx="3" fill="none" stroke="currentColor" strokeWidth="2" />
+      <text
+        x="16"
+        y="15.8"
+        textAnchor="middle"
+        fontSize="8.5"
+        fontWeight="800"
+        fontFamily="ui-sans-serif, system-ui"
+        fill="currentColor"
+      >
+        RYM
+      </text>
+    </svg>
+  );
+}
+
+/** Icon row opening every identity link present in `tags`.
+ *
+ * `only` narrows the row to specific tags (and prefers the first listed):
+ * album pages pass their album-level tags so exactly one MusicBrainz and
+ * one RateYourMusic link show, even when a release-group ID also exists. */
+export function LinkChips({ tags, only }: { tags: Record<string, unknown>; only?: string[] }) {
+  let mbEntries = Object.entries(MB_URL).filter(([tag]) => {
     const v = tags?.[tag];
-    if (typeof v === "string" && v.trim()) {
-      items.push({
-        href: build(v),
-        label: tag.replace("MUSICBRAINZ_", "MusicBrainz ").replace("ID", "").replace("RELEASEGROUP", "release-group "),
-        icon: "mb",
-      });
-    }
-  }
-  for (const [tag, label] of [
+    return typeof v === "string" && !!v.trim();
+  });
+  let rymEntries = ([
     ["RATEYOURMUSIC_ARTIST", "RYM artist"],
     ["RATEYOURMUSIC_ALBUM", "RYM album"],
     ["RATEYOURMUSIC_TRACK", "RYM track"],
-  ] as const) {
+  ] as const).filter(([tag]) => {
     const v = tags?.[tag];
-    if (typeof v === "string" && v.trim()) {
-      items.push({ href: v, label, text: "RYM" });
-    }
+    return typeof v === "string" && !!v.trim();
+  });
+  if (only?.length) {
+    const rank = new Map(only.map((t, i) => [t, i]));
+    mbEntries = mbEntries
+      .filter(([tag]) => rank.has(tag))
+      .sort((a, b) => (rank.get(a[0]) ?? 99) - (rank.get(b[0]) ?? 99))
+      .slice(0, 1); // exactly one MusicBrainz link
+    rymEntries = rymEntries
+      .filter(([tag]) => rank.has(tag))
+      .sort((a, b) => (rank.get(a[0]) ?? 99) - (rank.get(b[0]) ?? 99))
+      .slice(0, 1); // exactly one RYM link
   }
+  const items: { href: string; label: string; service: "mb" | "rym" }[] = [
+    ...mbEntries.map(([tag, build]) => ({
+      href: build(tags[tag] as string),
+      label: tag.replace("MUSICBRAINZ_", "MusicBrainz ").replace("ID", "").replace("RELEASEGROUP", "release-group "),
+      service: "mb" as const,
+    })),
+    ...rymEntries.map(([tag, label]) => ({
+      href: tags[tag] as string,
+      label,
+      service: "rym" as const,
+    })),
+  ];
   if (!items.length) return null;
   return (
     <span className="inline-flex items-center gap-1">
@@ -89,13 +137,7 @@ export function LinkChips({ tags }: { tags: Record<string, unknown> }) {
           title={`Open ${it.label}`}
           className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-raise transition-colors inline-flex items-center"
         >
-          {it.text ? (
-            <span className="text-[9px] font-bold tracking-wide border border-current rounded px-1 py-0.5 leading-none">
-              {it.text}
-            </span>
-          ) : (
-            <ExternalLink className="h-3.5 w-3.5" />
-          )}
+          {it.service === "mb" ? <MbIcon /> : <RymIcon className="h-4 w-5" />}
         </a>
       ))}
     </span>

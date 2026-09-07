@@ -637,14 +637,16 @@ def _cover_image_ok(path, config):
             w, h = img.size
             if w <= 0 or h <= 0:
                 return False
-            # Size enforcement (configurable tolerance)
+            # Size enforcement — an oversized cover fails outright; an
+            # undersized one is forgiven here (the aspect-ratio check below
+            # still applies to it).
             if enforce_size and resize_enabled and target > 0:
                 try:
                     tol = int(config.get("grader_cover_size_tolerance_px", 0) or 0)
                     tol = max(0, min(5, tol))
                 except Exception:
                     tol = 0
-                if abs(w - target) > tol or abs(h - target) > tol:
+                if w > target + tol or h > target + tol:
                     return False
             # Square enforcement (force_exact => strict)
             if enforce_square:
@@ -760,8 +762,8 @@ def _grade_sidecars(album_dir, all_files, cfg):
                         if HAS_PIL:
                             with Image.open(full) as _im:
                                 _w, _h = _im.size
-                                if enforce_size and (abs(_w - tgt) > 1 or abs(_h - tgt) > 1):
-                                    detail = f"wrong size {_w}x{_h} (need {tgt}x{tgt})"
+                                if enforce_size and (_w > tgt + 1 or _h > tgt + 1):
+                                    detail = f"oversized {_w}x{_h} (need {tgt}x{tgt} max)"
                                 elif enforce_square:
                                     thr = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)
                                     thr = max(0.0, min(0.5, thr))

@@ -101,6 +101,12 @@ export default function AlbumPage() {
     qc.invalidateQueries({ queryKey: ["library"] });
   };
 
+  /** The library artist page for this album's artist: by album-artist MBID
+   * when tagged, else the artist folder (the album's parent directory). */
+  const artistHref = data.meta?.MUSICBRAINZ_ALBUMARTISTID
+    ? `/artist/mb:${data.meta.MUSICBRAINZ_ALBUMARTISTID}`
+    : `/artist/${encodeURIComponent(data.path.split(/[\\/]/).slice(0, -1).join("/"))}`;
+
   // Tracks of THIS album that are ticked in the global selection.
   const selectedHere = data.tracks.filter((t) => selection.tracks.includes(t.path));
 
@@ -298,7 +304,7 @@ export default function AlbumPage() {
             <CoverImg
               albumPath={data.path}
               coverFile={data.cover_file}
-              wrapperClass="h-40 w-40 rounded-lg border border-border bg-raise overflow-hidden"
+              wrapperClass="h-56 w-56 rounded-lg border border-border bg-raise overflow-hidden"
             />
             <input
               ref={coverInput}
@@ -324,7 +330,12 @@ export default function AlbumPage() {
             </div>
           </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-zinc-500 uppercase tracking-wider">{data.meta?.DATE ?? "—"}</div>
+          <div className="text-xs text-zinc-500 uppercase tracking-wider">
+            {/* original release date + the release date, when they differ */}
+            {data.meta?.ORIGINALDATE && data.meta?.ORIGINALDATE !== data.meta?.DATE
+              ? `Original ${data.meta?.ORIGINALDATE} · Released ${data.meta?.DATE ?? "—"}`
+              : data.meta?.DATE ?? "—"}
+          </div>
           <div className="flex items-center gap-2 min-w-0">
             {/* verdict dot (replaces the old PASS/FAIL badge) — click for the problems */}
             <button
@@ -335,7 +346,14 @@ export default function AlbumPage() {
             <h1 className="text-3xl font-bold tracking-tight truncate">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
             <FavHeart kind="album" id={data.path} mbid={data.meta?.MUSICBRAINZ_ALBUMID} />
           </div>
-          <div className="text-zinc-400 mt-1">{data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? "—"}</div>
+          {/* artist opens the library's artist page */}
+          <Link
+            to={artistHref}
+            className="text-zinc-400 mt-1 hover:text-accent-soft transition-colors w-fit"
+            title="Open the artist page"
+          >
+            {data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? "—"}
+          </Link>
           {(data.meta?.LABEL || data.meta?.CATALOGNUMBER) && (
             <div className="text-xs text-zinc-500 mt-0.5 truncate">
               {[data.meta?.LABEL, data.meta?.CATALOGNUMBER].filter(Boolean).join(" · ")}
@@ -345,12 +363,6 @@ export default function AlbumPage() {
             <MediaChip media={data.media} />
             <span className="chip bg-zinc-800 text-zinc-400 border border-border">
               {data.pass_count}/{data.total_checks} checks
-            </span>
-            <span className="chip bg-zinc-800 text-zinc-400 border border-border">
-              AR {data.accuraterip_status || "—"} · CS {data.checksum_status || "—"}
-            </span>
-            <span className="chip bg-zinc-800 text-zinc-400 border border-border">
-              CUE {data.has_cue ? "yes" : "no"} · LOG {data.has_log ? "yes" : "no"}
             </span>
           </div>
           {issueEntries.length > 0 && (
@@ -384,7 +396,16 @@ export default function AlbumPage() {
             </div>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-            <LinkChips tags={(data.meta ?? {}) as Record<string, unknown>} />
+            {/* exactly one MusicBrainz + one RateYourMusic link: prefer the
+                release over its release group */}
+            <LinkChips
+              tags={(data.meta ?? {}) as Record<string, unknown>}
+              only={[
+                ...(data.meta?.MUSICBRAINZ_ALBUMID ? [] : ["MUSICBRAINZ_RELEASEGROUPID"]),
+                "MUSICBRAINZ_ALBUMID",
+                "RATEYOURMUSIC_ALBUM",
+              ]}
+            />
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -589,6 +610,11 @@ export default function AlbumPage() {
                         setDetailTrack(tr);
                       }}
                     />
+                    {!!tr.issues?.length && (
+                      <span className="text-[9px] text-red-400 shrink-0" title={tr.issues.join("\n")}>
+                        {tr.issues.length}✗
+                      </span>
+                    )}
                   </div>
                 </td>
                 <td className="td pr-0">
@@ -616,11 +642,6 @@ export default function AlbumPage() {
                     <span className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                       <FavHeart kind="track" id={tr.path} mbid={tr.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" title={undefined} />
                     </span>
-                    {!!tr.issues?.length && (
-                      <span className="text-[9px] text-red-400 shrink-0" title={tr.issues.join("\n")}>
-                        {tr.issues.length}✗
-                      </span>
-                    )}
                   </div>
                 </td>
                 <td className="td text-zinc-500 max-w-[180px] truncate">{tr.tags.GENRE ?? "—"}</td>

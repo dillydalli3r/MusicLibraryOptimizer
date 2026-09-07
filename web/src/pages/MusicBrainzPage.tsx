@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, ExternalLink, Loader2, Search, Zap } from "lucide-react";
+import { ArrowUpRight, Loader2, Search, Zap } from "lucide-react";
 import { api } from "../api";
 import { EmptyState } from "../components/Badges";
+import { MbIcon } from "../components/Links";
 import { toast } from "../store";
 
 /* In-app MusicBrainz browser: search across the four browsable entities and
@@ -54,7 +55,7 @@ function ExtLink({ href, title }: { href: string; title: string }) {
       className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-raise transition-colors shrink-0"
       onClick={(e) => e.stopPropagation()}
     >
-      <ExternalLink className="h-3.5 w-3.5" />
+      <MbIcon className="h-4 w-4" />
     </a>
   );
 }

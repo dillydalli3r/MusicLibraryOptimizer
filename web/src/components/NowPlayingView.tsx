@@ -17,7 +17,7 @@ const SIZE_KEY = "mlo.np.size"; // sm | md | lg
 const KARAOKE_KEY = "mlo.np.karaoke"; // "1" = word-level karaoke, "0" = line highlight
 const ORBS_KEY = "mlo.np.orbs"; // "1" = animated background
 const VIS_KEY = "mlo.np.vis"; // "1" = background pulses with the beat
-const ZOOM_KEY = "mlo.np.lyrzoom"; // lyrics zoom multiplier (persisted)
+const ZOOM_KEY = "mlo.np.lyrzoom.v2"; // lyrics zoom multiplier (persisted)
 
 interface Props {
   current: { path: string; file: string; albumPath: string; artist?: string; album?: string; title?: string };
@@ -73,10 +73,10 @@ export default function NowPlayingView(p: Props) {
   const [lyricSize, setLyricSize] = useState<keyof typeof LYRIC_SIZES>(
     () => (localStorage.getItem(SIZE_KEY) as keyof typeof LYRIC_SIZES) || "md"
   );
-  // Extra zoom multiplier on top of the size preset, persisted — the lyrics
-  // read "a bit more zoomed in" by default (1.15×).
+  // Extra zoom multiplier on top of the size preset, persisted — the default
+  // is 1.5× (the user's preferred reading size).
   const [lyricZoom, setLyricZoom] = useState<number>(
-    () => Number(localStorage.getItem(ZOOM_KEY)) || 1.15
+    () => Number(localStorage.getItem(ZOOM_KEY)) || 1.5
   );
   const [karaoke, setKaraoke] = useState(() => localStorage.getItem(KARAOKE_KEY) !== "0");
   const [orbs, setOrbs] = useState(() => localStorage.getItem(ORBS_KEY) !== "0");
@@ -174,16 +174,13 @@ export default function NowPlayingView(p: Props) {
     if (!vis) {
       // effect disabled → restore the static ambience
       if (bgRef.current) {
-        bgRef.current.style.opacity = "0.25";
-        bgRef.current.style.transform = "scale(1.1)";
+        bgRef.current.style.opacity = "";
+        bgRef.current.style.transform = "";
       }
-      if (bloomRef.current) bloomRef.current.style.opacity = "0";
+      if (bloomRef.current) bloomRef.current.style.opacity = "";
       if (orbsRef.current) {
         orbsRef.current.style.transform = "";
         orbsRef.current.style.filter = "";
-        for (const el of orbsRef.current.querySelectorAll<HTMLElement>(".orb")) {
-          el.style.opacity = "";
-        }
       }
       return;
     }
@@ -191,37 +188,29 @@ export default function NowPlayingView(p: Props) {
     const bps = bpm > 0 ? Math.min(2.2, bpm / 60) : 1.4; // beats per second
     let raf = 0;
     const t0 = performance.now();
-    const orbEls = orbsRef.current
-      ? Array.from(orbsRef.current.querySelectorAll<HTMLElement>(".orb"))
-      : [];
     const tick = () => {
       const t = (performance.now() - t0) / 1000;
       const frac = p.playing ? (t * bps) % 1 : 0;
       // fast-attack / slow-release envelope on every beat
       const env = p.playing ? Math.pow(Math.exp(-2.2 * frac), 1.4) : 0.12;
-      // blurred cover: slow breathing + gentle scale pump (never a flash)
+      // Blurred cover: a very slow breathing zoom. Opacity never changes —
+      // brightness pumping is what read as "flashing" before.
       const breathe = 0.5 + 0.5 * Math.sin(t * 0.21);
       if (bgRef.current) {
-        bgRef.current.style.transform = `scale(${(1.08 + 0.05 * breathe + 0.035 * env).toFixed(4)})`;
-        bgRef.current.style.opacity = String(0.26 + 0.04 * breathe + 0.02 * env);
+        bgRef.current.style.transform = `scale(${(1.08 + 0.06 * breathe + 0.03 * env).toFixed(4)})`;
       }
-      // bloom ring behind the artwork
-      eased.current.bloom += (env - eased.current.bloom) * 0.12;
+      // Bloom: the only beat-visible layer, eased so it swells rather than
+      // snaps, and capped well below flash territory.
+      eased.current.bloom += (env - eased.current.bloom) * 0.06;
       if (bloomRef.current) {
-        bloomRef.current.style.opacity = String(0.18 + 0.3 * eased.current.bloom);
-        bloomRef.current.style.transform = `scale(${(0.94 + 0.16 * eased.current.bloom).toFixed(4)})`;
+        bloomRef.current.style.opacity = String(0.14 + 0.16 * eased.current.bloom);
+        bloomRef.current.style.transform = `scale(${(0.96 + 0.1 * eased.current.bloom).toFixed(4)})`;
       }
-      // Color field: the orbs drift and hue-shift via CSS; the beat only
-      // pumps the field's scale and brightness a touch — never opacity, so
-      // the background can't flash dark. Each orb keeps its own slow,
-      // desynced breathing so light keeps circulating between colors.
+      // Color field: all motion lives in the CSS keyframes (large travel,
+      // 9-16s loops, per-orb hue). The beat only nudges the field's scale —
+      // never opacity or brightness, so nothing can flash.
       if (orbsRef.current) {
-        orbsRef.current.style.transform = `scale(${(1 + 0.025 * env).toFixed(4)})`;
-        orbsRef.current.style.filter = `brightness(${(1 + 0.09 * env).toFixed(3)}) saturate(${(1 + 0.18 * env).toFixed(3)})`;
-        orbEls.forEach((el, i) => {
-          const wave = 0.5 + 0.5 * Math.sin(t * (0.45 + i * 0.17) + i * 2.1);
-          el.style.opacity = String(0.6 + 0.25 * wave);
-        });
+        orbsRef.current.style.transform = `scale(${(1 + 0.012 * env).toFixed(4)})`;
       }
       raf = requestAnimationFrame(tick);
     };
@@ -538,15 +527,15 @@ export default function NowPlayingView(p: Props) {
             />
             <div
               className="orb orb-b w-[48vw] h-[48vw] bottom-[-14vw] right-[-8vw]"
-              style={{ background: `radial-gradient(circle at 60% 40%, rgb(${rgb.join(" ")} / 0.85), transparent 62%)`, filter: "blur(90px) hue-rotate(55deg)" }}
+              style={{ background: `radial-gradient(circle at 38% 32%, rgb(${rgb.join(" ")} / 0.85), transparent 62%)`, filter: "blur(80px) hue-rotate(55deg)" }}
             />
             <div
               className="orb orb-c w-[38vw] h-[38vw] top-[28%] left-[36%]"
-              style={{ background: `radial-gradient(circle at 50% 50%, rgb(${rgb.map((v) => Math.min(255, v + 40)).join(" ")} / 0.8), transparent 60%)`, filter: "blur(90px) hue-rotate(-65deg)" }}
+              style={{ background: `radial-gradient(circle at 62% 38%, rgb(${rgb.map((v) => Math.min(255, v + 40)).join(" ")} / 0.8), transparent 60%)`, filter: "blur(80px) hue-rotate(-65deg)" }}
             />
             <div
               className="orb orb-d w-[30vw] h-[30vw] top-[-8vw] right-[12vw]"
-              style={{ background: `radial-gradient(circle at 45% 55%, rgb(${rgb.map((v) => Math.max(0, v - 20)).join(" ")} / 0.75), transparent 58%)`, filter: "blur(70px) hue-rotate(150deg)" }}
+              style={{ background: `radial-gradient(circle at 30% 60%, rgb(${rgb.map((v) => Math.max(0, v - 20)).join(" ")} / 0.75), transparent 58%)`, filter: "blur(70px) hue-rotate(150deg)" }}
             />
           </div>
         </div>
@@ -585,14 +574,19 @@ export default function NowPlayingView(p: Props) {
             </button>
             <div className="relative">
               <button
-                className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white"
+                className={`p-2 rounded-lg hover:bg-white/10 ${options ? "text-white bg-white/10" : "text-zinc-400 hover:text-white"}`}
                 onClick={() => setOptions(!options)}
                 title="Lyrics & display options"
               >
                 <Settings2 className="h-5 w-5" />
               </button>
               {options && (
-                <div className="absolute right-0 top-full mt-1 z-10 glass rounded-xl shadow-xl p-2 w-72 bg-zinc-950/85">
+                <>
+                  {/* click-away shield so the popover never lingers over the
+                      lyrics; the panel itself is opaque and layered above
+                      everything so it reads cleanly over moving text */}
+                  <div className="fixed inset-0 z-40" onClick={() => setOptions(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-50 rounded-xl shadow-2xl p-2 w-72 bg-zinc-950 border border-white/10">
                   <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1">Lyrics</div>
                   {[
                     { id: "xlit" as const, label: "Transliteration (romanized)", on: showXlit, act: () => toggleOpt("xlit") },
@@ -676,6 +670,7 @@ export default function NowPlayingView(p: Props) {
                     AI translation uses Settings → AI; results are cached per track.
                   </div>
                 </div>
+                </>
               )}
             </div>
             <button className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white" onClick={p.onClose} title="Close (Esc)">
@@ -861,7 +856,7 @@ export default function NowPlayingView(p: Props) {
               double-count with the cover block and clip the bottom half
               outside the scroll pane) */}
           {hasLyrics && (
-            <div className="flex-1 min-h-0 w-full lg:h-full flex flex-col max-w-3xl lg:max-w-4xl lg:flex-none lg:w-[44%] lg:ml-auto">
+            <div className="flex-1 min-h-0 w-full lg:h-full flex flex-col max-w-3xl lg:max-w-none lg:flex-none lg:w-[56%] lg:ml-auto">
               <div
                 ref={lyricsScrollRef}
                 className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 no-scrollbar"

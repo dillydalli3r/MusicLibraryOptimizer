@@ -207,10 +207,12 @@ export default function PlayerBar() {
   }
 
   return (
-    // Floating rounded bar (Monochrome-style): margins + pill radius instead
-    // of a full-bleed strip, lifted with a border and shadow.
+    // Floating rounded bar: margins + pill radius instead of a full-bleed
+    // strip, lifted with a border and shadow. Center column: the seek bar
+    // sits ABOVE the transport controls; the right cluster keeps like /
+    // volume / fullscreen.
     <div className="shrink-0 px-3 pb-3 pt-1">
-    <div className="h-16 rounded-2xl border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-4 px-4">
+    <div className="h-[5.5rem] rounded-2xl border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-4 px-4">
       <audio
         ref={audioRef}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
@@ -218,7 +220,7 @@ export default function PlayerBar() {
       />
 
       <button
-        className="relative h-11 w-16 rounded-lg overflow-hidden border border-border bg-raise shrink-0 flex items-center justify-center"
+        className="relative h-14 w-14 rounded-lg overflow-hidden border border-border bg-raise shrink-0 flex items-center justify-center hover:scale-[1.03] transition-transform"
         onClick={() => setFullscreen(true)}
         title="Album art — click for the fullscreen player"
       >
@@ -234,7 +236,7 @@ export default function PlayerBar() {
         )}
       </button>
 
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 w-52 shrink-0">
         <div className="text-sm truncate font-semibold">{displayTitle}</div>
         <div className="text-[11px] text-zinc-500 truncate">
           {[current.artist ?? current.albumPath.split("/").pop(), current.album]
@@ -249,42 +251,64 @@ export default function PlayerBar() {
         </div>
       </div>
 
-      <div className="flex items-center gap-1">
-        <button className={`p-2 rounded-lg hover:bg-raise ${shuffle ? "text-accent" : "text-zinc-500"}`} onClick={() => setShuffle(!shuffle)} title="Shuffle">
-          <Shuffle className="h-4 w-4" />
-        </button>
-        <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(-1)}>
-          <SkipBack className="h-4 w-4" />
-        </button>
-        <button
-          className="p-2.5 rounded-lg bg-accent on-accent hover:bg-accent-soft"
-          onClick={() => {
-            const a = audioRef.current;
-            if (!a) return;
-            if (playing) {
-              a.pause();
-              setPlaying(null);
-            } else {
-              a.play().catch(() => {});
-              setPlaying(current.path);
-            }
-          }}
-        >
-          {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
-        </button>
-        <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(1)}>
-          <SkipForward className="h-4 w-4" />
-        </button>
-        <button className={`p-2 rounded-lg hover:bg-raise ${loop ? "text-accent" : "text-zinc-500"}`} onClick={() => setLoop(!loop)} title="Repeat one">
-          <Repeat className="h-4 w-4" />
-        </button>
-        <button
-          className="p-1.5 rounded-lg hover:bg-raise text-xs font-mono text-zinc-400 min-w-[46px]"
-          onClick={cycleSpeed}
-          title="Playback speed — [ slower · ] faster · 0 reset to 1×"
-        >
-          {fmtSpeed(speed)}
-        </button>
+      {/* center: seek bar above the transport controls */}
+      <div className="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5">
+        <div className="flex items-center gap-2 w-full max-w-2xl text-[10px] text-zinc-500 tabular-nums">
+          <span className="w-10 text-right shrink-0">{fmtDuration(time)}</span>
+          <input
+            type="range"
+            min={0}
+            max={duration || 0}
+            step={0.05}
+            value={Math.min(time, duration || 0)}
+            onChange={(e) => {
+              const a = audioRef.current;
+              if (!a) return;
+              a.currentTime = Number(e.target.value);
+              setTime(Number(e.target.value));
+            }}
+            className="flex-1"
+            title="Seek — ← / → nudge 5s"
+          />
+          <span className="w-10 shrink-0">{fmtDuration(duration)}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <button className={`p-2 rounded-lg hover:bg-raise ${shuffle ? "text-accent" : "text-zinc-500"}`} onClick={() => setShuffle(!shuffle)} title="Shuffle">
+            <Shuffle className="h-4 w-4" />
+          </button>
+          <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(-1)}>
+            <SkipBack className="h-4 w-4" />
+          </button>
+          <button
+            className="p-2.5 rounded-lg bg-accent on-accent hover:bg-accent-soft active:scale-95 transition-transform"
+            onClick={() => {
+              const a = audioRef.current;
+              if (!a) return;
+              if (playing) {
+                a.pause();
+                setPlaying(null);
+              } else {
+                a.play().catch(() => {});
+                setPlaying(current.path);
+              }
+            }}
+          >
+            {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
+          </button>
+          <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(1)}>
+            <SkipForward className="h-4 w-4" />
+          </button>
+          <button className={`p-2 rounded-lg hover:bg-raise ${loop ? "text-accent" : "text-zinc-500"}`} onClick={() => setLoop(!loop)} title="Repeat one">
+            <Repeat className="h-4 w-4" />
+          </button>
+          <button
+            className="p-1.5 rounded-lg hover:bg-raise text-xs font-mono text-zinc-400 min-w-[46px]"
+            onClick={cycleSpeed}
+            title="Playback speed — [ slower · ] faster · 0 reset to 1×"
+          >
+            {fmtSpeed(speed)}
+          </button>
+        </div>
       </div>
 
       <button
@@ -295,24 +319,7 @@ export default function PlayerBar() {
         <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
       </button>
 
-      <div className="flex items-center gap-2 text-xs text-zinc-400 flex-1 max-w-[460px]">
-        <span className="w-10 text-right shrink-0">{fmtDuration(time)}</span>
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step={0.05}
-          value={Math.min(time, duration || 0)}
-          onChange={(e) => {
-            const a = audioRef.current;
-            if (!a) return;
-            a.currentTime = Number(e.target.value);
-            setTime(Number(e.target.value));
-          }}
-          className="flex-1 "
-          title="Seek — ← / → nudge 5s"
-        />
-        <span className="w-10 shrink-0">{fmtDuration(duration)}</span>
+      <div className="flex items-center gap-2 text-zinc-400 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
         <Volume2 className="h-4 w-4 text-zinc-500" />
         <input
           type="range"
@@ -321,7 +328,7 @@ export default function PlayerBar() {
           step={0.05}
           value={vol}
           onChange={(e) => setVol(Number(e.target.value))}
-          className="w-20 "
+          className="w-32"
           title="Volume — shared by the whole app"
         />
       </div>
