@@ -3,6 +3,7 @@ import { Play } from "lucide-react";
 import { useStore } from "../store";
 import { statusFor } from "../lib/status";
 import { mediaShort } from "./Badges";
+import { albumTech } from "../lib/fmt";
 import CoverImg from "./CoverImg";
 import FavHeart from "./FavHeart";
 import { albumRef } from "../lib/refs";
@@ -40,14 +41,29 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
             <input type="checkbox" checked={!!selected} onChange={() => onSelect?.(al.path)} title="Select album" />
           </div>
         )}
-        {ms ? (
-          <span
-            className="absolute bottom-1.5 right-1.5 bg-black/65 text-zinc-200 text-[9px] font-semibold tracking-wide rounded px-1 py-0.5 border border-white/10"
-            title={`Media: ${al.media || al.meta?.MEDIA}`}
-          >
-            {ms}
-          </span>
-        ) : null}
+        {(() => {
+          const tech = albumTech(al.tracks, true);
+          return ms || tech ? (
+            <div className="absolute bottom-1.5 right-1.5 flex items-center gap-1">
+              {tech && (
+                <span
+                  className="bg-black/65 text-zinc-300 text-[9px] font-mono tracking-wide rounded px-1 py-0.5 border border-white/10"
+                  title={`Formats: ${albumTech(al.tracks)}`}
+                >
+                  {tech}
+                </span>
+              )}
+              {ms ? (
+                <span
+                  className="bg-black/65 text-zinc-200 text-[9px] font-semibold tracking-wide rounded px-1 py-0.5 border border-white/10"
+                  title={`Media: ${al.media || al.meta?.MEDIA}`}
+                >
+                  {ms}
+                </span>
+              ) : null}
+            </div>
+          ) : null;
+        })()}
         <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <FavHeart kind="album" id={al.path} mbid={al.meta?.MUSICBRAINZ_ALBUMID} className="!p-1.5 bg-black/60" iconClass="h-4 w-4" />
         </div>

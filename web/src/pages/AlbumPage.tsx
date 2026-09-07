@@ -16,7 +16,7 @@ import StatsPanel from "../components/StatsPanel";
 import TrackDetails from "../components/TrackDetails";
 import { SortHeader, sortRows, toggleSort, groupByDisc, type SortState } from "../lib/sort.tsx";
 import { toast, useStore } from "../store";
-import { fmtTech } from "../lib/fmt";
+import { fmtTech, albumTech } from "../lib/fmt";
 import { fmtDuration } from "./LibraryPage";
 import type { Track } from "../types";
 
@@ -391,6 +391,15 @@ export default function AlbumPage() {
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <MediaChip media={data.media} />
+            {/* aggregated codec / bitrate / depth-rate across the album's tracks */}
+            {albumTech(data.tracks) && (
+              <span
+                className="text-xs font-mono text-zinc-500"
+                title="Codec · bitrate · bit depth/sample rate across this album's tracks"
+              >
+                {albumTech(data.tracks)}
+              </span>
+            )}
             {/* disc count lives in the header too, so multi-disc albums
                 announce themselves before the tracklist */}
             {maxDisc > 1 && (
