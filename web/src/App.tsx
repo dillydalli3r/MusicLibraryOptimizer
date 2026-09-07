@@ -3,7 +3,7 @@ import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "reac
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowDownUp, ChevronLeft, ChevronRight, ClipboardCheck, Gauge, HardDriveDownload, Heart, Import,
-  Library, ListMusic, Music4, PanelLeftClose, PanelLeftOpen, Search,
+  Library, ListMusic, Music4, PanelLeftClose, Search,
   Settings as SettingsIcon, Wrench,
 } from "lucide-react";
 import { api } from "./api";
@@ -185,23 +185,43 @@ export default function App() {
         {/* sidebar header: brand + collapse toggle, split from the nav by a
             hairline. Collapses to a stacked icon rail. */}
         <div
-          className={`flex items-center gap-2 border-b border-border pb-2 mb-1 shrink-0 ${
-            collapsed ? "flex-col pt-1 gap-1.5" : "px-1"
+          className={`flex items-center gap-2 border-b border-border pb-2 mb-1 shrink-0 transition-[padding] duration-150 ${
+            collapsed ? "px-1.5" : "px-1"
           }`}
         >
-          <img
-            src="/icon.png"
-            alt="la musica"
-            className="h-7 w-7 rounded-md object-cover ring-1 ring-border shadow-sm shrink-0"
-          />
-          {!collapsed && <span className="flex-1 font-bold tracking-tight text-sm truncate">la musica</span>}
+          {/* the logo itself expands the sidebar when collapsed, so the
+              header never rearranges (no column flip, no icon jump) */}
           <button
-            className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-raise transition-colors"
-            onClick={toggleCollapse}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={`shrink-0 rounded-md ${collapsed ? "cursor-pointer hover:bg-raise p-0.5 -ml-0.5" : "cursor-default"}`}
+            onClick={() => collapsed && toggleCollapse()}
+            title={collapsed ? "Expand sidebar" : undefined}
           >
-            {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            <img
+              src="/icon.png"
+              alt="la musica"
+              className="h-7 w-7 rounded-md object-cover ring-1 ring-border shadow-sm shrink-0"
+            />
           </button>
+          <span
+            className={`flex-1 overflow-hidden whitespace-nowrap font-bold tracking-tight text-sm transition-[max-width,opacity] duration-150 ${
+              collapsed ? "max-w-0 opacity-0" : "max-w-[110px] opacity-100"
+            }`}
+          >
+            la musica
+          </span>
+          <span
+            className={`overflow-hidden shrink-0 transition-[max-width,opacity] duration-150 ${
+              collapsed ? "max-w-0 opacity-0" : "max-w-[40px] opacity-100"
+            }`}
+          >
+            <button
+              className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-raise transition-colors"
+              onClick={toggleCollapse}
+              title="Collapse sidebar"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          </span>
         </div>
         {NAV.map(({ to, label, icon: Icon, end }) => (
           <NavLink
@@ -211,16 +231,24 @@ export default function App() {
             title={collapsed ? label : undefined}
             className={({ isActive }) =>
               // Monochrome-style: the active entry is a solid accent block
-              // with contrast text; inactive ones stay quiet.
+              // with contrast text; inactive ones stay quiet. The label
+              // collapses via max-width so the icon glides with the
+              // shrinking sidebar instead of jumping to a new layout.
               `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors border ${
                 isActive
                   ? "bg-accent on-accent font-semibold border-transparent shadow-sm"
                   : "text-zinc-400 hover:text-white hover:bg-raise border-transparent"
-              } ${collapsed ? "justify-center px-0" : ""}`
+              }`
             }
           >
             <Icon className="h-4 w-4 shrink-0" />
-            {!collapsed && label}
+            <span
+              className={`overflow-hidden whitespace-nowrap transition-[max-width,opacity] duration-150 ${
+                collapsed ? "max-w-0 opacity-0" : "max-w-[110px] opacity-100"
+              }`}
+            >
+              {label}
+            </span>
           </NavLink>
         ))}
         {!collapsed && (
