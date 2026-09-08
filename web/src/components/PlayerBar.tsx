@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Timer, Volume2, X } from "lucide-react";
@@ -12,7 +12,15 @@ import TrackDownloadExport from "./TrackDownloadExport";
 
 export default function PlayerBar() {
   const { queue, index, setIndex, setQueue, queueRemoveAt, playing, setPlaying, queueId, vol, setVol } = useStore();
-  const audioRef = useRef<HTMLAudioElement>(null);
+  // Gapless playback: two audio elements. The idle one preloads the next
+  // sequential track while the current one plays; at `ended` the elements
+  // swap roles, so the next track starts without a load gap.
+  const aRef = useRef<HTMLAudioElement>(null);
+  const bRef = useRef<HTMLAudioElement>(null);
+  const activeIsA = useRef(true);
+  const audio = () => (activeIsA.current ? aRef.current : bRef.current);
+  const swapped = useRef(false); // set when the swap already advanced the queue
+  const preloaded = useRef(-1); // queue index preloaded into the idle element
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [shuffle, setShuffle] = useState(false);
@@ -66,11 +74,11 @@ export default function PlayerBar() {
         });
       }
       ms.setActionHandler("play", () => {
-        audioRef.current?.play();
+        audio()?.play();
         setPlaying(current.path);
       });
       ms.setActionHandler("pause", () => {
-        audioRef.current?.pause();
+        audio()?.pause();
         setPlaying(null);
       });
       ms.setActionHandler("previoustrack", () => stepRef.current(-1));
@@ -94,29 +102,58 @@ export default function PlayerBar() {
   };
 
   // Reload + play whenever the queue identity or index changes (keyed on
-  // queueId so a fresh queue at the same index still reloads).
+  // queueId so a fresh queue at the same index still reloads). Skipped when
+  // the gapless swap already loaded and started the next track.
   useEffect(() => {
-    const audio = audioRef.current;
+    if (swapped.current) {
+      swapped.current = false;
+      preloaded.current = -1;
+      const el = audio();
+      if (el) {
+        el.playbackRate = speed;
+        el.volume = vol;
+      }
+      return;
+    }
+    preloaded.current = -1;
+    const el = audio();
     const track = queue[index];
-    if (!audio || !track) return;
+    if (!el || !track) return;
     setTime(0);
     setDuration(0);
-    audio.src = api.streamUrl(track.path);
-    audio.playbackRate = speed; // fresh <src> resets the rate
-    audio.play().catch(() => {});
+    el.src = api.streamUrl(track.path);
+    el.playbackRate = speed; // fresh <src> resets the rate
+    el.play().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, queueId]);
 
+  // Preload the next sequential track into the idle element as the current
+  // one approaches its end — this is what makes the handover gapless.
   useEffect(() => {
-    const audio = audioRef.current;
-    if (audio) audio.playbackRate = speed;
+    if (shuffle || !current) return;
+    const next = index + 1;
+    if (next >= queue.length) return;
+    if (preloaded.current === next) return;
+    const nearEnd = duration > 0 && duration - time < 10;
+    if (!nearEnd) return;
+    const idle = activeIsA.current ? bRef.current : aRef.current;
+    if (!idle) return;
+    idle.src = api.streamUrl(queue[next].path);
+    idle.load();
+    preloaded.current = next;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [time, duration, index, queue, shuffle]);
+
+  useEffect(() => {
+    const el = audio();
+    if (el) el.playbackRate = speed;
   }, [speed]);
 
-  // Global volume: the stored value is re-applied to the <audio> element
-  // whenever it changes or a new source loads.
+  // Global volume: the stored value is re-applied to the ACTIVE <audio>
+  // element whenever it changes or a new source loads.
   useEffect(() => {
-    const audio = audioRef.current;
-    if (audio) audio.volume = vol;
+    const el = audio();
+    if (el) el.volume = vol;
   }, [vol, current?.path]);
 
   // Keyboard shortcuts: Space pause/play · [ / ] speed down/up · 0 reset ·
@@ -130,7 +167,7 @@ export default function PlayerBar() {
       if (code === "Space") {
         if (document.querySelector("[data-lrc-editor]")) return;
         e.preventDefault();
-        const a = audioRef.current;
+        const a = audio();
         if (!a || !current) return;
         if (playing) {
           a.pause();
@@ -147,11 +184,11 @@ export default function PlayerBar() {
         setSpeed(1);
       } else if (code === "ArrowLeft") {
         if (document.querySelector("[data-lrc-editor]")) return; // lyrics editor owns seeking
-        const a = audioRef.current;
+        const a = audio();
         if (a) a.currentTime = Math.max(0, a.currentTime - 5);
       } else if (code === "ArrowRight") {
         if (document.querySelector("[data-lrc-editor]")) return;
-        const a = audioRef.current;
+        const a = audio();
         if (a && a.duration) a.currentTime = Math.min(a.duration, a.currentTime + 5);
       }
     };
@@ -249,7 +286,7 @@ export default function PlayerBar() {
     if (sleepAt === null) return;
     const iv = setInterval(() => {
       if (Date.now() >= sleepAt) {
-        audioRef.current?.pause();
+        audio()?.pause();
         useStore.getState().setPlaying(null);
         setSleepAt(null);
         toast("Sleep timer — playback paused");
@@ -259,31 +296,56 @@ export default function PlayerBar() {
     return () => clearInterval(iv);
   }, [sleepAt]);
 
-  useEffect(() => {
-    const onEnded = () => {
-      if (sleepStopNext) {
-        audioRef.current?.pause();
-        useStore.getState().setPlaying(null);
-        setSleepStopNext(false);
-        toast("Sleep timer — playback paused");
-        return;
+  // Fired by whichever element is active when its track ends. The gapless
+  // path swaps the preloaded idle element in and starts it immediately —
+  // no network fetch, no decode pause.
+  const handleEnded = (e?: SyntheticEvent<HTMLAudioElement>) => {
+    if (e && e.currentTarget !== audio()) return; // stale idle element
+    if (sleepStopNext) {
+      audio()?.pause();
+      useStore.getState().setPlaying(null);
+      setSleepStopNext(false);
+      toast("Sleep timer — playback paused");
+      return;
+    }
+    if (loop) {
+      const a = audio();
+      if (a) {
+        a.currentTime = 0;
+        a.play().catch(() => {});
       }
-      if (loop) {
-        const a = audioRef.current;
-        if (a) {
-          a.currentTime = 0;
-          a.play().catch(() => {});
-        }
-      } else step(1);
-    };
-    const audio = audioRef.current;
-    audio?.addEventListener("ended", onEnded);
-    return () => audio?.removeEventListener("ended", onEnded);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue.length, index, shuffle, loop, sleepStopNext]);
+      return;
+    }
+    const next = index + 1;
+    if (!shuffle && next < queue.length && preloaded.current === next) {
+      swapped.current = true;
+      activeIsA.current = !activeIsA.current;
+      const el = audio(); // now the preloaded element
+      setIndex(next);
+      setPlaying(queue[next]?.path ?? null);
+      setTime(0);
+      setDuration(el?.duration || 0);
+      if (el) {
+        el.playbackRate = speed;
+        el.volume = vol;
+        el.play().catch(() => {});
+      }
+      return;
+    }
+    step(1);
+  };
+
+  // time/metadata events fire on both elements; only the active one drives
+  // the UI (the idle element's preloaded metadata must not touch the bar)
+  const onTime = (e: SyntheticEvent<HTMLAudioElement>) => {
+    if (e.currentTarget === audio()) setTime(e.currentTarget.currentTime);
+  };
+  const onMeta = (e: SyntheticEvent<HTMLAudioElement>) => {
+    if (e.currentTarget === audio()) setDuration(e.currentTarget.duration);
+  };
 
   const togglePlay = () => {
-    const a = audioRef.current;
+    const a = audio();
     if (!a || !current) return;
     if (playing) {
       a.pause();
@@ -299,11 +361,8 @@ export default function PlayerBar() {
   return (
     <div className="shrink-0 px-3 pb-3 pt-1 relative z-10">
       <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 pr-4">
-        <audio
-          ref={audioRef}
-          onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-        />
+        <audio ref={aRef} onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded} />
+        <audio ref={bRef} onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded} />
 
         {/* left: cover art, flush with the bar's left edge (full bar height,
             square; the bar's own margin keeps it off the screen edge) */}
@@ -362,7 +421,7 @@ export default function PlayerBar() {
               step={0.05}
               value={Math.min(time, duration || 0)}
               onChange={(e) => {
-                const a = audioRef.current;
+                const a = audio();
                 if (!a) return;
                 a.currentTime = Number(e.target.value);
                 setTime(Number(e.target.value));
@@ -660,7 +719,7 @@ export default function PlayerBar() {
               liked={liked}
               onTogglePlay={togglePlay}
               onSeek={(t) => {
-                const a = audioRef.current;
+                const a = audio();
                 if (!a) return;
                 a.currentTime = t;
                 setTime(t);
@@ -670,7 +729,7 @@ export default function PlayerBar() {
               onToggleLoop={() => setLoop(!loop)}
               onToggleLike={toggleLike}
               onClose={() => setFullscreen(false)}
-              getAudioTime={() => audioRef.current?.currentTime ?? 0}
+              getAudioTime={() => audio()?.currentTime ?? 0}
             />,
             document.body
           )}
@@ -681,12 +740,12 @@ export default function PlayerBar() {
             playing={!!playing}
             time={time}
             onSeek={(t) => {
-              const a = audioRef.current;
+              const a = audio();
               if (!a) return;
               a.currentTime = t;
               setTime(t);
             }}
-            getAudioTime={() => audioRef.current?.currentTime ?? 0}
+            getAudioTime={() => audio()?.currentTime ?? 0}
             onClose={() => setLyricsOpen(false)}
           />
         )}

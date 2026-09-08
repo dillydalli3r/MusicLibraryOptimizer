@@ -602,9 +602,15 @@ export default function NowPlayingView(p: Props) {
       <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/55 via-zinc-950/20 to-zinc-950/80" />
 
       <div className="relative h-full flex flex-col">
-        {/* top bar — right-aligned cluster only: the queue position sits as a
-            minimal fraction next to the queue button */}
-        <div className="flex items-center justify-end px-5 py-3">
+        {/* top bar — exit button top-left, queue/options cluster top-right */}
+        <div className="flex items-center justify-between px-5 py-3">
+          <button
+            className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white"
+            onClick={p.onClose}
+            title="Exit fullscreen (Esc)"
+          >
+            <ChevronDown className="h-5 w-5" />
+          </button>
           <div className="flex items-center gap-1">
             {p.queuePos && (
               <span className="text-[10px] font-mono text-zinc-500 mr-1 tabular-nums" title="Queue position">
