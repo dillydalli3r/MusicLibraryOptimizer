@@ -55,20 +55,13 @@ export function MediaChip({ media }: { media: string | null | undefined }) {
   return <span className="chip bg-zinc-800/70 text-zinc-300 border border-border">{media}</span>;
 }
 
-/** Compact media label for album cards/icons: "CD", "DIGITAL", "VINYL", …
- * Falls back to the first word when the format is something unusual. */
+/** Compact media label for album cards/icons: the first word of the media
+ * value in its OWN capitalization ("CD", "Digital", "SACD", "Vinyl"…). */
 export function mediaShort(media: string | null | undefined): string | null {
   const m = (media ?? "").trim();
   if (!m) return null;
-  const u = m.toUpperCase();
-  if (u.includes("CD")) return "CD";
-  if (u.includes("VINYL")) return "VINYL";
-  if (u.includes("DIGITAL") || u.includes("FILE") || u.includes("WEB")) return "DIGITAL";
-  if (u.includes("DVD")) return "DVD";
-  if (u.includes("BLU")) return "BLU-RAY";
-  if (u.includes("SACD")) return "SACD";
-  if (u.includes("CASSETTE")) return "TAPE";
-  return u.split(/[\s/;,]+/)[0].slice(0, 8);
+  const first = (m.split(/[\s/;,]+/)[0] ?? "").slice(0, 10);
+  return first || null;
 }
 
 export function AdvisoryBadge({ value }: { value: string | null | undefined }) {

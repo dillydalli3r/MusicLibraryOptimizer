@@ -394,7 +394,7 @@ export default function AlbumPage() {
             {/* aggregated codec / bitrate / depth-rate across the album's tracks */}
             {albumTech(data.tracks) && (
               <span
-                className="text-xs font-mono text-zinc-500"
+                className="chip bg-zinc-800/70 text-zinc-300 border border-border font-mono"
                 title="Codec · bitrate · bit depth/sample rate across this album's tracks"
               >
                 {albumTech(data.tracks)}
