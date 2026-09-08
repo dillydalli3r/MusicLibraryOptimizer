@@ -366,6 +366,7 @@ export const api = {
     }, 60000),
   soulseekSharesRescan: () =>
     json<{ ok: boolean }>(`${API}/soulseek/shares/rescan`, { method: "POST" }, 60000),
+  soulseekUploads: () => json<any>(`${API}/soulseek/uploads`),
   soulseekStop: () =>
     json<{ ok: boolean; message: string }>(`${API}/soulseek/stop`, { method: "POST" }, 15000),
   soulseekSearch: (query: string) =>

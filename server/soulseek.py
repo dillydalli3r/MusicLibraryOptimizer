@@ -427,6 +427,17 @@ def downloads_state(cfg=None):
         raise
 
 
+def uploads_state(cfg=None):
+    """Full upload transfer tree (what others have downloaded = shared
+    history), grouped per user. Same shape as downloads_state()."""
+    try:
+        return _request("GET", "/transfers/uploads") or []
+    except httpx.HTTPStatusError as e:
+        if e.response is not None and e.response.status_code == 404:
+            return []
+        raise
+
+
 def server_state(cfg=None):
     """Login status + server stats (or None when logged out)."""
     try:

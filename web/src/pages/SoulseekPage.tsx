@@ -884,6 +884,22 @@ export default function SoulseekPage() {
   const autoRan = useRef(false); // ?q= handoff runs once per page visit
   const releaseParam = params.get("release") ?? undefined;
 
+  // Page tabs — Search is the default; the badge on Downloads counts active
+  // transfers so progress is visible from any tab.
+  type TabId = "search" | "auto" | "downloads" | "sharing" | "settings";
+  const TAB_LIST: { id: TabId; label: string }[] = [
+    { id: "search", label: "Search" },
+    { id: "auto", label: "Auto-import" },
+    { id: "downloads", label: "Downloads" },
+    { id: "sharing", label: "Sharing" },
+    { id: "settings", label: "Settings" },
+  ];
+  const [tab, setTab] = useState<TabId>(() => (releaseParam ? "auto" : "search"));
+  const dlFiles = (downloads?.downloads ?? []).flatMap((u: any) =>
+    (u.directories ?? []).flatMap((d: any) =>
+      (d.files ?? []).map((f: any) => ({ ...f, username: u.username, dir: d.directory }))));
+  const dlActive = dlFiles.filter((f: any) => f.state === "InProgress" || f.state === "Queued").length;
+
   /** Pre-download quality check: fetch only the .log file(s), grade them,
    * clean up — shows the Logchecker score inline on the folder row. */
   const testLogs = async (g: SlskGroup) => {
@@ -1058,7 +1074,23 @@ export default function SoulseekPage() {
         </div>
       </div>
 
-      {status && (
+      <div className="flex rounded-md border border-border overflow-hidden w-fit">
+        {TAB_LIST.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+              tab === t.id ? "bg-accent on-accent" : "bg-panel text-zinc-400 hover:text-white"
+            }`}
+          >
+            {t.label}
+            {t.id === "downloads" && dlActive > 0 ? ` · ${dlActive}` : ""}
+            {t.id === "search" && results.length > 0 ? ` · ${results.length}` : ""}
+          </button>
+        ))}
+      </div>
+
+      {tab === "settings" && status && (
         <div className="bg-card rounded-lg border border-border p-3 flex items-center gap-2 flex-wrap text-xs">
           <span className="text-[10px] uppercase tracking-widest text-zinc-500 mr-1">Ports</span>
           <label className="flex items-center gap-1.5 text-zinc-500">
@@ -1090,7 +1122,12 @@ export default function SoulseekPage() {
         </div>
       )}
 
-      <SharingCard running={running} />
+      {tab === "sharing" && (
+        <>
+          <SharingCard running={running} />
+          <UploadsPanel running={running} />
+        </>
+      )}
 
       {running && status?.logged_in === false && (
         status?.has_credentials ? (
@@ -1104,8 +1141,9 @@ export default function SoulseekPage() {
         )
       )}
 
-      <AutoPanel initialMbid={releaseParam} />
+      {tab === "auto" && <AutoPanel initialMbid={releaseParam} />}
 
+      {tab === "search" && (
       <div className="bg-card rounded-lg border border-border p-4">
         <div className="flex gap-2">
           <input
@@ -1240,38 +1278,150 @@ export default function SoulseekPage() {
           </div>
         )}
       </div>
+      )}
 
-      <ReviewPanel />
+      {tab === "downloads" && (
+        <>
+          <ReviewPanel />
+          <DownloadsPanel downloads={downloads} />
+        </>
+      )}
+    </div>
+  );
+}
 
-      <div className="bg-card rounded-lg border border-border p-4">
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Downloads</div>
+/** Transfer statuses for the Downloads tab: active transfers with progress
+ * bars, plus queued / completed / failed buckets so the history is
+ * browsable instead of one flat list. */
+function DownloadsPanel({ downloads }: { downloads: any }) {
+  const [view, setView] = useState<"active" | "completed">("active");
+  const files = ((downloads?.downloads ?? []) as any[]).flatMap((u: any) =>
+    (u.directories ?? []).flatMap((d: any) =>
+      (d.files ?? []).map((f: any) => ({ ...f, username: u.username, dir: d.directory }))));
+  const pct = (f: any) => {
+    if (typeof f.percentComplete === "number") return Math.round(f.percentComplete);
+    if (f.size) return Math.min(100, Math.round(((f.bytesTransferred ?? 0) / f.size) * 100));
+    return 0;
+  };
+  const active = files.filter((f) => f.state === "InProgress");
+  const queued = files.filter((f) => f.state === "Queued");
+  const completed = files.filter((f) => f.state === "Completed");
+  const failed = files.filter((f) => !["InProgress", "Queued", "Completed"].includes(f.state));
+  const shown = view === "active" ? [...active, ...queued] : [...completed, ...failed];
+  const bucket = (f: any) =>
+    f.state === "Completed" ? (
+      <span className="chip text-[9px] bg-emerald-900/40 text-emerald-300 border border-emerald-800">done</span>
+    ) : f.state === "InProgress" ? (
+      <span className="chip text-[9px] bg-sky-900/40 text-sky-300 border border-sky-800">{pct(f)}%</span>
+    ) : f.state === "Queued" ? (
+      <span className="chip text-[9px] bg-raise border border-border text-zinc-400">queued</span>
+    ) : (
+      <span className="chip text-[9px] bg-red-950/60 text-red-300 border border-red-900">{f.state?.toLowerCase() ?? "failed"}</span>
+    );
+
+  return (
+    <div className="bg-card rounded-lg border border-border p-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Downloads</div>
+        <div className="flex gap-1 text-[10px]">
+          {([["active", active.length], ["queued", queued.length], ["completed", completed.length], ["failed", failed.length]] as [string, number][]).map(([label, count]) => (
+            <span key={label} className={`chip text-[9px] border ${count > 0 ? "bg-raise border-border text-zinc-300" : "bg-panel border-border/60 text-zinc-600"}`}>
+              {label} {count}
+            </span>
+          ))}
         </div>
-        {(downloads?.downloads ?? []).length === 0 ? (
-          <div className="text-xs text-zinc-600">No downloads queued.</div>
-        ) : (
-          <div className="space-y-2 max-h-[320px] overflow-auto">
-            {(downloads?.downloads ?? []).map((u: any) => (
-              <details key={u.username} className="rounded border border-border">
-                <summary className="px-2 py-1 text-xs cursor-pointer text-zinc-300">{u.username}</summary>
-                <div className="px-3 pb-2 space-y-1">
-                  {(u.directories ?? []).map((d: any, di: number) => (
-                    <div key={di}>
-                      <div className="text-[10px] text-zinc-500 truncate">{d.directory}</div>
-                      {(d.files ?? []).map((f: any, fi: number) => (
-                        <div key={fi} className="flex items-center justify-between text-[11px] text-zinc-400">
-                          <span className="truncate">{fileName(f.filename ?? "")}</span>
-                          <span className="text-zinc-600 ml-2 shrink-0">{f.state ?? ""} · {fmtSize(f.size ?? 0)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </details>
+      </div>
+      {files.length === 0 ? (
+        <div className="text-xs text-zinc-600">No downloads queued.</div>
+      ) : (
+        <>
+          <div className="flex rounded-md border border-border overflow-hidden w-fit mb-2">
+            {(["active", "completed"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  view === v ? "bg-accent on-accent" : "bg-panel text-zinc-400 hover:text-white"
+                }`}
+              >
+                {v === "active" ? `Active (${active.length + queued.length})` : `History (${completed.length + failed.length})`}
+              </button>
             ))}
+          </div>
+          <div className="space-y-1 max-h-[360px] overflow-auto">
+            {shown.map((f: any, i: number) => (
+              <div key={`${f.username}-${i}`} className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-white/[0.04] text-xs">
+                <div className="flex-1 min-w-0">
+                  <div className="truncate text-zinc-200" title={f.filename}>{fileName(f.filename ?? "")}</div>
+                  <div className="text-[10px] text-zinc-600 truncate" title={f.dir}>{f.username} · {f.dir}</div>
+                </div>
+                {view === "active" && (
+                  <div className="w-28 shrink-0 h-1.5 rounded-sm bg-border/70 overflow-hidden">
+                    <div className={`h-full ${f.state === "InProgress" ? "bg-accent" : "bg-zinc-600"}`} style={{ width: `${pct(f)}%` }} />
+                  </div>
+                )}
+                <span className="text-zinc-500 w-16 text-right shrink-0">{fmtSize(f.size ?? 0)}</span>
+                <span className="w-16 text-right shrink-0">{bucket(f)}</span>
+              </div>
+            ))}
+            {shown.length === 0 && (
+              <div className="text-[11px] text-zinc-600 py-4 text-center">Nothing here.</div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Shared history: what other users are / were downloading from you —
+ * live uploads plus everything completed, from slskd's upload transfers. */
+function UploadsPanel({ running }: { running: boolean }) {
+  const { data } = useQuery({
+    queryKey: ["soulseekUploads"],
+    queryFn: api.soulseekUploads,
+    enabled: running,
+    refetchInterval: 5000,
+  });
+  const files = ((data?.uploads ?? []) as any[]).flatMap((u: any) =>
+    (u.directories ?? []).flatMap((d: any) =>
+      (d.files ?? []).map((f: any) => ({ ...f, username: u.username, dir: d.directory }))));
+  const sharingNow = files.filter((f: any) => f.state === "InProgress");
+  const past = files.filter((f: any) => f.state !== "InProgress");
+  const totalGiven = past.reduce((n: number, f: any) => n + (f.bytesTransferred ?? f.size ?? 0), 0);
+
+  return (
+    <div className="bg-card rounded-lg border border-border p-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Shared history (uploads)</div>
+        {files.length > 0 && (
+          <div className="flex gap-1 text-[10px]">
+            <span className="chip text-[9px] bg-sky-900/40 text-sky-300 border border-sky-800">sharing now {sharingNow.length}</span>
+            <span className="chip text-[9px] bg-raise border border-border text-zinc-300">past {past.length}</span>
+            <span className="chip text-[9px] bg-panel border-border/60 text-zinc-500">{fmtSize(totalGiven)} given</span>
           </div>
         )}
       </div>
+      {!running ? (
+        <div className="text-xs text-zinc-600">slskd is stopped — start it to share your library.</div>
+      ) : files.length === 0 ? (
+        <div className="text-xs text-zinc-600">No uploads yet — other users haven't pulled from your shares.</div>
+      ) : (
+        <div className="space-y-1 max-h-[300px] overflow-auto">
+          {[...sharingNow, ...past].slice(0, 60).map((f: any, i: number) => (
+            <div key={`${f.username}-${i}`} className="flex items-center gap-3 px-2 py-1.5 rounded hover:bg-white/[0.04] text-xs">
+              <div className="flex-1 min-w-0">
+                <div className="truncate text-zinc-200" title={f.filename}>{fileName(f.filename ?? "")}</div>
+                <div className="text-[10px] text-zinc-600 truncate">{f.username}</div>
+              </div>
+              <span className="text-zinc-500 w-16 text-right shrink-0">{fmtSize(f.bytesTransferred ?? f.size ?? 0)}</span>
+              <span className={`w-20 text-right shrink-0 chip text-[9px] border ${f.state === "InProgress" ? "bg-sky-900/40 text-sky-300 border-sky-800" : f.state === "Completed" ? "bg-emerald-900/40 text-emerald-300 border-emerald-800" : "bg-raise border-border text-zinc-400"}`}>
+                {f.state === "InProgress" ? "sharing" : f.state?.toLowerCase()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

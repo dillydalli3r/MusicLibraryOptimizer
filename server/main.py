@@ -2143,6 +2143,15 @@ def soulseek_downloads():
     return {"downloads": soulseek.downloads_state()}
 
 
+@app.get("/api/soulseek/uploads")
+def soulseek_uploads():
+    """Upload transfer tree — the shared-history view (per user / file)."""
+    from server import soulseek
+    if not (soulseek.is_running() or soulseek.web_up(load_config())):
+        return {"uploads": []}
+    return {"uploads": soulseek.uploads_state()}
+
+
 def _review_file_info(p, ffprobe=None):
     """Tech + tags for one completed download file (review panel row)."""
     from mlo.audio import AudioFile
