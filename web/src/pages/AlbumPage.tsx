@@ -440,7 +440,7 @@ export default function AlbumPage() {
           )}
           {/* bottom action row: play + every primary button (identity links
               live next to the album title now) */}
-          <div className="mt-4 pt-3 border-t border-border/60 flex flex-wrap items-center gap-2">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             <button
               className="btn-primary !p-2.5 !rounded-md"
               onClick={() => playNow(queueTracks)}

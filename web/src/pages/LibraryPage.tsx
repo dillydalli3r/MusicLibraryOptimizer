@@ -126,7 +126,6 @@ const TRACK_COLS: Col[] = [
   { id: "year", label: "Year", sortKey: "tags.DATE" },
   { id: "genre", label: "Genre", sortKey: "tags.GENRE" },
   { id: "media", label: "Media", sortKey: "tags.MEDIA" },
-  { id: "grade", label: "Grade", sortKey: "grade_pass" },
   { id: "advisory", label: "Advisory", sortKey: "tags.ITUNESADVISORY" },
   { id: "duration", label: "Duration", sortKey: "tech.length" },
   { id: "bitrate", label: "Bitrate", sortKey: "tech.bitrate" },
@@ -1005,6 +1004,7 @@ const toggleExpand = (path: string) =>
                             >
                               {tr.tags.TITLE ?? tr.file}
                             </Link>
+                            <GradeBadge pass={!!tr.grade_pass && !auditFails(tr.audit)} audit={tr.audit} size="sm" />
                             <span className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                               <FavHeart kind="track" id={tr.path} mbid={tr.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" />
                             </span>
@@ -1029,7 +1029,6 @@ const toggleExpand = (path: string) =>
                       {trackCols.includes("year") && <td className="td text-zinc-500" title={tr.tags.DATE ?? undefined}>{fmtDateCell(tr.tags.DATE, fullDates)}</td>}
                       {trackCols.includes("genre") && <td className="td text-zinc-500 truncate max-w-[130px]">{tr.tags.GENRE ?? "—"}</td>}
                       {trackCols.includes("media") && <td className="td"><MediaChip media={tr.tags.MEDIA} /></td>}
-                      {trackCols.includes("grade") && <td className="td"><GradeBadge pass={!!tr.grade_pass && !auditFails(tr.audit)} score={null} audit={tr.audit} size="sm" /></td>}
                       {trackCols.includes("advisory") && <td className="td"><AdvisoryBadge value={tr.tags.ITUNESADVISORY} /></td>}
                       {trackCols.includes("duration") && <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>}
                       {trackCols.includes("bitrate") && <td className="td text-zinc-500">{fmtTech(tr.tech) || "—"}</td>}
