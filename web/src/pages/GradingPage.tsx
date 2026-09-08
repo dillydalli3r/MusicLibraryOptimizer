@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Save } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
+import ConfirmButton from "../components/ConfirmButton";
 
 /** In-depth grading configuration: every check that can count for or
  * against grading, grouped the way they apply — track/album checks,
@@ -185,7 +186,6 @@ export default function GradingPage() {
   const resetDefaults = () => {
     const d = defaults as Record<string, unknown> | undefined;
     if (!d) return;
-    if (!window.confirm("Reset all grading checks to their defaults?")) return;
     setLocal((c) => {
       const next = { ...(c ?? {}) };
       for (const k of GRADING_KEYS) if (d[k] !== undefined) next[k] = d[k];
@@ -209,14 +209,14 @@ export default function GradingPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {dirty && <span className="text-[10px] font-mono text-amber-400/80">unsaved changes</span>}
-          <button
-            className="btn-ghost !py-1.5 text-xs"
-            onClick={resetDefaults}
+          <ConfirmButton
+            onConfirm={resetDefaults}
+            confirmLabel="Reset checks"
             disabled={!defaults || saving}
             title="Restore factory defaults for every grading check"
           >
             <RotateCcw className="h-3.5 w-3.5" /> Reset to defaults
-          </button>
+          </ConfirmButton>
           <button className="btn-ghost !py-1.5 text-xs" onClick={discard} disabled={!dirty || saving}>
             <RotateCcw className="h-3.5 w-3.5" /> Discard
           </button>

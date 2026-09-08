@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderOpen, Save, RotateCcw, Check, Eye, EyeOff } from "lucide-react";
 import { api } from "../api";
+import ConfirmButton from "../components/ConfirmButton";
 import { toast } from "../store";
 import { applyAccent } from "../App";
 
@@ -520,7 +521,6 @@ export default function SettingsPage() {
   const resetAllDefaults = () => {
     const d = configDefaults as Record<string, unknown> | undefined;
     if (!d) return;
-    if (!window.confirm("Reset ALL settings to their defaults?\n\nKept: your music folder, the first-run flag and the AI connection (endpoint, model, key).")) return;
     const cur = scriptCfg as Record<string, unknown>;
     const next: Record<string, unknown> = { ...d };
     for (const k of ["music_folder", "first_run_done", "ai_api_key", "ai_base_url", "ai_model"]) {
@@ -1185,14 +1185,14 @@ export default function SettingsPage() {
           )}
 
           <div className="flex items-center gap-2">
-            <button
-              className="btn-ghost"
-              onClick={resetAllDefaults}
+            <ConfirmButton
+              onConfirm={resetAllDefaults}
+              confirmLabel="Reset all"
               disabled={!configDefaults}
-              title="Restore factory defaults for every setting (music folder, first-run flag and AI key are kept)"
+              title="Restore factory defaults for every setting (music folder, first-run flag and AI connection are kept)"
             >
               <RotateCcw className="h-4 w-4" /> Reset to defaults
-            </button>
+            </ConfirmButton>
             <button className="btn-primary" onClick={save}>
               <Save className="h-4 w-4" /> Save all settings
             </button>
