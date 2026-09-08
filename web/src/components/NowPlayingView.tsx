@@ -361,16 +361,17 @@ export default function NowPlayingView(p: Props) {
   }, [lines, dispTime, staleLyrics]);
 
   // While the pointer rests on the lyrics the reader owns the pane: the
-  // auto-center pauses (it would otherwise scroll the hovered line away)
-  // and resumes on leave, re-centering on the active line.
+  // auto-center pauses and does NOT resume on leave — moving the cursor
+  // away never shifts the text. Following picks back up at the next
+  // natural line change, gliding from wherever the pane is.
   const [lyricsHover, setLyricsHover] = useState(false);
 
   // Seek vs glide: a real jump of the song clock (>1.2s between frames)
   // marks a SEEK — the pane snaps to the new position. Everything else
-  // (normal line steps, resuming after hover, clicking a lyric line)
-  // glides. Clicking a line also moves the audio clock, so it sets a short
-  // glide window that wins over the seek mark: navigating by lyric line
-  // should stay animated even at song start.
+  // (normal line steps, clicking a lyric line) glides. Clicking a line
+  // also moves the audio clock, so it sets a short glide window that wins
+  // over the seek mark: navigating by lyric line should stay animated
+  // even at song start.
   const seekMarkRef = useRef(0);
   const glideMarkRef = useRef(0);
   const prevDispRef = useRef(-1);
@@ -398,7 +399,9 @@ export default function NowPlayingView(p: Props) {
       c.clientHeight / 2 +
       el.clientHeight / 2;
     c.scrollTo({ top: Math.max(0, top), behavior: animate ? "smooth" : "auto" });
-  }, [activeLine, lyricsHover]);
+    // lyricsHover intentionally excluded from deps: leaving hover must not
+    // scroll — following resumes at the next natural line change.
+  }, [activeLine]);
 
   // New track → rewind the lyrics pane to the top.
   useEffect(() => {
