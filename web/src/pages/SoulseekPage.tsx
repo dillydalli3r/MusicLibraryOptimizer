@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Download, Eye, EyeOff, Loader2, Play, Power, RefreshCw, Search, User, Zap, Square,
-  FileCheck2, FileVideo, Music2, Save, Tag, Trash2, PackageOpen,
+  Download, Eye, EyeOff, FolderOpen, Loader2, Play, Power, RefreshCw, Search, User, Zap,
+  Square, FileCheck2, FileVideo, Music2, Save, Tag, Trash2, PackageOpen,
 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
@@ -21,6 +21,11 @@ interface SlskFile {
   queue: number;
 }
 
+const fmtRate = (n: number | null | undefined) => {
+  if (!n) return "0 kB/s";
+  if (n > 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB/s`;
+  return `${(n / 1024).toFixed(0)} kB/s`;
+};
 const fmtSize = (n: number) => {
   if (!n) return "—";
   if (n > 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
@@ -660,6 +665,141 @@ function ReviewPanel() {
   );
 }
 
+/** Share configuration (la musica settings are the source of truth — the
+ * slskd yaml is regenerated from them at start) with live rescan and the
+ * autostart preference. Reserved folders (Data / .mlo_downloads /
+ * .mlo_trash) are filtered server-side and never shared. */
+function SharingCard({ running }: { running: boolean }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["soulseekShares"], queryFn: api.soulseekShares });
+  const [dirs, setDirs] = useState<string[] | null>(null);
+  const [newDir, setNewDir] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (data && dirs === null) setDirs((data.dirs as string[]) ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  const autostart: boolean = data?.autostart ?? true;
+  const scanState: string | undefined = data?.slskd?.scanState;
+  const savedDirs: string[] = data?.dirs ?? [];
+  const dirty =
+    dirs !== null &&
+    (JSON.stringify([...dirs].sort()) !== JSON.stringify([...savedDirs].sort()));
+
+  const save = async (autostartOverride?: boolean) => {
+    setBusy(true);
+    try {
+      const r = await api.soulseekSharesSave(dirs ?? [], autostartOverride ?? null, true);
+      toast(r.restarted ? "Shares saved — slskd restarted and rescanning" : "Shares saved");
+      qc.invalidateQueries({ queryKey: ["soulseekShares"] });
+      qc.invalidateQueries({ queryKey: ["soulseekStatus"] });
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rescan = async () => {
+    setBusy(true);
+    try {
+      await api.soulseekSharesRescan();
+      toast("Share rescan started");
+      qc.invalidateQueries({ queryKey: ["soulseekShares"] });
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleAutostart = async () => {
+    setBusy(true);
+    try {
+      await api.soulseekSharesSave(dirs ?? [], !autostart, false);
+      qc.invalidateQueries({ queryKey: ["soulseekShares"] });
+      qc.invalidateQueries({ queryKey: ["soulseekStatus"] });
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-lg border border-border p-3 text-xs space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] uppercase tracking-widest text-zinc-500">Sharing</span>
+        {scanState && (
+          <span className={`chip text-[9px] border ${scanState === "Complete" ? "bg-emerald-900/40 text-emerald-300 border-emerald-800" : "bg-raise border-border text-zinc-400"}`}>
+            scan: {scanState.toLowerCase()}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-2.5">
+          <label className="flex items-center gap-1.5 cursor-pointer text-zinc-400" title="Start slskd automatically when the app starts">
+            <input type="checkbox" checked={autostart} onChange={() => toggleAutostart()} disabled={busy} />
+            Start with the app
+          </label>
+          <button className="btn-ghost !py-1 text-xs" onClick={rescan} disabled={busy || !running}>
+            <RefreshCw className="h-3.5 w-3.5" /> Rescan
+          </button>
+        </div>
+      </div>
+      {dirs !== null && (
+        <div className="space-y-1">
+          {dirs.map((d) => (
+            <div key={d} className="flex items-center gap-2">
+              <FolderOpen className="h-3.5 w-3.5 text-zinc-600 shrink-0" />
+              <span className="truncate flex-1 font-mono text-[11px] text-zinc-300" title={d}>{d}</span>
+              <button
+                className="text-zinc-600 hover:text-red-300 shrink-0"
+                onClick={() => setDirs(dirs.filter((x) => x !== d))}
+                title="Stop sharing this folder"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center gap-2">
+            <input
+              className="input !py-1 flex-1 font-mono text-[11px]"
+              placeholder="Add a folder to share (full path)"
+              value={newDir}
+              onChange={(e) => setNewDir(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newDir.trim()) {
+                  setDirs([...(dirs ?? []), newDir.trim()]);
+                  setNewDir("");
+                }
+              }}
+            />
+            <button
+              className="btn-ghost !py-1 text-xs"
+              disabled={!newDir.trim()}
+              onClick={() => {
+                setDirs([...(dirs ?? []), newDir.trim()]);
+                setNewDir("");
+              }}
+            >
+              Add
+            </button>
+          </div>
+          {dirty && (
+            <button className="btn-primary !py-1 text-xs w-full" onClick={() => save()} disabled={busy}>
+              {busy ? "Applying…" : "Save & apply (restarts slskd to rescan)"}
+            </button>
+          )}
+        </div>
+      )}
+      <div className="text-[10px] text-zinc-600">
+        Reserved folders are never shared: Data (app state), .mlo_downloads, .mlo_trash.
+      </div>
+    </div>
+  );
+}
+
 export default function SoulseekPage() {
   const [params] = useSearchParams();
   const { data: status, refetch: refetchStatus } = useQuery({
@@ -894,6 +1034,14 @@ export default function SoulseekPage() {
               <span className="text-emerald-400">running{status?.logged_in ? " · logged in" : status?.logged_in === false ? " · not logged in" : ""}</span>
             ) : "stopped"}
             {" · downloads: "}{status?.download_dir ?? "—"}
+            {running && status?.server?.uploadSpeed != null && (
+              <>
+                {" · "}
+                <span className="text-zinc-400">
+                  ↓ {fmtRate(status.server.downloadSpeed)} · ↑ {fmtRate(status.server.uploadSpeed)}
+                </span>
+              </>
+            )}
           </div>
         </div>
         <div className="flex gap-2">
@@ -941,6 +1089,8 @@ export default function SoulseekPage() {
           </span>
         </div>
       )}
+
+      <SharingCard running={running} />
 
       {running && status?.logged_in === false && (
         status?.has_credentials ? (

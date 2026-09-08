@@ -357,6 +357,15 @@ export const api = {
     json<{ ok: boolean; ready: boolean; message: string; has_credentials: boolean }>(`${API}/soulseek/start`, { method: "POST" }, 30000),
   soulseekRestart: () =>
     json<{ ok: boolean }>(`${API}/soulseek/restart`, { method: "POST" }, 60000),
+  soulseekShares: () => json<any>(`${API}/soulseek/shares`),
+  soulseekSharesSave: (dirs: string[], autostart: boolean | null, apply = true) =>
+    json<{ ok: boolean; dirs: string[]; restarted: boolean }>(`${API}/soulseek/shares`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dirs, autostart, apply }),
+    }, 60000),
+  soulseekSharesRescan: () =>
+    json<{ ok: boolean }>(`${API}/soulseek/shares/rescan`, { method: "POST" }, 60000),
   soulseekStop: () =>
     json<{ ok: boolean; message: string }>(`${API}/soulseek/stop`, { method: "POST" }, 15000),
   soulseekSearch: (query: string) =>

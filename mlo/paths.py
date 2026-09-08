@@ -61,13 +61,14 @@ def read_music_folder_guess():
 
 
 def app_data_dir(music_folder=None):
-    """The folder holding ALL app state: <music folder>/.data.
+    """The folder holding ALL app state: <music folder>/Data.
 
-    Falls back to the legacy repo-local server/data only while no music
-    folder is configured (fresh setup), so first-run still works."""
+    The music folder is formatted as <music>/Artists (the library) +
+    <music>/Data (this folder). Falls back to the legacy repo-local
+    server/data only while no music folder is configured (fresh setup)."""
     mf = music_folder or read_music_folder_guess()
     if mf:
-        return os.path.join(mf, ".data")
+        return os.path.join(mf, "Data")
     return LEGACY_DATA_DIR
 
 
@@ -192,7 +193,7 @@ def is_sidecar_cover_file(album_dir, filename, all_track_basenames=None):
     return base.lower() in {b.lower() for b in all_track_basenames}
 
 
-SKIP_DIRS = {".dependencies", ".mlo_trash", ".data", "__pycache__", "$RECYCLE.BIN",
+SKIP_DIRS = {".dependencies", ".mlo_trash", ".data", "data", "__pycache__", "$RECYCLE.BIN",
              "System Volume Information", ".git", ".thumbnails", ".tmp"}
 
 

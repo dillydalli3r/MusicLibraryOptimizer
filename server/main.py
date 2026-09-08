@@ -1999,6 +1999,8 @@ def soulseek_status():
         "password": str(cfg.get("soulseek_password") or ""),
         "has_credentials": bool(str(cfg.get("soulseek_username") or "").strip()
                                 and cfg.get("soulseek_password")),
+        "autostart": bool(cfg.get("soulseek_autostart", True)),
+        "share_dirs": soulseek.share_dirs(cfg),
     }
 
 
@@ -2033,6 +2035,60 @@ def soulseek_restart():
         raise HTTPException(400, "slskd is not running")
     if not soulseek.restart():
         raise HTTPException(504, "slskd did not become ready in time")
+    return {"ok": True}
+
+
+@app.get("/api/soulseek/shares")
+def soulseek_shares():
+    """Share configuration (la musica settings are the source of truth —
+    the slskd yaml is regenerated from them) plus slskd's live scan state."""
+    from server import soulseek
+    cfg = load_config()
+    return {
+        "dirs": soulseek.share_dirs(cfg),
+        "exclude": [x.strip("'") for x in soulseek.share_exclude(cfg)],
+        "share_library": bool(cfg.get("soulseek_share_library", True)),
+        "autostart": bool(cfg.get("soulseek_autostart", True)),
+        "slskd": soulseek.shares_state(cfg),
+    }
+
+
+class SoulseekSharesRequest(BaseModel):
+    dirs: List[str] = []
+    autostart: Optional[bool] = None
+    apply: bool = True
+
+
+@app.post("/api/soulseek/shares")
+def soulseek_shares_update(req: SoulseekSharesRequest):
+    """Save the shared-folder list (and autostart flag). Restarting slskd
+    re-indexes the shares — share changes only apply after a restart."""
+    from server import soulseek
+    cfg = load_config()
+    dirs = sorted({os.path.normpath(str(d).strip()) for d in req.dirs if str(d).strip()})
+    for d in dirs:
+        if not os.path.isdir(d):
+            raise HTTPException(400, f"not a folder: {d}")
+    cfg["soulseek_share_dirs"] = dirs
+    if req.autostart is not None:
+        cfg["soulseek_autostart"] = req.autostart
+    save_config(cfg)
+    restarted = False
+    if req.apply and (soulseek.is_running() or soulseek.web_up(cfg)):
+        restarted = soulseek.restart()
+        if not restarted:
+            raise HTTPException(504, "slskd did not become ready in time")
+    return {"ok": True, "dirs": dirs, "autostart": cfg["soulseek_autostart"],
+            "restarted": restarted}
+
+
+@app.post("/api/soulseek/shares/rescan")
+def soulseek_shares_rescan():
+    """Ask slskd to rescan its share index (picks up library changes)."""
+    from server import soulseek
+    if not (soulseek.is_running() or soulseek.web_up(load_config())):
+        raise HTTPException(400, "slskd is not running")
+    soulseek.rescan_shares()
     return {"ok": True}
 
 

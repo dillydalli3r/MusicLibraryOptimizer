@@ -451,7 +451,8 @@ DEFAULT_CONFIG = {
     "soulseek_up_limit": 0,
     "soulseek_down_limit": 0,
     "soulseek_download_dir": "",
-    "soulseek_autostart": False,
+    # ON by default: the Soulseek client should be up whenever the app is.
+    "soulseek_autostart": True,
     # Share the library with the network on the configured listen port.
     "soulseek_share_library": True,
     # Auto-import (MusicBrainz release → Soulseek). Each template is a
