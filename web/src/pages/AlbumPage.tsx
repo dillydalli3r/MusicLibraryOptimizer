@@ -592,12 +592,6 @@ export default function AlbumPage() {
               const multiDisc = groups.length > 1;
               return groups.map((g) => (
                 <Fragment key={g.disc ?? 0}>
-                  {/* disc header above EVERY disc, single or multi */}
-                  <tr>
-                    <td colSpan={selectMode ? 7 : 6} className="td !py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                      Disc {g.disc ?? (groups.length === 1 ? 1 : "—")}
-                    </td>
-                  </tr>
                   {g.tracks.map((tr) => (
               <tr
                 key={tr.path}
@@ -636,10 +630,10 @@ export default function AlbumPage() {
                 )}
                 <td className="td text-zinc-500">
                   <div className="flex items-center gap-1.5">
-                    <span className="tabular-nums">{tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}</span>
-                    {multiDisc && (
-                      <span className="text-[9px] text-zinc-600 uppercase tracking-wide">cd{g.disc ?? "?"}</span>
-                    )}
+                    {/* multi-disc albums number tracks D-TT (2-1, 2-2, …) */}
+                    <span className="tabular-nums">
+                      {multiDisc ? `${g.disc}-${tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "?"}` : tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}
+                    </span>
                     {/* verdict mark — click for grading & audit details */}
                     <button
                       className={`h-1.5 w-1.5 rounded-full shrink-0 ${verdictTrack(tr) ? "bg-emerald-500/60" : "bg-red-500/80"}`}

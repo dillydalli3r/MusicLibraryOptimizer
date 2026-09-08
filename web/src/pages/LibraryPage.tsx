@@ -1172,11 +1172,7 @@ function AlbumRowGroup({
                   const groups = groupByDisc(tracks);
                   return groups.map((g) => (
                     <Fragment key={g.disc ?? 0}>
-                      <tr>
-                        <td colSpan={selectMode ? 8 : 7} className="td !py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                          Disc {g.disc ?? (groups.length === 1 ? 1 : "—")}
-                        </td>
-                      </tr>
+
                       {g.tracks.map((t) => (
                   <tr
                     key={t.path}
@@ -1197,7 +1193,9 @@ function AlbumRowGroup({
                         <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
                       </td>
                     )}
-                    <td className="td text-zinc-600">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</td>
+                    <td className="td text-zinc-600 tabular-nums">
+                      {groups.length > 1 ? `${g.disc}-${t.tracknumber ?? t.tags.TRACKNUMBER ?? "?"}` : t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}
+                    </td>
                     <td className="td pr-0">
                       {t.cover_file && (
                         <CoverImg
