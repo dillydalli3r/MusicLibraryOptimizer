@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Timer, Volume2, X } from "lucide-react";
 import { api } from "../api";
@@ -642,31 +643,37 @@ export default function PlayerBar() {
           </button>
         </div>
 
-        {fullscreen && current && (
-          <NowPlayingView
-            current={current}
-            queuePos={queue.length > 1 ? `${index + 1}/${queue.length}` : ""}
-            playing={!!playing}
-            time={time}
-            duration={duration}
-            shuffle={shuffle}
-            loop={loop}
-            liked={liked}
-            onTogglePlay={togglePlay}
-            onSeek={(t) => {
-              const a = audioRef.current;
-              if (!a) return;
-              a.currentTime = t;
-              setTime(t);
-            }}
-            onStep={step}
-            onToggleShuffle={() => setShuffle(!shuffle)}
-            onToggleLoop={() => setLoop(!loop)}
-            onToggleLike={toggleLike}
-            onClose={() => setFullscreen(false)}
-            getAudioTime={() => audioRef.current?.currentTime ?? 0}
-          />
-        )}
+        {/* portal to <body>: the fullscreen player must escape the right
+            column's stacking context (z-10) or the sidebar (z-20) paints
+            over it and it stops being truly fullscreen */}
+        {fullscreen &&
+          current &&
+          createPortal(
+            <NowPlayingView
+              current={current}
+              queuePos={queue.length > 1 ? `${index + 1}/${queue.length}` : ""}
+              playing={!!playing}
+              time={time}
+              duration={duration}
+              shuffle={shuffle}
+              loop={loop}
+              liked={liked}
+              onTogglePlay={togglePlay}
+              onSeek={(t) => {
+                const a = audioRef.current;
+                if (!a) return;
+                a.currentTime = t;
+                setTime(t);
+              }}
+              onStep={step}
+              onToggleShuffle={() => setShuffle(!shuffle)}
+              onToggleLoop={() => setLoop(!loop)}
+              onToggleLike={toggleLike}
+              onClose={() => setFullscreen(false)}
+              getAudioTime={() => audioRef.current?.currentTime ?? 0}
+            />,
+            document.body
+          )}
 
         {lyricsOpen && (
           <LyricsSidebar
