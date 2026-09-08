@@ -1,19 +1,27 @@
-﻿import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import {  FolderOpen, ListPlus, Play, Trash2, ChevronRight, ChevronDown, Columns3, Wand2, FolderSync, BarChart3, Info as InfoIcon, CloudDownload,
-  ListFilter, ListChecks,
+import {
+  ArrowDownUp, BarChart3, ChevronDown, ChevronRight, CloudDownload,
+  FileVideo, FolderOpen, FolderSync, Info as InfoIcon, Layers, ListChecks,
+  ListFilter, ListPlus, Play, Trash2, Wand2,
 } from "lucide-react";
 import { api } from "../api";
 import { SCRIPTS, DEFAULT_RUN_ALL } from "../lib/scripts";
 import { toast, useStore } from "../store";
-import { sortRows, SortHeader, groupByDisc, type SortState } from "../lib/sort.tsx";
+import {
+  sortRows, SortHeader, groupByDisc, type SortState,
+} from "../lib/sort.tsx";
+import {
+  ColumnResizer, ColumnsMenu, useColumnPrefs, useColumnWidths,
+  ALBUM_TRACK_COLS, ALBUM_TRACK_COL_W, type Col,
+} from "../lib/columns";
 import { gradeSliver, statusFor, auditFails } from "../lib/status";
 import { albumRef, trackRef, artistRef } from "../lib/refs";
 import { fmtTech } from "../lib/fmt";
-import { EmptyState, GradeBadge, MediaChip, AdvisoryBadge } from "../components/Badges";
+import { EmptyState, GradeBadge, MediaChip, AdvisoryMark } from "../components/Badges";
 import { forceDict, loadForceSel } from "../lib/force";
-import CoverImg from "../components/CoverImg";
+import CoverImg, { TrackCover } from "../components/CoverImg";
 import FavHeart from "../components/FavHeart";
 import AlbumCard from "../components/AlbumCard";
 import StatsPanel from "../components/StatsPanel";
@@ -61,14 +69,8 @@ const ALBUM_SORTS = [
   { key: "audit_summary", label: "Audit" },
 ];
 
-interface Col {
-  id: string;
-  label: string;
-  sortKey: string;
-}
-
 /** Column widths for the fixed table layout: percentages compress with
- * the window; "album" has no width and absorbs whatever is left. */
+ * the window; "album"/"title" has no width and absorbs whatever is left. */
 const ALBUM_COL_W: Record<string, string> = {
   album: "w-auto",
   artist: "w-[16%]",
@@ -76,6 +78,7 @@ const ALBUM_COL_W: Record<string, string> = {
   tracks: "w-[7%]",
   grade: "w-[10%]",
   media: "w-[10%]",
+  dr: "w-[6%]",
   source: "w-[13%]",
 };
 
@@ -86,6 +89,7 @@ const ALBUM_COLS: Col[] = [
   { id: "tracks", label: "Tracks", sortKey: "track_count" },
   { id: "grade", label: "Grade", sortKey: "grade_pct" },
   { id: "media", label: "Media", sortKey: "media" },
+  { id: "dr", label: "DR", sortKey: "meta.ALBUM DYNAMIC RANGE" },
   { id: "source", label: "Source", sortKey: "source_summary" },
 ];
 
@@ -104,31 +108,35 @@ const ARTIST_COLS: Col[] = [
 ];
 
 const TRACK_COL_W: Record<string, string> = {
-  num: "w-12",
+  num: "w-16",
+  cover: "w-[52px]",
   title: "w-auto",
-  artist: "w-[13%]",
-  album: "w-[13%]",
+  artist: "w-[11%]",
+  album: "w-[11%]",
   year: "w-[6%]",
-  genre: "w-[11%]",
+  genre: "w-[10%]",
   media: "w-[8%]",
-  grade: "w-[7%]",
-  advisory: "w-[8%]",
-  duration: "w-[7%]",
-  bitrate: "w-[10%]",
-  source: "w-[10%]",
+  duration: "w-[6%]",
+  bitrate: "w-[9%]",
+  dr: "w-[5%]",
+  source: "w-[9%]",
 };
 
 const TRACK_COLS: Col[] = [
   { id: "num", label: "#", sortKey: "tracknumber" },
+  { id: "cover", label: "", sortKey: "" },
   { id: "title", label: "Title", sortKey: "tags.TITLE" },
   { id: "artist", label: "Artist", sortKey: "artist" },
   { id: "album", label: "Album", sortKey: "album" },
   { id: "year", label: "Year", sortKey: "tags.DATE" },
   { id: "genre", label: "Genre", sortKey: "tags.GENRE" },
   { id: "media", label: "Media", sortKey: "tags.MEDIA" },
-  { id: "advisory", label: "Advisory", sortKey: "tags.ITUNESADVISORY" },
   { id: "duration", label: "Duration", sortKey: "tech.length" },
   { id: "bitrate", label: "Bitrate", sortKey: "tech.bitrate" },
+  // ReplayGain deliberately has NO column: it is playback metadata — the
+  // player applies it to keep loudness even between tracks. Only Dynamic
+  // Range is shown.
+  { id: "dr", label: "DR", sortKey: "tags.DYNAMIC RANGE" },
   { id: "source", label: "Source", sortKey: "tags.SOURCE" },
 ];
 
@@ -139,6 +147,16 @@ interface FlatAlbum extends Album {
 interface FlatTrack extends Track {
   artist: string;
   album: string;
+  albumCover?: string | null;
+  albumPath: string;
+}
+
+/** The year shown on cards/cells: the ORIGINAL release year when tagged
+ * (a remaster keeps its original year), the release year otherwise. */
+export function originalYear(meta?: { ORIGINALDATE?: string | null; DATE?: string | null } | null): string {
+  const src = meta?.ORIGINALDATE || meta?.DATE || "";
+  const m = String(src).match(/^(\d{4})/);
+  return m ? m[1] : "";
 }
 
 export default function LibraryPage() {
@@ -163,6 +181,7 @@ export default function LibraryPage() {
   };
   const [preset, setPreset] = useState<Preset>("all");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
   const [albumSort, setAlbumSort] = useLocalSort("album");
   const [artistSort, setArtistSort] = useLocalSort("artist");
   const [trackSort, setTrackSort] = useLocalSort("track");
@@ -181,6 +200,15 @@ export default function LibraryPage() {
   const [albumCols, toggleAlbumCol] = useColumnPrefs("albums", ALBUM_COLS);
   const [artistCols, toggleArtistCol] = useColumnPrefs("artists", ARTIST_COLS);
   const [trackCols, toggleTrackCol] = useColumnPrefs("tracks", TRACK_COLS);
+  // Album tracklists (the expanded album rows here share these prefs — and
+  // their widths — with the album page, since they are the same table).
+  const [alTrackCols, toggleAlTrackCol] = useColumnPrefs("album-tracks", ALBUM_TRACK_COLS);
+  const [alTrackW, setAlTrackW, resetAlTrackW] = useColumnWidths("album-tracks");
+  // Drag-resized column widths, persisted per view ("Reset" in the Columns
+  // menu — or double-click a handle — restores the fluid defaults).
+  const [albumW, setAlbumW, resetAlbumW] = useColumnWidths("albums");
+  const [artistW, setArtistW, resetArtistW] = useColumnWidths("artists");
+  const [trackW, setTrackW, resetTrackW] = useColumnWidths("tracks");
 
   const flat = useMemo(() => {
     const albums: FlatAlbum[] = [];
@@ -191,7 +219,7 @@ export default function LibraryPage() {
         // artist folder name is only a fallback (it carries the MBID suffix).
         const artistName = al.album_artist || a.name;
         albums.push({ ...al, artist: artistName });
-        for (const t of al.tracks) tracks.push({ ...t, artist: artistName, album: al.meta?.ALBUM ?? al.path.split("/").pop() ?? "" });
+        for (const t of al.tracks) tracks.push({ ...t, artist: artistName, album: al.meta?.ALBUM ?? al.path.split("/").pop() ?? "", albumCover: al.cover_file ?? null, albumPath: al.path });
       }
     return { albums, tracks };
   }, [lib]);
@@ -331,7 +359,7 @@ export default function LibraryPage() {
       let missing = 0;
       let failed = 0;
       for (const { track: t, displayArtist } of targets) {
-        if (t.tags.INSTRUMENTAL === "1" || t.lyrics_present) {
+        if (t.tags.INSTRUMENTAL === "1" || t.lyrics_present || t.is_video) {
           skipped++;
           continue;
         }
@@ -388,17 +416,17 @@ export default function LibraryPage() {
   };
 
   const playSelection = () => {
-    const out: { path: string; file: string; albumPath: string; artist?: string; album?: string; title?: string }[] = [];
+    const out: { path: string; file: string; albumPath: string; artist?: string; album?: string; title?: string; coverFile?: string | null; albumCover?: string | null }[] = [];
     for (const al of sortedAlbums)
       if (selection.albums.includes(al.path))
-        for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined });
+        for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined, coverFile: t.cover_file ?? null, albumCover: al.cover_file ?? null });
     for (const a of sortedArtists)
       if (selection.artists.includes(a.path))
         for (const al of a.albums)
-          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined });
+          for (const t of al.tracks) out.push({ path: t.path, file: t.file, albumPath: al.path, artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined, coverFile: t.cover_file ?? null, albumCover: al.cover_file ?? null });
     for (const tr of sortedTracks)
       if (selection.tracks.includes(tr.path))
-        out.push({ path: tr.path, file: tr.file, albumPath: tr.path.split("/").slice(0, -1).join("/"), artist: tr.artist, album: tr.album, title: tr.tags.TITLE || undefined });
+        out.push({ path: tr.path, file: tr.file, albumPath: tr.path.split("/").slice(0, -1).join("/"), artist: tr.artist, album: tr.album, title: tr.tags.TITLE || undefined, coverFile: tr.cover_file ?? null, albumCover: tr.albumCover ?? null });
     if (out.length) playNow(out);
   };
 
@@ -419,7 +447,7 @@ export default function LibraryPage() {
     }
   };
 
-const toggleExpand = (path: string) =>
+  const toggleExpand = (path: string) =>
     setExpanded((s) => {
       const next = new Set(s);
       if (next.has(path)) next.delete(path);
@@ -497,7 +525,9 @@ const toggleExpand = (path: string) =>
 
   return (
     <div className="p-4 space-y-3">
-      {/* toolbar — search lives in the top bar now (same store query) */}
+      {/* toolbar — every control on ONE line (wrapped as a unit when the
+          window is narrow): view tabs, sort, grid size, group-by, columns,
+          quick filter — then stats/select and the counts on the right. */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="flex rounded-md border border-border overflow-hidden">
           {VIEW_TABS.map((v) => (
@@ -514,42 +544,64 @@ const toggleExpand = (path: string) =>
         </div>
 
         {(view === "albums" || view === "compact" || view === "grid") && (
-          <>
-            <select
-              className="input !w-auto text-xs"
-              value={albumSort?.key ?? ""}
-              onChange={(e) => setAlbumSort(e.target.value)}
+          <div className="relative">
+            <button
+              className={`btn-ghost !py-1.5 text-xs ${sortOpen ? "!text-white !bg-raise" : ""}`}
+              onClick={() => setSortOpen(!sortOpen)}
               title="Sort albums"
             >
-              <option value="">Sort…</option>
-              {ALBUM_SORTS.map((s) => (
-                <option key={s.key} value={s.key}>
-                  {s.label} {albumSort?.key === s.key ? (albumSort.dir === 1 ? "↑" : "↓") : ""}
-                </option>
-              ))}
-            </select>
-            {view === "grid" && (
-              <div className="flex rounded-md border border-border overflow-hidden" title="Cover size">
-                {(["s", "m", "l"] as const).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => pickGridSize(s)}
-                    className={`px-2.5 py-1.5 text-xs font-medium uppercase transition-colors ${
-                      gridSize === s ? "bg-accent on-accent" : "bg-panel text-zinc-400 hover:text-white"
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
+              <ArrowDownUp className="h-3.5 w-3.5" />
+              {albumSort ? `${ALBUM_SORTS.find((s) => s.key === albumSort.key)?.label ?? "Sort"} ${albumSort.dir === 1 ? "↑" : "↓"}` : "Sort"}
+            </button>
+            {sortOpen && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setSortOpen(false)} />
+                <div className="absolute left-0 top-full mt-1 z-40 w-44 rounded-lg border border-border bg-zinc-950 shadow-xl p-1">
+                  {ALBUM_SORTS.map((s) => (
+                    <button
+                      key={s.key}
+                      onClick={() => {
+                        setAlbumSort(s.key);
+                        setSortOpen(false);
+                      }}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs flex items-center justify-between gap-3 ${
+                        albumSort?.key === s.key ? "bg-raise text-white" : "text-zinc-400 hover:text-white hover:bg-raise"
+                      }`}
+                    >
+                      <span>{s.label}</span>
+                      {albumSort?.key === s.key && <span className="font-mono">{albumSort.dir === 1 ? "↑" : "↓"}</span>}
+                    </button>
+                  ))}
+                </div>
+              </>
             )}
-            {(view === "albums" || view === "grid") && (
-              <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer select-none" title="Group albums under artist headers">
-                <input type="checkbox" checked={groupByArtist} onChange={(e) => setGroupByArtist(e.target.checked)} className="" />
-                Group by artist
-              </label>
-            )}
-          </>
+          </div>
+        )}
+
+        {view === "grid" && (
+          <div className="flex rounded-md border border-border overflow-hidden" title="Cover size">
+            {(["s", "m", "l"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => pickGridSize(s)}
+                className={`px-2.5 py-1.5 text-xs font-medium uppercase transition-colors ${
+                  gridSize === s ? "bg-accent on-accent" : "bg-panel text-zinc-400 hover:text-white"
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {(view === "albums" || view === "grid") && (
+          <button
+            className={`btn-ghost !py-1.5 text-xs ${groupByArtist ? "!text-accent !border-accent/50" : ""}`}
+            onClick={() => setGroupByArtist(!groupByArtist)}
+            title="Group albums under artist headers"
+          >
+            <Layers className="h-3.5 w-3.5" /> Group by artist
+          </button>
         )}
 
         {view !== "compact" && view !== "grid" && (
@@ -559,66 +611,77 @@ const toggleExpand = (path: string) =>
             onToggle={view === "albums" ? toggleAlbumCol : view === "artists" ? toggleArtistCol : toggleTrackCol}
             fullDates={fullDates}
             onFullDates={setFullDates}
+            onResetWidths={view === "albums" ? () => { resetAlbumW(); resetAlTrackW(); } : view === "artists" ? resetArtistW : resetTrackW}
+            hasCustomWidths={
+              Object.keys(view === "albums" ? albumW : view === "artists" ? artistW : trackW).length > 0 ||
+              (view === "albums" && Object.keys(alTrackW).length > 0)
+            }
+            extraCols={view === "albums" ? ALBUM_TRACK_COLS : undefined}
+            extraVisible={view === "albums" ? alTrackCols : undefined}
+            onExtraToggle={view === "albums" ? toggleAlTrackCol : undefined}
           />
         )}
-        <button
-          className="btn-ghost !py-1 text-xs"
-          onClick={() => setStatsOpen(true)}
-          title={selectionCount ? "Statistics for the current selection" : "Library-wide statistics"}
-        >
-          <BarChart3 className="h-3.5 w-3.5" /> Stats
-        </button>
-        <button
-          className={`btn-ghost !py-1 text-xs ${selectMode ? "!text-accent !border-accent/50" : ""}`}
-          onClick={toggleSelectMode}
-          title="Select mode — show checkboxes for batch actions"
-        >
-          <ListChecks className="h-3.5 w-3.5" /> Select
-        </button>
 
-        <span className="text-xs text-zinc-500 whitespace-nowrap">
-          {sortedAlbums.length} albums · {sortedTracks.length} tracks
-        </span>
-        {folder && (
-          <span className="hidden xl:flex text-xs text-zinc-600 items-center gap-1">
-            <FolderOpen className="h-3 w-3" /> {folder}
+        {/* quick filter lives on the same line as the view options */}
+        <div className="relative">
+          <button
+            className={`btn-ghost !py-1.5 text-xs ${filterOpen ? "!text-white !bg-raise" : ""}`}
+            onClick={() => setFilterOpen(!filterOpen)}
+            title="Filter the library"
+          >
+            <ListFilter className="h-3.5 w-3.5" />
+            {PRESETS.find((p) => p.id === preset)?.label}
+            <span className="text-zinc-600 font-mono">{presetCounts[preset] ?? ""}</span>
+          </button>
+          {filterOpen && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setFilterOpen(false)} />
+              <div className="absolute left-0 top-full mt-1 z-40 w-52 rounded-lg border border-border bg-zinc-950 shadow-xl p-1">
+                {PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => {
+                      setPreset(p.id);
+                      setFilterOpen(false);
+                    }}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs flex items-center justify-between gap-3 ${
+                      preset === p.id ? "bg-raise text-white" : "text-zinc-400 hover:text-white hover:bg-raise"
+                    }`}
+                  >
+                    <span>{p.label}</span>
+                    <span className="text-zinc-600 font-mono">{presetCounts[p.id] ?? 0}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            className="btn-ghost !py-1.5 text-xs"
+            onClick={() => setStatsOpen(true)}
+            title={selectionCount ? "Statistics for the current selection" : "Library-wide statistics"}
+          >
+            <BarChart3 className="h-3.5 w-3.5" /> Stats
+          </button>
+          <button
+            className={`btn-ghost !py-1.5 text-xs ${selectMode ? "!text-accent !border-accent/50" : ""}`}
+            onClick={toggleSelectMode}
+            title="Select mode — show checkboxes for batch actions"
+          >
+            <ListChecks className="h-3.5 w-3.5" /> Select
+          </button>
+
+          <span className="text-xs text-zinc-500 whitespace-nowrap">
+            {sortedAlbums.length} albums · {sortedTracks.length} tracks
           </span>
-        )}
-      </div>
-
-      {/* quick filter — one dropdown instead of a chip row */}
-      <div className="relative w-fit">
-        <button
-          className="btn-ghost !py-1 text-xs"
-          onClick={() => setFilterOpen(!filterOpen)}
-          title="Filter the library"
-        >
-          <ListFilter className="h-3.5 w-3.5" />
-          {PRESETS.find((p) => p.id === preset)?.label}
-          <span className="text-zinc-600 font-mono">{presetCounts[preset] ?? ""}</span>
-        </button>
-        {filterOpen && (
-          <>
-            <div className="fixed inset-0 z-20" onClick={() => setFilterOpen(false)} />
-            <div className="absolute left-0 top-full mt-1 z-30 w-52 rounded-lg border border-border bg-zinc-950 shadow-xl p-1">
-              {PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => {
-                    setPreset(p.id);
-                    setFilterOpen(false);
-                  }}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs flex items-center justify-between gap-3 ${
-                    preset === p.id ? "bg-raise text-white" : "text-zinc-400 hover:text-white hover:bg-raise"
-                  }`}
-                >
-                  <span>{p.label}</span>
-                  <span className="text-zinc-600 font-mono">{presetCounts[p.id] ?? 0}</span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+          {folder && (
+            <span className="hidden xl:flex text-xs text-zinc-600 items-center gap-1">
+              <FolderOpen className="h-3 w-3" /> {folder}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* selection toolbar */}
@@ -683,7 +746,6 @@ const toggleExpand = (path: string) =>
           onClose={() => setStatsOpen(false)}
         />
       )}
-
 
       {detailTrack && (
         <TrackDetails track={detailTrack.track} albumPath={detailTrack.albumPath} onClose={() => setDetailTrack(null)} />
@@ -773,11 +835,12 @@ const toggleExpand = (path: string) =>
                       >
                         {al.meta?.ALBUM ?? al.path.split("/").pop()}
                       </Link>
+                      <AdvisoryMark value={al.meta?.ITUNESADVISORY ?? al.meta?.ALBUMITUNESADVISORY} />
                       <span className="text-[11px] text-zinc-500 truncate">
                         {al.artist}
-                        {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}
-                        {al.meta?.ORIGINALDATE && String(al.meta.ORIGINALDATE).slice(0, 4) !== String(al.meta?.DATE ?? "").slice(0, 4)
-                          ? ` (orig. ${String(al.meta.ORIGINALDATE).slice(0, 4)})` : ""}
+                        {al.meta?.ORIGINALDATE || al.meta?.DATE ? ` · ${originalYear(al.meta)}` : ""}
+                        {al.meta?.DATE && al.meta?.ORIGINALDATE && String(al.meta.ORIGINALDATE).slice(0, 4) !== String(al.meta?.DATE ?? "").slice(0, 4)
+                          ? ` (rel. ${String(al.meta.DATE).slice(0, 4)})` : ""}
                       </span>
                     </div>
                   </div>
@@ -800,7 +863,13 @@ const toggleExpand = (path: string) =>
                         <div
                           key={t.path}
                           className={`group flex items-center gap-2 text-xs py-0.5 rounded cursor-pointer ${tSel ? "bg-accent/10" : "hover:bg-white/[0.06]"}`}
-                          onClick={selectMode ? () => toggleTrack(t.path) : undefined}
+                          onClick={selectMode ? () => toggleTrack(t.path) : () =>
+                            playNow(
+                              tracks.map((x) => ({ path: x.path, file: x.file, albumPath: al.path, artist: al.artist, album: al.meta?.ALBUM ?? undefined, title: x.tags.TITLE || undefined, coverFile: x.cover_file ?? null, albumCover: al.cover_file ?? null })),
+                              tracks.findIndex((x) => x.path === t.path)
+                            )
+                          }
+                          title={selectMode ? "Click to select" : "Click to play"}
                         >
                           {selectMode && (
                             <div className="shrink-0">
@@ -808,27 +877,41 @@ const toggleExpand = (path: string) =>
                             </div>
                           )}
                           <span className={`h-3 w-1 rounded-sm ${ts.edge} shrink-0`} title={ts.label} />
-                          <span className="w-8 text-right text-zinc-600 font-mono shrink-0">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</span>
-                          <Link to={trackRef(t)} className="truncate hover:text-accent-soft flex-1 min-w-0">
+                          <span className="w-10 text-right text-zinc-600 font-mono shrink-0 cell-nowrap">{t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}</span>
+                          <TrackCover
+                            albumPath={al.path}
+                            trackCover={t.cover_file}
+                            albumCover={al.cover_file}
+                            wrapperClass="h-8 w-8 rounded bg-raise border border-border overflow-hidden shrink-0"
+                          />
+                          <Link to={trackRef(t)} className="break-words hover:text-accent-soft flex-1 min-w-0"
+                            onClick={(e) => {
+                              // plain click plays (row handler); Ctrl/Shift/middle opens the page
+                              if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
+                              else e.preventDefault();
+                            }}
+                          >
                             {t.tags.TITLE ?? t.file}
                           </Link>
-                          <FavHeart kind="track" id={t.path} mbid={t.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                          {t.tags.INSTRUMENTAL === "1" && (
-                            <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[9px] shrink-0">INST</span>
-                          )}
                           {!!t.issues?.length && (
                             <button
-                              className="text-[9px] text-red-400/70 shrink-0 hover:underline"
+                              className="text-[9px] text-red-400/70 shrink-0 hover:text-red-300"
                               title={t.issues.join("\n")}
-                              onClick={() => setDetailTrack({ track: t, albumPath: al.path })}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDetailTrack({ track: t, albumPath: al.path });
+                              }}
                             >
                               {t.issues.length}✗
                             </button>
                           )}
-                          <span className={`text-[9px] font-mono shrink-0 ${ts.text}`} title={ts.label}>
-                            {ts.key === "fail" ? gradeSliver(!!t.grade_pass, t.audit) : ""}
-                          </span>
-                          <span className="text-[10px] text-zinc-600 font-mono w-10 text-right shrink-0">{fmtDuration(t.tech.length)}</span>
+                          <GradeBadge pass={!!t.grade_pass && !auditFails(t.audit)} audit={t.audit} size="sm" />
+                          <AdvisoryMark value={t.tags.ITUNESADVISORY} />
+                          <span className="row-hover shrink-0"><FavHeart kind="track" id={t.path} mbid={t.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" /></span>
+                          {t.tags.INSTRUMENTAL === "1" && (
+                            <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[9px] shrink-0">INST</span>
+                          )}
+                          <span className="text-[10px] text-zinc-600 font-mono w-10 text-right shrink-0 cell-nowrap">{fmtDuration(t.tech.length)}</span>
                         </div>
                       );
                     })}
@@ -857,7 +940,10 @@ const toggleExpand = (path: string) =>
                   <th className="th w-14"></th>
                   {ALBUM_COLS.filter((c) => albumCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={albumSort} sortKey={c.sortKey} onSort={setAlbumSort}
-                      className={ALBUM_COL_W[c.id] ?? ""} />
+                      className={`relative ${ALBUM_COL_W[c.id] ?? ""}`}
+                      style={albumW[c.id] ? { width: albumW[c.id] } : undefined} >
+                      <ColumnResizer width={albumW[c.id]} onDrag={(w) => setAlbumW(c.id, w)} onReset={() => resetAlbumW()} />
+                    </SortHeader>
                   ))}
                   <th className="th w-24 text-right">Actions</th>
                 </tr>
@@ -871,7 +957,7 @@ const toggleExpand = (path: string) =>
                       </td>
                     </tr>
                   ) : (
-<AlbumRowGroup
+                    <AlbumRowGroup
                       key={row.album.path}
                       album={row.album}
                       expanded={expanded.has(row.album.path)}
@@ -888,6 +974,10 @@ const toggleExpand = (path: string) =>
                       colSpan={albumColSpan}
                       fullDates={fullDates}
                       selectMode={selectMode}
+                      trackCols={alTrackCols}
+                      trackWidths={alTrackW}
+                      onTrackWidth={(id, w) => setAlTrackW(id, w)}
+                      onResetTrackWidths={resetAlTrackW}
                     />
                   )
                 )}
@@ -913,7 +1003,10 @@ const toggleExpand = (path: string) =>
                   <th className="th">Artist</th>
                   {ARTIST_COLS.filter((c) => artistCols.includes(c.id)).map((c) => (
                     <SortHeader key={c.id} label={c.label} sort={artistSort} sortKey={c.sortKey} onSort={setArtistSort}
-                      className={ARTIST_COL_W[c.id] ?? "w-[14%]"} />
+                      className={`relative ${ARTIST_COL_W[c.id] ?? "w-[14%]"}`}
+                      style={artistW[c.id] ? { width: artistW[c.id] } : undefined}>
+                      <ColumnResizer width={artistW[c.id]} onDrag={(w) => setArtistW(c.id, w)} onReset={() => resetArtistW()} />
+                    </SortHeader>
                   ))}
                 </tr>
               </thead>
@@ -963,8 +1056,17 @@ const toggleExpand = (path: string) =>
                     </th>
                   )}
                   {TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) => (
+                    c.id === "cover" ? (
+                      <th key={c.id} className={`th relative ${TRACK_COL_W[c.id] ?? ""}`} title="Cover art">
+                        <span className="sr-only">Cover</span>
+                      </th>
+                    ) : (
                     <SortHeader key={c.id} label={c.label} sort={trackSort} sortKey={c.sortKey} onSort={setTrackSort}
-                      className={TRACK_COL_W[c.id] ?? ""} />
+                      className={`relative ${TRACK_COL_W[c.id] ?? ""}`}
+                      style={trackW[c.id] ? { width: trackW[c.id] } : undefined}>
+                      <ColumnResizer width={trackW[c.id]} onDrag={(w) => setTrackW(c.id, w)} onReset={() => resetTrackW()} />
+                    </SortHeader>
+                    )
                   ))}
                 </tr>
               </thead>
@@ -978,7 +1080,7 @@ const toggleExpand = (path: string) =>
                       title={selectMode ? "Click to select" : "Click to play"}
                       onClick={selectMode ? () => toggleTrack(tr.path) : () =>
                         playNow(
-                          sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist, album: t.album, title: t.tags.TITLE || undefined })),
+                          sortedTracks.map((t) => ({ path: t.path, file: t.file, albumPath: t.path.split("/").slice(0, -1).join("/"), artist: t.artist, album: t.album, title: t.tags.TITLE || undefined, coverFile: t.cover_file ?? null, albumCover: t.albumCover ?? null })),
                           sortedTracks.findIndex((t) => t.path === tr.path)
                         )
                       }
@@ -988,13 +1090,23 @@ const toggleExpand = (path: string) =>
                           <input type="checkbox" className="" checked={sel} onChange={() => toggleTrack(tr.path)} />
                         </td>
                       )}
-                      {trackCols.includes("num") && <td className="td text-zinc-600">{tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}</td>}
+                      {trackCols.includes("num") && <td className="td cell-nowrap text-zinc-600">{tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}</td>}
+                      {trackCols.includes("cover") && (
+                        <td className="td cell-cover pr-0">
+                          <TrackCover
+                            albumPath={tr.albumPath ?? tr.path.split("/").slice(0, -1).join("/")}
+                            trackCover={tr.cover_file}
+                            albumCover={tr.albumCover}
+                            wrapperClass="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0"
+                          />
+                        </td>
+                      )}
                       {trackCols.includes("title") && (
-                        <td className="td max-w-[260px]">
+                        <td className="td">
                           <div className="flex items-center gap-1.5 min-w-0">
                             <Link
                               to={trackRef(tr)}
-                              className="hover:text-accent-soft truncate inline-block max-w-full"
+                              className="hover:text-accent-soft break-words flex-1 min-w-0"
                               title="Click to play · Ctrl-click to open track page"
                               onClick={(e) => {
                                 // plain click plays (row handler); Ctrl/Shift/middle opens the page
@@ -1004,8 +1116,22 @@ const toggleExpand = (path: string) =>
                             >
                               {tr.tags.TITLE ?? tr.file}
                             </Link>
+                            {!!tr.issues?.length && (
+                              <button
+                                className="text-[9px] text-red-400/70 shrink-0 hover:text-red-300"
+                                title={`${tr.issues.join("\n")}\nClick for details`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDetailTrack({ track: tr, albumPath: tr.path.split("/").slice(0, -1).join("/") });
+                                }}
+                              >
+                                {tr.issues.length}✗
+                              </button>
+                            )}
                             <GradeBadge pass={!!tr.grade_pass && !auditFails(tr.audit)} audit={tr.audit} size="sm" />
-                            <span className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                            <AdvisoryMark value={tr.tags.ITUNESADVISORY} />
+                            {tr.is_video && <span title="Music video" className="shrink-0 inline-flex"><FileVideo className="h-3.5 w-3.5 text-zinc-500" /></span>}
+                            <span className="row-hover shrink-0" onClick={(e) => e.stopPropagation()}>
                               <FavHeart kind="track" id={tr.path} mbid={tr.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" />
                             </span>
                             <button
@@ -1024,15 +1150,19 @@ const toggleExpand = (path: string) =>
                           </div>
                         </td>
                       )}
-                      {trackCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[160px]">{tr.artist}</td>}
-                      {trackCols.includes("album") && <td className="td text-zinc-500 truncate max-w-[160px]">{tr.album}</td>}
+                      {trackCols.includes("artist") && <td className="td text-zinc-400 break-words">{tr.artist}</td>}
+                      {trackCols.includes("album") && <td className="td text-zinc-500 break-words">{tr.album}</td>}
                       {trackCols.includes("year") && <td className="td text-zinc-500" title={tr.tags.DATE ?? undefined}>{fmtDateCell(tr.tags.DATE, fullDates)}</td>}
-                      {trackCols.includes("genre") && <td className="td text-zinc-500 truncate max-w-[130px]">{tr.tags.GENRE ?? "—"}</td>}
+                      {trackCols.includes("genre") && <td className="td text-zinc-500 break-words">{tr.tags.GENRE ?? "—"}</td>}
                       {trackCols.includes("media") && <td className="td"><MediaChip media={tr.tags.MEDIA} /></td>}
-                      {trackCols.includes("advisory") && <td className="td"><AdvisoryBadge value={tr.tags.ITUNESADVISORY} /></td>}
                       {trackCols.includes("duration") && <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>}
                       {trackCols.includes("bitrate") && <td className="td text-zinc-500">{fmtTech(tr.tech) || "—"}</td>}
-                      {trackCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{tr.tags.SOURCE ?? "—"}</td>}
+                      {trackCols.includes("dr") && (
+                        <td className="td text-zinc-500 tabular-nums" title={`Dynamic range${tr.tags["ALBUM DYNAMIC RANGE"] ? ` · album ${tr.tags["ALBUM DYNAMIC RANGE"]}` : ""}`}>
+                          {tr.tags["DYNAMIC RANGE"] ?? "—"}
+                        </td>
+                      )}
+                      {trackCols.includes("source") && <td className="td text-zinc-500 break-words">{tr.tags.SOURCE ?? "—"}</td>}
                     </tr>
                   );
                 })}
@@ -1061,6 +1191,10 @@ function AlbumRowGroup({
   colSpan,
   fullDates,
   selectMode,
+  trackCols,
+  trackWidths,
+  onTrackWidth,
+  onResetTrackWidths,
 }: {
   album: FlatAlbum;
   expanded: boolean;
@@ -1077,6 +1211,10 @@ function AlbumRowGroup({
   colSpan: number;
   fullDates: boolean;
   selectMode: boolean;
+  trackCols: string[];
+  trackWidths: Record<string, number>;
+  onTrackWidth: (id: string, px: number) => void;
+  onResetTrackWidths: () => void;
 }) {
   const tracks = [...(album.tracks ?? [])].sort((a, b) =>
     (a.discnumber ?? 99) - (b.discnumber ?? 99) ||
@@ -1113,25 +1251,30 @@ function AlbumRowGroup({
           </Link>
         </td>
         {visibleCols.includes("album") && (
-          <td className="td max-w-[280px]">
-            <Link
-              to={albumRef(album)}
-              onClick={(e) => {
-                if (selectMode) {
-                  e.preventDefault();
-                  onToggleSel();
-                } else e.stopPropagation();
-              }}
-              className="font-medium hover:text-accent-soft truncate inline-block max-w-full"
-            >
-              {album.meta?.ALBUM ?? album.path.split("/").pop()}
-            </Link>
+          <td className="td">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Link
+                to={albumRef(album)}
+                onClick={(e) => {
+                  if (selectMode) {
+                    e.preventDefault();
+                    onToggleSel();
+                  } else e.stopPropagation();
+                }}
+                className="font-medium hover:text-accent-soft break-words flex-1 min-w-0"
+              >
+                {album.meta?.ALBUM ?? album.path.split("/").pop()}
+              </Link>
+              <AdvisoryMark value={album.meta?.ITUNESADVISORY ?? album.meta?.ALBUMITUNESADVISORY} />
+            </div>
           </td>
         )}
-        {visibleCols.includes("artist") && <td className="td text-zinc-400 truncate max-w-[200px]">{album.artist}</td>}
+        {visibleCols.includes("artist") && <td className="td text-zinc-400 break-words">{album.artist}</td>}
         {visibleCols.includes("year") && (
-                    <td className="td text-zinc-500" title={album.meta?.DATE ?? undefined}>{fmtDateCell(album.meta?.DATE, fullDates)}</td>
-                  )}
+          <td className="td text-zinc-500" title={album.meta?.ORIGINALDATE ?? album.meta?.DATE ?? undefined}>
+            {fmtDateCell(album.meta?.ORIGINALDATE || album.meta?.DATE, fullDates)}
+          </td>
+        )}
         {visibleCols.includes("tracks") && <td className="td text-zinc-500">{album.track_count}</td>}
         {visibleCols.includes("grade") && (
           <td className="td">
@@ -1139,7 +1282,12 @@ function AlbumRowGroup({
           </td>
         )}
         {visibleCols.includes("media") && <td className="td"><MediaChip media={album.media} /></td>}
-        {visibleCols.includes("source") && <td className="td text-zinc-500 truncate max-w-[100px]">{album.source_summary ?? "—"}</td>}
+        {visibleCols.includes("dr") && (
+          <td className="td text-zinc-500 tabular-nums" title="Album dynamic range">
+            {album.meta?.["ALBUM DYNAMIC RANGE"] ?? "—"}
+          </td>
+        )}
+        {visibleCols.includes("source") && <td className="td text-zinc-500 break-words">{album.source_summary ?? "—"}</td>}
         <td className="td text-right">
           <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
             <button className="btn-ghost !px-1.5 !py-1" title="Add to playlist" onClick={onPlaylist}>
@@ -1158,13 +1306,18 @@ function AlbumRowGroup({
               <thead className="border-b border-border">
                 <tr>
                   {selectMode && <th className="th w-8"></th>}
-                  <th className="th w-10">#</th>
-                  <th className="th w-10"></th>
-                  <th className="th">Title</th>
-                  <th className="th w-[16%]">Genre</th>
-                  <th className="th w-14">Grade</th>
-                  <th className="th w-14">Advisory</th>
-                  <th className="th w-16">Dur</th>
+                  {ALBUM_TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) =>
+                    c.id === "cover" ? (
+                      <th key={c.id} className={`th relative ${ALBUM_TRACK_COL_W[c.id] ?? ""}`} title="Cover art">
+                        <span className="sr-only">Cover</span>
+                      </th>
+                    ) : (
+                      <th key={c.id} className={`th relative ${ALBUM_TRACK_COL_W[c.id] ?? ""}`} style={trackWidths[c.id] ? { width: trackWidths[c.id] } : undefined}>
+                        {c.label}
+                        <ColumnResizer width={trackWidths[c.id]} onDrag={(w) => onTrackWidth(c.id, w)} onReset={onResetTrackWidths} />
+                      </th>
+                    )
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -1172,87 +1325,101 @@ function AlbumRowGroup({
                   const groups = groupByDisc(tracks);
                   return groups.map((g) => (
                     <Fragment key={g.disc ?? 0}>
-
                       {g.tracks.map((t) => (
-                  <tr
-                    key={t.path}
-                    className={`table-row group cursor-pointer ${selTracks.has(t.path) ? "bg-accent/15" : ""}`}
-                    title="Click to play"
-                    onClick={() =>
-                      useStore.getState().playNow(
-                        tracks.map((x) => ({
-                          path: x.path, file: x.file, albumPath: album.path,
-                          artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: x.tags.TITLE || undefined,
-                        })),
-                        tracks.findIndex((x) => x.path === t.path)
-                      )
-                    }
-                  >
-                    {selectMode && (
-                      <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
-                      </td>
-                    )}
-                    <td className="td text-zinc-600 tabular-nums">
-                      {groups.length > 1 ? `${g.disc}-${t.tracknumber ?? t.tags.TRACKNUMBER ?? "?"}` : t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}
-                    </td>
-                    <td className="td pr-0">
-                      {t.cover_file && (
-                        <CoverImg
-                          albumPath={album.path}
-                          coverFile={t.cover_file}
-                          wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
-                        />
-                      )}
-                    </td>
-                    <td className="td max-w-[300px]">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Link
-                          to={trackRef(t)}
-                          className="hover:text-accent-soft truncate inline-block max-w-full"
-                          title="Click to play · Ctrl-click to open track page"
-                          onClick={(e) => {
-                            if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
-                            else e.preventDefault();
-                          }}
+                        <tr
+                          key={t.path}
+                          className={`table-row group cursor-pointer ${selTracks.has(t.path) ? "bg-accent/15" : ""}`}
+                          title={selectMode ? "Click to select" : "Click to play"}
+                          onClick={selectMode ? () => onToggleTrack(t.path) : () =>
+                            useStore.getState().playNow(
+                              tracks.map((x) => ({
+                                path: x.path, file: x.file, albumPath: album.path,
+                                artist: album.artist, album: album.meta?.ALBUM ?? undefined, title: x.tags.TITLE || undefined,
+                                coverFile: x.cover_file ?? null, albumCover: album.cover_file ?? null,
+                              })),
+                              tracks.findIndex((x) => x.path === t.path)
+                            )
+                          }
                         >
-                          {t.tags.TITLE ?? t.file}
-                        </Link>
-                        <span className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-                          <FavHeart kind="track" id={t.path} mbid={t.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" />
-                        </span>
-                        <button
-                          className="text-zinc-500 hover:text-accent-soft shrink-0"
-                          title="Grading & audit details"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onTrackDetails(t);
-                          }}
-                        >
-                          <InfoIcon className="h-3.5 w-3.5" />
-                        </button>
-                        {t.tags.INSTRUMENTAL === "1" && (
-                          <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[10px] shrink-0">INST</span>
-                        )}
-                        {!!t.issues?.length && (
-                          <button
-                            className="text-[9px] text-red-400/70 shrink-0 hover:underline"
-                            title={t.issues.join("\n")}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onTrackDetails(t);
-                            }}
-                          >
-                            {t.issues.length}✗
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                    <td className="td text-zinc-500 truncate max-w-[150px]">{t.tags.GENRE ?? "—"}</td>
-                    <td className="td"><GradeBadge pass={!!t.grade_pass && !auditFails(t.audit)} audit={t.audit} size="sm" /></td>
-                    <td className="td"><AdvisoryBadge value={t.tags.ITUNESADVISORY} /></td>
-                    <td className="td text-zinc-500">{fmtDuration(t.tech.length)}</td>
-                  </tr>
+                          {selectMode && (
+                            <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
+                              <input type="checkbox" className="" checked={selTracks.has(t.path)} onChange={() => onToggleTrack(t.path)} />
+                            </td>
+                          )}
+                          {trackCols.includes("num") && (
+                            <td className="td text-zinc-600 tabular-nums cell-nowrap">
+                              {groups.length > 1 ? `${g.disc}-${t.tracknumber ?? t.tags.TRACKNUMBER ?? "?"}` : t.tracknumber ?? t.tags.TRACKNUMBER ?? "—"}
+                            </td>
+                          )}
+                          {trackCols.includes("cover") && (
+                            <td className="td cell-cover pr-0">
+                              <TrackCover
+                                albumPath={album.path}
+                                trackCover={t.cover_file}
+                                albumFallback={false}
+                                wrapperClass="h-8 w-8 rounded bg-raise border border-border overflow-hidden shrink-0"
+                              />
+                            </td>
+                          )}
+                          {trackCols.includes("title") && (
+                            <td className="td">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Link
+                                  to={trackRef(t)}
+                                  className="hover:text-accent-soft break-words flex-1 min-w-0"
+                                  title="Click to play · Ctrl-click to open track page"
+                                  onClick={(e) => {
+                                    if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
+                                    else e.preventDefault();
+                                  }}
+                                >
+                                  {t.tags.TITLE ?? t.file}
+                                </Link>
+                                {!!t.issues?.length && (
+                                  <button
+                                    className="text-[9px] text-red-400/70 shrink-0 hover:text-red-300"
+                                    title={`${t.issues.join("\n")}\nClick for details`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onTrackDetails(t);
+                                    }}
+                                  >
+                                    {t.issues.length}✗
+                                  </button>
+                                )}
+                                <GradeBadge pass={!!t.grade_pass && !auditFails(t.audit)} audit={t.audit} size="sm" />
+                                <AdvisoryMark value={t.tags.ITUNESADVISORY} />
+                                {t.is_video && <span title="Music video" className="shrink-0 inline-flex"><FileVideo className="h-3.5 w-3.5 text-zinc-500" /></span>}
+                                <span className="row-hover shrink-0" onClick={(e) => e.stopPropagation()}>
+                                  <FavHeart kind="track" id={t.path} mbid={t.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" />
+                                </span>
+                                <button
+                                  className="text-zinc-500 hover:text-accent-soft shrink-0"
+                                  title="Grading & audit details"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onTrackDetails(t);
+                                  }}
+                                >
+                                  <InfoIcon className="h-3.5 w-3.5" />
+                                </button>
+                                {t.tags.INSTRUMENTAL === "1" && (
+                                  <span className="chip bg-zinc-800 text-zinc-400 border border-border text-[10px] shrink-0">INST</span>
+                                )}
+                              </div>
+                            </td>
+                          )}
+                          {trackCols.includes("genre") && <td className="td text-zinc-500 break-words">{t.tags.GENRE ?? "—"}</td>}
+                          {trackCols.includes("dur") && <td className="td text-zinc-500">{fmtDuration(t.tech.length)}</td>}
+                          {trackCols.includes("bitrate") && (
+                            <td className="td text-zinc-500">{fmtTech(t.tech) || "—"}</td>
+                          )}
+                          {trackCols.includes("dr") && (
+                            <td className="td text-zinc-500 tabular-nums" title={`Dynamic range${t.tags["ALBUM DYNAMIC RANGE"] ? ` · album ${t.tags["ALBUM DYNAMIC RANGE"]}` : ""}`}>
+                              {t.tags["DYNAMIC RANGE"] ?? "—"}
+                            </td>
+                          )}
+                        </tr>
                       ))}
                     </Fragment>
                   ));
@@ -1299,81 +1466,6 @@ function ScriptsDropdown({ onRun, runAllIds }: { onRun: (ids: number[], force?: 
       )}
     </div>
   );
-}
-
-function ColumnsMenu({
-  cols,
-  visible,
-  onToggle,
-  fullDates,
-  onFullDates,
-}: {
-  cols: Col[];
-  visible: string[];
-  onToggle: (id: string) => void;
-  fullDates?: boolean;
-  onFullDates?: (v: boolean) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="relative">
-      <button className={`btn-ghost text-xs ${open ? "!text-white !bg-raise" : ""}`} onClick={() => setOpen(!open)}>
-        <Columns3 className="h-3.5 w-3.5" /> Columns
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg p-2 w-48 shadow-2xl">
-            <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1.5">Visible columns</div>
-            {cols.map((c) => (
-              <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-panel rounded">
-                <input type="checkbox" checked={visible.includes(c.id)} onChange={() => onToggle(c.id)} className="" />
-                {c.label}
-              </label>
-            ))}
-            {onFullDates && (
-              <>
-                <div className="border-t border-border my-1.5" />
-                <label className="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-panel rounded">
-                  <input type="checkbox" checked={!!fullDates} onChange={(e) => onFullDates(e.target.checked)} />
-                  Show full dates
-                </label>
-              </>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function useColumnPrefs(key: string, defs: Col[]): [string[], (id: string) => void] {
-  const storageKey = `mlo-cols-${key}`;
-  const [visible, setVisible] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw) {
-        const arr = JSON.parse(raw) as string[];
-        const ids = new Set(defs.map((d) => d.id));
-        const kept = arr.filter((x) => ids.has(x));
-        if (kept.length) return kept;
-      }
-    } catch {
-      /* fall through to defaults */
-    }
-    return defs.map((d) => d.id);
-  });
-  const toggle = (id: string) =>
-    setVisible((v) => {
-      const next = v.includes(id) ? v.filter((x) => x !== id) : [...v, id];
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  return [visible, toggle];
 }
 
 /** Year by default ("2010-12-15" -> "2010"); full value when the user

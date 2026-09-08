@@ -1,4 +1,5 @@
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 
 export interface SortState {
   key: string;
@@ -92,16 +93,21 @@ export function SortHeader({
   sortKey,
   onSort,
   className,
+  style,
+  children,
 }: {
   label: string;
   sort: SortState | null;
   sortKey: string;
   onSort: (k: string) => void;
   className?: string;
+  style?: CSSProperties;
+  /** Rendered inside the th (used for the column resize handle). */
+  children?: ReactNode;
 }) {
   const active = sort?.key === sortKey;
   return (
-    <th className={`th cursor-pointer hover:text-zinc-300 ${className ?? ""}`} onClick={() => onSort(sortKey)}>
+    <th className={`th cursor-pointer hover:text-zinc-300 ${className ?? ""}`} style={style} onClick={() => onSort(sortKey)}>
       <span className="inline-flex items-center gap-1">
         {label}
         {active ? (
@@ -114,6 +120,45 @@ export function SortHeader({
           <ArrowUpDown className="h-3 w-3 opacity-30" />
         )}
       </span>
+      {children}
     </th>
+  );
+}
+
+/** Drag handle that resizes the column it lives in (persisted per view by
+ * the caller). Lives at a th's right edge; the th needs `relative`. */
+export function ColumnResizer({ width, onDrag, onReset }: {
+  width: number | undefined;
+  onDrag: (deltaPx: number) => void;
+  onReset: () => void;
+}) {
+  const start = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const x0 = e.clientX;
+    const w0 = width ?? (e.currentTarget.parentElement as HTMLElement)?.getBoundingClientRect().width ?? 100;
+    const move = (ev: MouseEvent) => onDrag(ev.clientX - x0 + w0);
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+  return (
+    <span
+      className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-accent/40"
+      onMouseDown={start}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onReset();
+      }}
+      title="Drag to resize · double-click to reset"
+      onClick={(e) => e.stopPropagation()}
+    />
   );
 }

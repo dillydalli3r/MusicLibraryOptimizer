@@ -21,16 +21,21 @@ from mlo.fetchdeps import pip_package_path
 from mlo.tools import python_pkg_path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(REPO_ROOT, "server", "data")
 PLUGIN_DIR = os.path.join(REPO_ROOT, "server", "beets")
 
 
+def data_dir():
+    """All app state lives in <music folder>/.data (see mlo.paths)."""
+    from mlo.paths import app_data_dir
+    return app_data_dir()
+
+
 def db_path():
-    return os.path.join(DATA_DIR, "beets-library.db")
+    return os.path.join(data_dir(), "beets-library.db")
 
 
 def config_path():
-    return os.path.join(DATA_DIR, "beets-config.yaml")
+    return os.path.join(data_dir(), "beets-config.yaml")
 
 
 def _yq(text):
@@ -87,7 +92,7 @@ def generate_config(cfg=None):
 
 def write_config(cfg=None):
     text = generate_config(cfg)
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(data_dir(), exist_ok=True)
     tmp = config_path() + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)

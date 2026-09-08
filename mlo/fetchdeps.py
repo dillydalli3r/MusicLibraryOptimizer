@@ -234,7 +234,7 @@ PHP_ZIP_URL = (
 )
 
 _HEADERS = {
-    "User-Agent": "MusicLibraryOptimizer/2.1",
+    "User-Agent": "la-musica/2.1",
     "Accept": "application/vnd.github+json",
 }
 

@@ -78,11 +78,16 @@ if _MLO_ENV_FOLDER:
 
 app.add_middleware(
     CORSMiddleware,
+    # tauri.localhost is the Windows WebView2 form of the tauri:// origin.
     allow_origins=[
         "http://localhost:5173", "http://127.0.0.1:5173",
         "http://localhost:3000", "http://localhost:1420",
-        "tauri://localhost",
+        "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost",
     ],
+    # Dev servers pick arbitrary ports; any localhost origin may talk to the
+    # local backend. This also keeps <audio crossorigin> media loads working,
+    # which the playback visualizer's WebAudio graph requires.
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -477,10 +482,15 @@ def get_artist(path: str = Query(...)):
 # --------------------------------------------------------------------------- #
 _CTYPES = {
     ".flac": "audio/flac", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
-    # Music videos live in .mp4 too — video/mp4 demuxes fine in <audio>
-    # elements and is required for <video> playback.
-    ".mp4": "video/mp4", ".ogg": "audio/ogg", ".opus": "audio/ogg",
-    ".wav": "audio/wav", ".aac": "audio/aac",
+    # Music videos: <video> elements need the video media types; matroska
+    # plays in Chromium-based webviews (WebView2 / Tauri) and browsers.
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".ogg": "audio/ogg",
+    ".opus": "audio/ogg", ".wav": "audio/wav", ".aac": "audio/aac",
+    ".mkv": "video/x-matroska", ".webm": "video/webm", ".mov": "video/quicktime",
+    ".avi": "video/x-msvideo", ".wmv": "video/x-ms-wmv", ".flv": "video/x-flv",
+    ".mpg": "video/mpeg", ".mpeg": "video/mpeg", ".vob": "video/mpeg",
+    ".m2v": "video/mpeg", ".ts": "video/mp2t", ".m2ts": "video/mp2t",
+    ".mts": "video/mp2t", ".3gp": "video/3gpp", ".ogv": "video/ogg",
 }
 
 
@@ -495,6 +505,70 @@ def stream(path: str = Query(...)):
     if ctype == "application/octet-stream" and os.path.splitext(p)[1].lower() in (".mkv", ".mka"):
         ctype = "video/x-matroska"
     return FileResponse(p, media_type=ctype, headers={"Accept-Ranges": "bytes"})
+
+
+@app.get("/api/videos/stream")
+def videos_stream(path: str = Query(...), transcode: int = Query(0)):
+    """Playable stream for a library music video.
+
+    ?transcode=0 (default) serves the file bytes as-is (seekable, exact
+    quality). Codecs browsers cannot decode (MPEG-2 in VOB/MPG/M2TS/AVI,
+    VC-1, ...) fail in the <video> element — the player then retries with
+    ?transcode=1, which pipes the file through ffmpeg into a fragmented
+    MP4 (H.264/AAC) browsers always play. Transcoded streams are not
+    seekable; the picture/sound are identical in content. Files the
+    browser decodes natively never touch ffmpeg.
+    """
+    p = os.path.normpath(mbresolve.resolve_track(path) or path)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
+    ext = os.path.splitext(p)[1].lower()
+
+    if not transcode and ext in _NATIVE_VIDEO_EXTS:
+        ctype = _CTYPES.get(ext, "application/octet-stream")
+        return FileResponse(p, media_type=ctype, headers={"Accept-Ranges": "bytes"})
+
+    from mlo.tools import detect_all_tools
+
+    ffmpeg = (detect_all_tools().get("ffmpeg") or {}).get("ffmpeg_exe")
+    if not ffmpeg:
+        raise HTTPException(503, "ffmpeg not installed — install it under Dependencies for video playback")
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+        "-i", p,
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-vf", "scale=-2:min(720\\,ih)",
+        "-c:a", "aac", "-b:a", "160k", "-ac", "2",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", "pipe:1",
+    ]
+    try:
+        import subprocess
+
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as e:
+        raise HTTPException(500, f"ffmpeg failed to start: {e}")
+
+    from starlette.responses import StreamingResponse
+
+    def _gen():
+        try:
+            while True:
+                chunk = proc.stdout.read(256 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.stdout.close()
+            proc.stderr.close()
+
+    return StreamingResponse(_gen(), media_type="video/mp4")
 
 
 @app.get("/api/tags")
@@ -545,10 +619,12 @@ def get_tags(path: str = Query(...)):
         return None
 
     from mlo.lyrics_xlit import primary_translation_lang
-    xlit = str(af.get_tag("TRANSLITERATION") or "").strip() or None
+    # Language-specific transform tags (TRANSLITERATION-JA-LATN,
+    # TRANSLATION-EN, …) read first; the bare legacy names still read.
+    xlit = str(af.get_lyrics_transform("TRANSLITERATION") or "").strip() or None
     if xlit is None:
         xlit = _sidecar_text(".romaji.lrc")
-    trans = str(af.get_tag("TRANSLATION") or "").strip() or None
+    trans = str(af.get_lyrics_transform("TRANSLATION", primary_translation_lang(load_config())) or "").strip() or None
     if trans is None:
         trans = _sidecar_text(f".{primary_translation_lang(load_config())}.lrc")
     cover = None
@@ -563,6 +639,35 @@ def get_tags(path: str = Query(...)):
     return {"path": p.replace("\\", "/"), "tags": tags, "lyrics": lyr,
             "lyrics_source": lyrics_source, "cover": cover, "tech": tech,
             "lyrics_xlit": xlit, "lyrics_trans": trans}
+
+
+@app.get("/api/replaygain")
+def get_replaygain(path: str = Query(...)):
+    """ReplayGain preamp (track gain in dB) for one track. The player applies
+    it in its WebAudio gain stage so loudness stays even between tracks —
+    it is playback metadata, deliberately not surfaced as a column."""
+    from mlo.audio import AudioFile
+
+    p = os.path.normpath(mbresolve.resolve_track(path) or path)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
+    af = AudioFile(p)
+    if af.audio is None:
+        raise HTTPException(500, af.error or "unreadable")
+
+    def _num(v):
+        try:
+            return float(str(v).lower().replace("db", "").strip())
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "path": p.replace("\\", "/"),
+        "gain": _num(af.get_tag("REPLAYGAIN_TRACK_GAIN")),
+        "peak": _num(af.get_tag("REPLAYGAIN_TRACK_PEAK")),
+    }
 
 
 @app.get("/api/cover")
@@ -780,6 +885,102 @@ def videos_subtitle(path: str = Query(...), n: int = Query(None), sidecar: str =
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(500, f"subtitle extraction failed: {e}")
+
+
+class VideoTagRequest(BaseModel):
+    """Tag a music video. Video containers are rewritten with a stream
+    copy (bit-exact video/audio/captions); non-MKV sources come back as
+    same-stem MKVs, so the response carries the final path."""
+    path: str
+    tags: dict
+
+
+@app.post("/api/videos/tag")
+def videos_tag(req: VideoTagRequest):
+    """Write tags into a music video (TITLE/ARTIST/ALBUM/DISCNUMBER/...).
+
+    Works for every library video container: MP4/M4V are edited with
+    mutagen, everything else is remuxed losslessly by ffmpeg into
+    Matroska with the new metadata — never re-encoded, captions and
+    every audio stream preserved. This is the endpoint behind the
+    downloads review flow ("tag this VOB as a music video")."""
+    from mlo.audio import AudioFile
+    from mlo.paths import LIB_VIDEO_EXTS
+
+    p = os.path.normpath(req.path)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    if not (os.path.splitext(p)[1].lower() in LIB_VIDEO_EXTS):
+        raise HTTPException(400, "not a video file — use the tag editor for audio")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
+    af = AudioFile(p)
+    if af.audio is None:
+        raise HTTPException(500, af.error or "unreadable video")
+    ok = af.set_video_tags(req.tags or {})
+    if not ok:
+        raise HTTPException(500, af.error or "tag write failed")
+    final = (af.tag_output_path or p).replace("\\", "/")
+    tagcache.invalidate_path(os.path.normpath(final))
+    tagcache.invalidate_path(p)
+    mbresolve.invalidate()
+    tech = getattr(af, "tech", {}) or {}
+    return {"ok": True, "path": final, "renamed": os.path.normcase(final) != os.path.normcase(p),
+            "tech": tech}
+
+
+@app.get("/api/cover/info")
+def cover_info(album: str = Query(...), file: str = Query(None)):
+    """Image details for the album cover (resolution, aspect ratio,
+    format, byte size) — powers the album page's Cover info dialog."""
+    import io
+
+    alb = os.path.normpath(mbresolve.resolve_album(album) or album)
+    if not os.path.isdir(alb):
+        raise HTTPException(404, "album not found")
+    if not _in_music_folder(alb, _music_folder()):
+        raise HTTPException(400, "album outside music folder")
+    data, ctype, _etag = tagcache.cover_bytes(alb, file)
+    if data is None:
+        raise HTTPException(404, "no cover")
+    # Resolve the on-disk path for the file name (cache is keyed by stat).
+    p = None
+    if file:
+        cand = os.path.normpath(os.path.join(alb, os.path.basename(file)))
+        if os.path.isfile(cand):
+            p = cand
+    if p is None:
+        for cand in ("cover.jpg", "cover.jpeg", "cover.png", "cover.jxl", "cover.webp", "cover.bmp"):
+            full = os.path.join(alb, cand)
+            if os.path.isfile(full):
+                p = full
+                break
+    info = {"file": os.path.basename(p) if p else None,
+            "format": (ctype or "image").split("/")[-1].upper(),
+            "bytes": len(data),
+            "megapixels": None, "aspect": None, "aspect_label": None,
+            "width": None, "height": None}
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(data))
+        w, h = img.size
+        info["width"], info["height"] = w, h
+        info["format"] = img.format or info["format"]
+        if w and h:
+            info["megapixels"] = round(w * h / 1_000_000, 2)
+            from math import gcd
+            g = gcd(w, h) or 1
+            rw, rh = w // g, h // g
+            if rw > 40 or rh > 40:
+                # huge coprime pairs read badly — show a decimal ratio too
+                info["aspect"] = f"{rw}:{rh}"
+                info["aspect_label"] = f"{w / h:.2f}:1"
+            else:
+                info["aspect"] = f"{rw}:{rh}"
+                info["aspect_label"] = f"{rw}:{rh}"
+    except Exception:
+        pass
+    return info
 
 
 @app.post("/api/lyrics/embed")
@@ -1330,49 +1531,66 @@ def mb_release_genres(mbid: str):
 # ---- generic MusicBrainz browser (search + entity pages) -------------------
 @app.get("/api/mb/search")
 def mb_search(q: str = Query(..., min_length=1), type: str = Query("release"),
-              limit: int = Query(12), mode: str = Query("free")):
+              limit: int = Query(100), offset: int = Query(0),
+              mode: str = Query("free")):
     """Search MusicBrainz for the in-app browser: type = artist |
     release-group | release | recording; mode = free | catno | barcode
-    (catno/barcode only apply to releases)."""
+    (catno/barcode only apply to releases). Returns {rows, total} — searches
+    page 100 rows at a time via offset."""
     if type not in intg.MB_ENTITIES:
         raise HTTPException(400, "type must be one of " + ", ".join(intg.MB_ENTITIES))
     if mode not in ("free", "catno", "barcode"):
         raise HTTPException(400, "mode must be free, catno or barcode")
     try:
-        return intg.search_mb(type, q, limit, mode)
+        return intg.search_mb(type, q, limit, mode, max(0, offset))
     except Exception as e:
         raise HTTPException(502, f"MusicBrainz search failed: {e}")
 
 
 @app.get("/api/mb/artist/{mbid}")
-def mb_artist(mbid: str):
+def mb_artist(mbid: str, limit: int = Query(300), offset: int = Query(0)):
     rid = intg._mbid(mbid)
     if not rid:
         raise HTTPException(400, "invalid MusicBrainz ID or URL")
     try:
-        return intg.artist_browse(rid)
+        return intg.artist_browse(rid, max(1, limit), max(0, offset))
     except Exception as e:
         raise HTTPException(502, f"MusicBrainz lookup failed: {e}")
 
 
 @app.get("/api/mb/release-group/{mbid}")
-def mb_release_group(mbid: str):
+def mb_release_group(mbid: str, limit: int = Query(300), offset: int = Query(0)):
     rid = intg._mbid(mbid)
     if not rid:
         raise HTTPException(400, "invalid MusicBrainz ID or URL")
     try:
-        return intg.release_group_browse(rid)
+        return intg.release_group_browse(rid, max(1, limit), max(0, offset))
     except Exception as e:
         raise HTTPException(502, f"MusicBrainz lookup failed: {e}")
 
 
 @app.get("/api/mb/recording/{mbid}")
-def mb_recording(mbid: str):
+def mb_recording(mbid: str, limit: int = Query(300), offset: int = Query(0)):
     rid = intg._mbid(mbid)
     if not rid:
         raise HTTPException(400, "invalid MusicBrainz ID or URL")
     try:
-        return intg.recording_browse(rid)
+        return intg.recording_browse(rid, max(1, limit), max(0, offset))
+    except Exception as e:
+        raise HTTPException(502, f"MusicBrainz lookup failed: {e}")
+
+
+@app.get("/api/mb/detect/{mbid}")
+def mb_detect(mbid: str):
+    """Identify which MusicBrainz entity kind a bare MBID belongs to, so the
+    browser can route pasted IDs without the user choosing a type."""
+    rid = intg._mbid(mbid)
+    if not rid:
+        raise HTTPException(400, "invalid MusicBrainz ID or URL")
+    try:
+        return intg.detect_mbid(rid)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(502, f"MusicBrainz lookup failed: {e}")
 
@@ -1474,6 +1692,20 @@ def mb_assign(req: AssignTagsRequest):
         if af.audio is None:
             errors.append(f"{p}: {af.error or 'unreadable'}")
             continue
+        if getattr(af, "is_video", False):
+            # Video containers: batch all tags into ONE lossless ffmpeg
+            # rewrite (a per-tag rewrite remuxes the whole file each time).
+            clean = {k: v for k, v in tag_map.items() if str(v or "").strip()}
+            deletes = [k for k, v in tag_map.items() if not str(v or "").strip()]
+            if deletes and not clean:
+                errors.append(f"{p}: video containers cannot delete tags — overwrite instead")
+                continue
+            if clean and not af.set_video_tags(clean):
+                errors.append(f"{p}: {af.error or 'tag write failed'}")
+                continue
+            changed += 1
+            tagcache.invalidate_path(fp)
+            continue
         for k, v in tag_map.items():
             try:
                 if v is None or str(v) == "":
@@ -1558,6 +1790,55 @@ def lyrics_write(req: LyricsWriteRequest):
     return {"ok": True, "lrc": lrc_path.replace("\\", "/")}
 
 
+class LyricsPublishRequest(BaseModel):
+    """LRCLIB submission. `path` (optional) identifies a library track whose
+    tags/duration seed the request when explicit fields are missing."""
+    path: Optional[str] = None
+    artist: str = ""
+    track: str = ""
+    album: str = ""
+    duration: Optional[int] = None
+    plain: str = ""
+    synced: str = ""
+
+
+@app.post("/api/lyrics/publish")
+async def lyrics_publish(req: LyricsPublishRequest):
+    """Submit lyrics to LRCLIB on behalf of a library track.
+
+    The editor sends the exact text it shows; plain vs synced is detected
+    from [mm:ss.xx] timestamps so pasting either form just works."""
+    from server.integrations import lrclib_publish
+
+    artist, track, album = req.artist.strip(), req.track.strip(), req.album.strip()
+    duration = req.duration
+    if req.path:
+        p = os.path.normpath(mbresolve.resolve_track(req.path) or req.path)
+        if os.path.isfile(p):
+            tags, tech = tagcache.read_track(p, ("ARTIST", "ALBUMARTIST", "TITLE", "ALBUM"))
+            artist = artist or (tags.get("ARTIST") or tags.get("ALBUMARTIST") or "").strip()
+            track = track or (tags.get("TITLE") or "").strip()
+            album = album or (tags.get("ALBUM") or "").strip()
+            if not duration:
+                try:
+                    duration = int(round(float(tech.get("length") or 0))) or None
+                except (TypeError, ValueError):
+                    duration = None
+    synced = req.synced if req.synced.strip() else None
+    plain = req.plain if req.plain.strip() else None
+    if synced is None and plain is None and req.path:
+        # Fall back to the text already stored on the track.
+        from mlo.audio import AudioFile
+        af = AudioFile(os.path.normpath(req.path))
+        if af.audio is not None:
+            stored = af.get_lyrics()
+            if stored:
+                synced = stored
+    ok, msg = await asyncio.to_thread(
+        lrclib_publish, artist, track, album, duration, plain, synced)
+    return {"ok": ok, "message": msg}
+
+
 @app.get("/api/rym/validate")
 def rym_validate(url: str = Query(...)):
     return {"valid": intg.parse_rym_album_url(url) is not None}
@@ -1567,9 +1848,10 @@ def rym_validate(url: str = Query(...)):
 # Import
 # --------------------------------------------------------------------------- #
 def is_audio_file(name):
-    return os.path.splitext(name)[1].lower() in {
-        ".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".wav", ".aac",
-    }
+    """Library tracks: audio + music-video containers (mlo.paths definition,
+    so organize / genre import / MB matching treat videos as tracks too)."""
+    from mlo.paths import LIB_AUDIO_EXTS
+    return os.path.splitext(name)[1].lower() in LIB_AUDIO_EXTS
 
 
 @app.post("/api/album/remove")
@@ -1710,20 +1992,48 @@ def soulseek_status():
         "server": server,
         "download_dir": soulseek.download_dir(cfg),
         "web_port": int(cfg.get("soulseek_web_port") or 5030),
+        "listen_port": int(cfg.get("soulseek_listen_port") or 50000),
+        # saved credentials — the Soulseek tab prefills the login form and
+        # slskd auto-connects with them at every start
+        "username": str(cfg.get("soulseek_username") or ""),
+        "password": str(cfg.get("soulseek_password") or ""),
+        "has_credentials": bool(str(cfg.get("soulseek_username") or "").strip()
+                                and cfg.get("soulseek_password")),
     }
 
 
 @app.post("/api/soulseek/start")
 def soulseek_start():
-    """Start the managed slskd process and wait for its web API."""
+    """Spawn slskd and return quickly — the UI polls /status (1s) for the
+    web API / network login instead of this request blocking for the whole
+    boot (first boot re-scans the whole shared library, which takes a while).
+
+    Saved credentials (from a previous login) make slskd connect to the
+    Soulseek network automatically — no login form needed."""
     from server import soulseek
     ok, msg = soulseek.start()
     if not ok:
         raise HTTPException(400, msg)
-    # first boot re-scans the whole shared library, which can take a while
-    if not soulseek.wait_until_ready(timeout=60.0):
+    ready = soulseek.wait_until_ready(timeout=6.0)
+    cfg = load_config()
+    return {
+        "ok": True,
+        "ready": ready,
+        "message": msg,
+        "has_credentials": bool(str(cfg.get("soulseek_username") or "").strip()
+                                and cfg.get("soulseek_password")),
+    }
+
+
+@app.post("/api/soulseek/restart")
+def soulseek_restart():
+    """Restart slskd (e.g. to apply new ports) and wait until it answers."""
+    from server import soulseek
+    if not (soulseek.is_running() or soulseek.web_up(load_config())):
+        raise HTTPException(400, "slskd is not running")
+    if not soulseek.restart():
         raise HTTPException(504, "slskd did not become ready in time")
-    return {"ok": True, "message": msg}
+    return {"ok": True}
 
 
 @app.post("/api/soulseek/stop")
@@ -1749,7 +2059,9 @@ def soulseek_search(req: SoulseekSearchRequest):
 @app.get("/api/soulseek/search/{search_id}")
 def soulseek_search_results(search_id: str):
     from server import soulseek
-    if not soulseek.is_running():
+    # adopted slskd (spawned by an earlier run) answers on the web port even
+    # though no child handle exists — it must keep serving searches
+    if not (soulseek.is_running() or soulseek.web_up(load_config())):
         raise HTTPException(400, "slskd is not running")
     return soulseek.search_results(search_id)
 
@@ -1770,9 +2082,173 @@ def soulseek_download(req: SoulseekDownloadRequest):
 def soulseek_downloads():
     """Download transfer tree (per user / directory / file with state)."""
     from server import soulseek
-    if not soulseek.is_running():
+    if not (soulseek.is_running() or soulseek.web_up(load_config())):
         return {"downloads": []}
     return {"downloads": soulseek.downloads_state()}
+
+
+def _review_file_info(p, ffprobe=None):
+    """Tech + tags for one completed download file (review panel row)."""
+    from mlo.audio import AudioFile
+    from mlo.paths import LIB_VIDEO_EXTS
+
+    name = os.path.basename(p)
+    ext = os.path.splitext(name)[1].lower()
+    is_video = ext in LIB_VIDEO_EXTS
+    af = AudioFile(p)
+    tags = af.all_tags() if af.audio is not None else {}
+    tech = getattr(af, "tech", None)
+    if not tech and af.audio is not None:
+        tech = tagcache.read_track(p)[1]
+    return {
+        "path": p.replace("\\", "/"),
+        "file": name,
+        "ext": ext.lstrip(".").upper(),
+        "is_video": is_video,
+        "size": os.path.getsize(p),
+        "mtime": os.path.getmtime(p),
+        "tags": {k: v for k, v in (tags or {}).items()
+                 if k in ("TITLE", "ARTIST", "ALBUM", "DISCNUMBER", "TRACKNUMBER", "DATE", "GENRE")},
+        "tech": tech or {},
+    }
+
+
+@app.get("/api/soulseek/review")
+def soulseek_review():
+    """Completed downloads on disk, ready for the review workflow:
+    preview locally, tag them (VOB → tagged MKV), then import."""
+    from mlo.paths import AUDIO_EXTS, LIB_VIDEO_EXTS
+
+    from server import soulseek
+
+    cfg = load_config()
+    ddir = soulseek.download_dir(cfg)
+    out = []
+    if os.path.isdir(ddir):
+        wanted = set(AUDIO_EXTS) | set(LIB_VIDEO_EXTS) | {".log", ".cue", ".jpg", ".jpeg", ".png", ".pdf", ".txt"}
+        for root, dirs, files in os.walk(ddir):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for f in sorted(files):
+                if os.path.splitext(f)[1].lower() not in wanted:
+                    continue
+                p = os.path.join(root, f)
+                try:
+                    entry = _review_file_info(p)
+                except Exception:
+                    continue
+                entry["user"] = os.path.relpath(root, ddir).split(os.sep)[0]
+                out.append(entry)
+    return {"dir": ddir.replace("\\", "/"), "files": out}
+
+
+@app.get("/api/soulseek/local-file")
+def soulseek_local_file(path: str = Query(...)):
+    """Stream a completed download straight from the download dir for
+    in-app preview (guarded to the download dir — the library stream
+    endpoint only serves the music folder)."""
+    from server import soulseek
+
+    p = os.path.normpath(path)
+    ddir = os.path.abspath(soulseek.download_dir(load_config()))
+    if not _in_music_folder(p, ddir):
+        raise HTTPException(400, "path outside the download dir")
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    ctype = _CTYPES.get(os.path.splitext(p)[1].lower(), "application/octet-stream")
+    if ctype == "application/octet-stream" and os.path.splitext(p)[1].lower() in (".mkv", ".mka"):
+        ctype = "video/x-matroska"
+    return FileResponse(p, media_type=ctype, headers={"Accept-Ranges": "bytes"})
+
+
+# Containers Chromium can decode in a <video> element. Everything else —
+# DVD-Video VOB (MPEG-PS), Blu-ray M2TS, MPEG-2 in AVI — is previewed
+# through the live transcode endpoint below.
+_NATIVE_VIDEO_EXTS = {".mp4", ".m4v", ".webm", ".mkv", ".mov", ".ogv", ".3gp", ".3g2"}
+
+
+@app.get("/api/soulseek/preview-stream")
+def soulseek_preview_stream(path: str = Query(...), native: int = Query(0)):
+    """Playable preview of a downloaded video. ?native=1 streams the file
+    as-is; the default pipes it through ffmpeg into a fragmented MP4
+    (H.264/AAC, 480p) so browsers can play DVD/Blu-ray rips they cannot
+    decode. Preview only — the stream never touches the file on disk;
+    import/remux always uses the original bytes."""
+    import subprocess
+    from server import soulseek
+    from mlo.tools import detect_all_tools
+
+    p = os.path.normpath(path)
+    ddir = os.path.abspath(soulseek.download_dir(load_config()))
+    if not _in_music_folder(p, ddir):
+        raise HTTPException(400, "path outside the download dir")
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    ext = os.path.splitext(p)[1].lower()
+
+    if native or ext in _NATIVE_VIDEO_EXTS:
+        ctype = _CTYPES.get(ext, "application/octet-stream")
+        return FileResponse(p, media_type=ctype, headers={"Accept-Ranges": "bytes"})
+
+    ffmpeg = (detect_all_tools().get("ffmpeg") or {}).get("ffmpeg_exe")
+    if not ffmpeg:
+        raise HTTPException(503, "ffmpeg not installed — install it under Dependencies for video previews")
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+        "-i", p,
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "27",
+        "-vf", "scale=-2:min(480\\,ih)",
+        "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", "pipe:1",
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as e:
+        raise HTTPException(500, f"ffmpeg failed to start: {e}")
+
+    from starlette.responses import StreamingResponse
+
+    def _gen():
+        try:
+            while True:
+                chunk = proc.stdout.read(256 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.stdout.close()
+            proc.stderr.close()
+
+    return StreamingResponse(_gen(), media_type="video/mp4")
+
+
+class LocalFileDeleteRequest(BaseModel):
+    path: str
+
+
+@app.post("/api/soulseek/local-file/delete")
+def soulseek_local_file_delete(req: LocalFileDeleteRequest):
+    """Discard a previewed download (removes the file, not the library)."""
+    from server import soulseek
+
+    p = os.path.normpath(req.path)
+    ddir = os.path.abspath(soulseek.download_dir(load_config()))
+    if not _in_music_folder(p, ddir):
+        raise HTTPException(400, "path outside the download dir")
+    if os.path.isfile(p):
+        os.remove(p)
+        try:
+            upath = os.path.dirname(p)
+            for root, dirs, files in os.walk(ddir, topdown=False):
+                if os.path.abspath(root).startswith(os.path.abspath(ddir)) and not os.listdir(root) and root != ddir:
+                    os.rmdir(root)
+        except OSError:
+            pass
+    return {"ok": True}
 
 
 # DVD / Blu-ray disc-image markers used to classify a downloaded rip.
@@ -2039,12 +2515,20 @@ def soulseek_login(req: SoulseekLoginRequest):
     if not username or not req.password:
         raise HTTPException(400, "username and password are required")
     cfg = load_config()
-    cfg["soulseek_username"] = username
-    cfg["soulseek_password"] = req.password
-    save_config(cfg)
+    same = (username == str(cfg.get("soulseek_username") or "").strip()
+            and req.password == str(cfg.get("soulseek_password") or ""))
+    if not same:
+        cfg["soulseek_username"] = username
+        cfg["soulseek_password"] = req.password
+        save_config(cfg)
 
-    soulseek.restart()
-    deadline = time.time() + 25.0
+    # When the submitted credentials MATCH the saved ones and slskd is
+    # already up, do NOT restart: restarting aborts slskd's own reconnect
+    # attempts and resets the Soulseek server's cooldown — which is what
+    # made stop → start → login loops stop working. Just wait for login.
+    if not same or not (soulseek.is_running() or soulseek.web_up(cfg)):
+        soulseek.restart()
+    deadline = time.time() + 40.0
     logged_in = False
     while time.time() < deadline:
         try:

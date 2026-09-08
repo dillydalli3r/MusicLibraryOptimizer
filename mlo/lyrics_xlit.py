@@ -11,11 +11,16 @@ data. For every track with lyrics it:
 
 and stores the results in two places:
 
-* embedded tags  ``TRANSLITERATION`` / ``TRANSLATION`` (freeform TXXX /
-  iTunes atoms, written via the normal TAG_MAP path);
-* LRC sidecars   ``<stem>.romaji.lrc`` and ``<stem>.<lang>.lrc`` — the
-  de-facto convention players use for translated karaoke files. Enabled
-  with ``lyrics_xlit_sidecars``.
+* embedded tags, one per language — ``TRANSLITERATION-JA-LATN`` (romanized
+  Japanese), ``TRANSLATION-EN``, ``TRANSLATION-DE``, … written via the
+  arbitrary-tag path of every container (TXXX / freeform atoms / vorbis
+  comments). The bare legacy ``TRANSLITERATION`` / ``TRANSLATION`` names
+  are superseded and removed when the language-specific tag is written;
+* LRC sidecars ``<stem>.romaji.lrc`` and ``<stem>.<lang>.lrc`` — the
+  de-facto convention players use for translated karaoke files. These are
+  written ONLY when the configured lyrics format is LRC or BOTH: with
+  EMBEDDED lyrics the transforms live in the tags alone, never in stray
+  files next to the audio (gated further by ``lyrics_xlit_sidecars``).
 
 Line and timestamp structure of the original lyrics is preserved exactly:
 for synced (LRC/ELRC) lyrics every output line keeps its original
@@ -211,6 +216,29 @@ def primary_translation_lang(cfg):
     return translation_langs(cfg)[0]
 
 
+def xlit_tag_suffix(cfg, text, af=None):
+    """Language detail for the TRANSLITERATION tag suffix.
+
+    Source language when knowable — the explicit LANGUAGE tag first, then
+    the dominant script for scripts unique to one language (kana → JA,
+    hangul → KO, …) — always with the -LATN target-script subtag, so the
+    tag reads like BCP-47: ``TRANSLITERATION-JA-LATN``. Plain ``LATN`` when
+    the source language can't be pinned down (Cyrillic and Han each map to
+    several languages)."""
+    lang = ""
+    if af is not None:
+        lang = str(af.get_tag("LANGUAGE") or "").strip().lower()
+        lang = re.split("[-,;]", lang)[0] if lang else ""
+    if lang in ("", "und", "zxx"):
+        script = dominant_script(text)
+        lang = {
+            "japanese": "ja", "hangul": "ko", "greek": "el", "hebrew": "he",
+            "arabic": "ar", "thai": "th", "devanagari": "hi",
+            "georgian": "ka", "armenian": "hy",
+        }.get(script, "")
+    return f"{lang}-latn" if lang else "latn"
+
+
 def _split_lrc_line(line):
     """One lyrics line -> (timestamp prefix or '', body text without word
     tags). Body keeps its inner spacing; only the timing chrome is removed
@@ -289,7 +317,12 @@ def run_lyrics_xlit(config):
 
     print_header("Lyrics Transliterate & Translate (AI)")
     force = bool(config.get("force_xlit", False))
-    sidecars = bool(config.get("lyrics_xlit_sidecars", True))
+    sidecars = (bool(config.get("lyrics_xlit_sidecars", True))
+                and str(config.get("lyrics_format", "EMBEDDED")).upper() in ("LRC", "BOTH"))
+    # With EMBEDDED lyrics the transforms are stored in the tags only —
+    # sidecar files appear only for LRC/BOTH; with LRC-only the tags are
+    # skipped so the two storage places never disagree.
+    embed_tags = str(config.get("lyrics_format", "EMBEDDED")).upper() in ("EMBEDDED", "BOTH")
     do_xlit = bool(config.get("lyrics_xlit_enabled", True))
     do_trans = bool(config.get("lyrics_translate_enabled", True))
     langs = translation_langs(config)
@@ -302,9 +335,12 @@ def run_lyrics_xlit(config):
               "(presets available, e.g. Google Gemini).", Color.YELLOW))
         return stats
 
-    log("write mode: tags TRANSLITERATION/TRANSLATION"
+    fmt = str(config.get("lyrics_format", "EMBEDDED")).upper()
+    log("write mode: "
+        + ("tags TRANSLITERATION-<lang>/TRANSLATION-<lang>"
+           if embed_tags else "tags skipped (LRC lyrics format)")
         + (f" + sidecars (.romaji.lrc, {', '.join('.' + l + '.lrc' for l in langs)})"
-           if sidecars else " (sidecars disabled)")
+           if sidecars else " (no sidecars)")
         + ("  (forced: re-transform existing)" if force else ""))
 
     if config.get("targets") is not None:
@@ -355,7 +391,7 @@ def run_lyrics_xlit(config):
 
                 # ---- transliteration ------------------------------------
                 if do_xlit:
-                    existing = str(af.get_tag("TRANSLITERATION") or "").strip()
+                    existing = str(af.get_lyrics_transform("TRANSLITERATION") or "").strip()
                     has_sidecar = sidecars and os.path.isfile(
                         os.path.splitext(path)[0] + XLIT_SIDECAR)
                     if not force and (existing or has_sidecar):
@@ -368,7 +404,13 @@ def run_lyrics_xlit(config):
                     else:
                         xlit, ok = _apply(config, text, "transliterate")
                         if ok:
-                            af.set_tag("TRANSLITERATION", xlit)
+                            if embed_tags:
+                                af.set_tag(
+                                    f"TRANSLITERATION-{xlit_tag_suffix(config, text, af)}".upper(),
+                                    xlit)
+                                # the bare legacy name is superseded
+                                if str(af.get_tag("TRANSLITERATION") or "").strip():
+                                    af.delete_tag("TRANSLITERATION")
                             if sidecars:
                                 _atomic_write_text(
                                     os.path.splitext(path)[0] + XLIT_SIDECAR, xlit)
@@ -379,7 +421,8 @@ def run_lyrics_xlit(config):
                 if do_trans:
                     for lang in langs:
                         if not force and _has_translation(
-                                af.get_tag("TRANSLATION"), path, lang, sidecars):
+                                af.get_lyrics_transform("TRANSLATION", lang),
+                                path, lang, sidecars):
                             continue
                         trans, ok = _apply(config, text, "translate", lang)
                         if ok and _same_essence(trans, text):
@@ -390,10 +433,12 @@ def run_lyrics_xlit(config):
                                 stats.get("translation_identity_skipped", 0) + 1)
                             continue
                         if ok:
-                            if lang == langs[0]:
-                                # The tag carries the primary language; extra
-                                # languages live in their .<lang>.lrc sidecars.
-                                af.set_tag("TRANSLATION", trans)
+                            if embed_tags:
+                                # one tag per configured language:
+                                # TRANSLATION-EN, TRANSLATION-DE, …
+                                af.set_tag(f"TRANSLATION-{lang}".upper(), trans)
+                                if str(af.get_tag("TRANSLATION") or "").strip():
+                                    af.delete_tag("TRANSLATION")
                             if sidecars:
                                 _atomic_write_text(
                                     os.path.splitext(path)[0] + f".{lang}.lrc", trans)

@@ -1144,19 +1144,24 @@ const finish = async () => {
                   <div className="max-h-52 overflow-auto space-y-1">
                     {g.files.length === 0 && <div className="text-xs text-zinc-600 px-2 py-1">Empty — move files here from other albums.</div>}
                     {g.files.map((f) => (
-                      <div key={f.relPath} className="flex items-center gap-2 text-xs px-2">
-                        <span className="flex-1 truncate text-zinc-400" title={f.relPath}>{f.relPath}</span>
-                        <select
-                          className="input !w-auto !py-0.5 text-[11px]"
-                          value={gi}
-                          onChange={(e) => moveFile(gi, Number(e.target.value), f)}
-                        >
-                          {albums.map((a, i) => (
-                            <option key={i} value={i}>{a.name.trim() || `Album ${i + 1}`}</option>
-                          ))}
-                        </select>
-                      </div>
+                      <ImportFileRow
+                        key={f.relPath}
+                        f={f}
+                        gi={gi}
+                        albums={albums}
+                        groupFiles={g.files}
+                        onMove={(to) => moveFile(gi, to, f)}
+                      />
                     ))}
+                    {(() => {
+                      const covers = g.files.filter((x) => /\.(jpg|jpeg|png|webp|bmp|gif|tiff|tif|avif|heic|heif|jxl|svg)$/i.test(x.relPath));
+                      if (!covers.length) return null;
+                      return (
+                        <div className="text-[11px] text-zinc-500 px-2 pt-1">
+                          {covers.length} image{covers.length === 1 ? "" : "s"} — “cover.jpg” becomes the album cover; an image named like a track (“01 - Song.jpg” next to “01 - Song.flac”) becomes that track's own cover.
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               ))}
@@ -1669,6 +1674,55 @@ function DiscSection({
         )}
       </div>
       {!collapsed && children}
+    </div>
+  );
+}
+
+/** One row in the import file list: image thumbnails for artwork, and a
+ * "track cover" hint when an image shares its stem with an audio file in
+ * the same album group (that is how per-track covers are added). */
+function ImportFileRow({ f, gi, albums, groupFiles, onMove }: {
+  f: ImportFile;
+  gi: number;
+  albums: AlbumGroup[];
+  groupFiles: ImportFile[];
+  onMove: (to: number) => void;
+}) {
+  const isImage = /\.(jpg|jpeg|png|webp|bmp|gif|tiff|tif|avif|heic|heif|jxl|svg)$/i.test(f.relPath);
+  const [thumb, setThumb] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isImage || !f.file) return;
+    const url = URL.createObjectURL(f.file);
+    setThumb(url);
+    return () => URL.revokeObjectURL(url);
+  }, [isImage, f.file]);
+  const coverFor = (() => {
+    if (!isImage) return null;
+    const stem = f.relPath.split("/").pop()!.replace(/\.[^.]+$/, "").toLowerCase();
+    if (["cover", "front", "folder"].includes(stem)) return "album cover";
+    const hit = groupFiles.find((x) => x !== f && AUDIO_RE.test(x.relPath) && x.relPath.split("/").pop()!.replace(/\.[^.]+$/, "").toLowerCase() === stem);
+    return hit ? `track cover for ${hit.relPath.split("/").pop()}` : null;
+  })();
+  return (
+    <div className="flex items-center gap-2 text-xs px-2 py-1">
+      {isImage && thumb ? (
+        <img src={thumb} alt="" className="h-8 w-8 rounded bg-raise border border-border object-cover shrink-0" />
+      ) : isImage ? (
+        <span className="h-8 w-8 rounded bg-raise border border-border shrink-0 flex items-center justify-center text-zinc-600 text-[9px]">IMG</span>
+      ) : null}
+      <span className="flex-1 min-w-0" title={f.relPath}>
+        <span className="block break-words text-zinc-400">{f.relPath}</span>
+        {coverFor && <span className="block text-[10px] text-accent-soft">→ {coverFor}</span>}
+      </span>
+      <select
+        className="input !w-auto !py-0.5 text-[11px] shrink-0"
+        value={gi}
+        onChange={(e) => onMove(Number(e.target.value))}
+      >
+        {albums.map((a, i) => (
+          <option key={i} value={i}>{a.name.trim() || `Album ${i + 1}`}</option>
+        ))}
+      </select>
     </div>
   );
 }

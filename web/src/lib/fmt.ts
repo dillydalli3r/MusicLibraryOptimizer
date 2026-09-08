@@ -5,10 +5,45 @@ export interface TechInfo {
   bitrate?: number;
   bits_per_sample?: number;
   sample_rate?: number;
+  width?: number;
+  height?: number;
+}
+
+/** Music-video containers the app plays with <video> (mirrors the
+ * backend's LIB_VIDEO_EXTS). */
+const VIDEO_EXTS = new Set([
+  ".mp4", ".m4v", ".mkv", ".webm", ".mov", ".vob", ".mpg", ".mpeg",
+  ".m2v", ".ts", ".m2ts", ".mts", ".avi", ".wmv", ".flv", ".ogv",
+  ".3gp", ".3g2",
+]);
+
+export function isVideoFile(fileOrPath: string | null | undefined): boolean {
+  if (!fileOrPath) return false;
+  const m = (fileOrPath.match(/\.([a-z0-9]+)$/i) ?? [])[0];
+  return !!m && VIDEO_EXTS.has(m.toLowerCase());
+}
+
+/** Human bitrate: kbps below 10 Mbps, one-decimal Mbps above (video files). */
+export function fmtBitrate(bps?: number | null): string {
+  if (!bps) return "";
+  if (bps >= 10_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
+  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2).replace(/0$/, "")} Mbps`;
+  return `${Math.round(bps / 1000)}k`;
 }
 
 export function fmtTech(t?: TechInfo | null): string {
   if (!t) return "";
+  // Video containers: lead with resolution (the thing that tells a video
+  // apart), then codec, then a readable total bitrate.
+  if ((t.width && t.height) || (t.codec && /^(h264|h265|hevc|av1|vp9|mpeg|vc-?1|theora|prores|divx|xvid|mkv|mp4|mov)/i.test(t.codec))) {
+    const parts: string[] = [];
+    if (t.width && t.height) parts.push(`${t.width}×${t.height}`);
+    else if (t.width) parts.push(`${t.width}p`);
+    if (t.codec) parts.push(String(t.codec).toUpperCase());
+    if (t.bitrate) parts.push(fmtBitrate(t.bitrate));
+    if (!parts.length && t.sample_rate) parts.push(`${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
+    return parts.join(" · ");
+  }
   const pair =
     t.bits_per_sample && t.sample_rate
       ? `${Math.round(t.bits_per_sample)}/${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`
@@ -20,7 +55,7 @@ export function fmtTech(t?: TechInfo | null): string {
   const parts: string[] = [];
   if (t.codec) parts.push(`${t.codec}${pair ? ` ${pair}` : ""}`);
   else if (pair) parts.push(pair);
-  if (t.bitrate) parts.push(`${Math.round(t.bitrate / 1000)}k`);
+  if (t.bitrate) parts.push(fmtBitrate(t.bitrate));
   return parts.join(" · ");
 }
 

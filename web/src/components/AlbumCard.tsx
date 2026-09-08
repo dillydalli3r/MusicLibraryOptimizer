@@ -7,6 +7,7 @@ import { albumTech } from "../lib/fmt";
 import CoverImg from "./CoverImg";
 import FavHeart from "./FavHeart";
 import { albumRef } from "../lib/refs";
+import { originalYear } from "../pages/LibraryPage";
 import type { Album } from "../types";
 
 /** The library's album grid card, shared by the Library and Favorites pages
@@ -25,7 +26,7 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
   const ms = mediaShort(al.media || al.meta?.MEDIA);
   return (
     <div
-      className={`group relative rounded-xl p-2 transition-all hover:-translate-y-0.5 hover:bg-panel/70 ${selected ? "bg-accent/10 ring-1 ring-accent/30" : ""} ${selectable ? "cursor-pointer" : ""}`}
+      className={`group relative rounded-xl p-2 transition-colors hover:bg-panel/70 ${selected ? "bg-accent/10 ring-1 ring-accent/30" : ""} ${selectable ? "cursor-pointer" : ""}`}
       onClick={selectable ? () => onSelect?.(al.path) : undefined}
     >
       <div className="relative">
@@ -51,9 +52,12 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
         )}
         {(() => {
           const tech = albumTech(al.tracks, true);
+          const dr = al.meta?.["ALBUM DYNAMIC RANGE"] ?? null;
           return (
             <>
-              {/* quality bottom-left · media type bottom-right */}
+              {/* quality bottom-left · media type bottom-right · DR top-left.
+                  The play button lives top-left below the DR chip so it can
+                  never cover the bitrate readout. */}
               {tech && (
                 <span
                   className="absolute bottom-1.5 left-1.5 bg-black/65 text-zinc-300 text-[9px] font-mono tracking-wide rounded px-1 py-0.5 border border-white/10"
@@ -70,14 +74,22 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
                   {ms}
                 </span>
               ) : null}
+              {dr ? (
+                <span
+                  className="absolute top-1.5 left-1.5 bg-black/65 text-zinc-200 text-[9px] font-mono tracking-wide rounded px-1 py-0.5 border border-white/10"
+                  title="Album dynamic range (DR meter)"
+                >
+                  DR{dr}
+                </span>
+              ) : null}
             </>
           );
         })()}
-        <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute top-1.5 right-1.5 row-hover transition-opacity">
           <FavHeart kind="album" id={al.path} mbid={al.meta?.MUSICBRAINZ_ALBUMID} className="!p-1.5 bg-black/60" iconClass="h-4 w-4" />
         </div>
         <button
-          className="btn-primary absolute left-2 bottom-3 !rounded-lg !p-3 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-2xl"
+          className="btn-primary absolute left-2 top-9 !rounded-lg !p-3 row-hover transition-opacity shadow-2xl"
           title="Play album"
           onClick={(e) => {
             e.stopPropagation();
@@ -100,14 +112,24 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
         >
           {al.meta?.ALBUM ?? al.path.split("/").pop()}
         </Link>
+        {/* artist left · ORIGINAL release year bottom-right (no separator —
+            the two ends read as their own columns) */}
         <div className="text-[11px] text-zinc-500 truncate flex items-center gap-1.5 mt-0.5">
           <span className={`h-1.5 w-1.5 rounded-full ${st.edge} inline-block shrink-0`} title={st.label} />
-          <span className="truncate">
-            {artist}
-            {al.meta?.DATE ? ` · ${String(al.meta.DATE).slice(0, 4)}` : ""}
-            {al.meta?.ORIGINALDATE && String(al.meta.ORIGINALDATE).slice(0, 4) !== String(al.meta?.DATE ?? "").slice(0, 4)
-              ? ` (orig. ${String(al.meta.ORIGINALDATE).slice(0, 4)})` : ""}
-          </span>
+          <span className="truncate" title={artist}>{artist}</span>
+          {(() => {
+            const y = originalYear(al.meta);
+            return y ? (
+              <span
+                className="ml-auto shrink-0 tabular-nums"
+                title={al.meta?.ORIGINALDATE && al.meta.ORIGINALDATE !== al.meta?.DATE
+                  ? `Original release ${al.meta.ORIGINALDATE}`
+                  : `Released ${al.meta?.DATE}`}
+              >
+                {y}
+              </span>
+            ) : null;
+          })()}
         </div>
       </div>
     </div>

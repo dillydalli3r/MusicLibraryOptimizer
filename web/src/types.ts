@@ -19,6 +19,8 @@ export interface AlbumMeta {
   ARTIST?: string | null;
   DATE?: string | null;
   ORIGINALDATE?: string | null;
+  ITUNESADVISORY?: string | null;
+  ALBUMITUNESADVISORY?: string | null;
   MUSICBRAINZ_ALBUMID?: string | null;
   MUSICBRAINZ_ALBUMARTISTID?: string | null;
   MUSICBRAINZ_RELEASEGROUPID?: string | null;
@@ -26,6 +28,7 @@ export interface AlbumMeta {
   MEDIA?: string | null;
   CATALOGNUMBER?: string | null;
   LABEL?: string | null;
+  "ALBUM DYNAMIC RANGE"?: string | null;
 }
 
 export interface Tech {
@@ -35,10 +38,15 @@ export interface Tech {
   bits_per_sample?: number;
   channels?: number;
   codec?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface TrackTags {
   TITLE?: string | null;
+  "DYNAMIC RANGE"?: string | null;
+  "ALBUM DYNAMIC RANGE"?: string | null;
+  REPLAYGAIN_TRACK_GAIN?: string | null;
   ARTIST?: string | null;
   ALBUM?: string | null;
   DATE?: string | null;
@@ -89,6 +97,8 @@ export interface Track {
   cover_file?: string | null;
   sidecar_cover?: boolean;
   sidecar_cover_file?: string | null;
+  /** Music-video container (MKV/MP4/VOB/…) — plays with <video>. */
+  is_video?: boolean;
 }
 
 export interface Album {

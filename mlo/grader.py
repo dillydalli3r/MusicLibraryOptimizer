@@ -13,7 +13,7 @@ from .lyrics_xlit import (
 )
 from .cue import canonical_cue_text
 from .naming import DEFAULT_NAMING_SCRIPT
-from .paths import AUDIO_EXTS, IMAGE_EXTS, LIB_AUDIO_EXTS, get_sidecar_cover_path
+from .paths import AUDIO_EXTS, IMAGE_EXTS, LIB_AUDIO_EXTS, LIB_VIDEO_EXTS, get_sidecar_cover_path
 from .stats import (
     new_stats, _make_pbar, _pbar_skip, _pbar_update, is_audio_file,
     _find_albums, _clean_set, _summarize_values, _collect_targets,
@@ -94,11 +94,65 @@ PER_TRACK_TAGS = [
     "INSTRUMENTAL",
 ]
 
+# Checks that only ever apply to audio-only containers. No engine script
+# writes ReplayGain / DR / AUDIT / Key&BPM into video files (the loudness,
+# audit and audiometa scripts walk AUDIO_EXTS), so music videos are graded
+# on what applies to them — tags, links, names — and never on these.
+VIDEO_SKIP_TAGS = {
+    "REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK",
+    "REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_PEAK",
+    "DYNAMIC RANGE",
+}
+
 
 ALBUM_TAGS = [
     "ALBUMITUNESADVISORY",
     "ALBUM DYNAMIC RANGE",
 ]
+
+
+# Tags beets (mediafile) writes that the optimizer's TAG_MAP has no entry
+# for: its own vorbis spellings of shared fields, MusicBrainz identifiers,
+# and plugin extras. Beets-tagged files are first-class citizens, so none of
+# these count as excess — only tags neither this repo's scripts nor beets
+# would have written (vendor/ripper junk) are flagged by the excess check.
+BEETS_TAGS = {
+    # beets' vorbis spellings of shared fields
+    "TRACK", "DISC", "CATALOGNUM", "COMPILATION", "ALBUMSORT",
+    "ALBUMTYPE", "ALBUMSTATUS", "COMPOSERSORT", "COUNTRY", "SCRIPT",
+    "LANGUAGE", "ASIN", "BARCODE", "YEAR", "DISCSUBTITLE", "PERFORMER",
+    "MOVEMENTTOTAL",
+    # MusicBrainz identifiers (beets / Picard)
+    "MUSICBRAINZ_TRACKID", "MUSICBRAINZ_ALBUMID", "MUSICBRAINZ_ARTISTID",
+    "MUSICBRAINZ_ALBUMARTISTID", "MUSICBRAINZ_RELEASEGROUPID",
+    "MUSICBRAINZ_WORKID", "MUSICBRAINZ_RELEASETRACKID",
+    "MUSICBRAINZ_ORIGINALALBUMID", "MUSICBRAINZ_ORIGINALARTISTID",
+    "MUSICBRAINZ_TRMID",
+    # Picard / beets release metadata + per-track credits — standard
+    # MusicBrainz tagging output (releasestatus, totaltracks, the multi-
+    # artist "artists" tag, producer/mixer/engineer roles, composer IDs…),
+    # seen on essentially every properly tagged file
+    "RELEASESTATUS", "TOTALTRACKS", "TOTALDISCS", "ARTISTS",
+    "MUSICBRAINZ_COMPOSERID", "MUSICBRAINZ_CONDUCTORID",
+    "MUSICBRAINZ_LYRICISTID", "MUSICBRAINZ_REMIXERID",
+    "PRODUCER", "MIXER", "ENGINEER", "CONDUCTOR", "DJMIXER", "ARRANGER",
+    "WRITER", "PUBLISHER", "MOOD",
+    # beets plugins / third-party tooling it ships
+    "ACOUSTID_ID", "ACOUSTID_FINGERPRINT",
+    "REPLAYGAIN_REFERENCE_LOUDNESS",
+}
+
+# ID3 frames beets or the encoder write that have no TAG_MAP entry: TCMP =
+# compilation, TSOC = composer sort, TSSE/TENC = encoder identity (the MP3
+# counterpart of the ENCODER_* vorbis tags above).
+BEETS_ID3_FRAMES = {"TCMP", "TSOC", "TSSE", "TENC"}
+
+
+def _tag_key_norm(key):
+    """Uppercase key with spaces/underscores removed, so the file-side
+    spellings of a name ("MusicBrainz Album Id", MUSICBRAINZ_ALBUM_ID,
+    musicbrainz_albumid) all compare equal to the allowlist entry."""
+    return re.sub(r"[\s_]+", "", str(key)).upper()
 
 
 COVER_NAMES = {"cover.jpg", "cover.jpeg", "cover.png", "cover.jxl"}
@@ -640,16 +694,16 @@ def _cover_image_ok(path, config):
             w, h = img.size
             if w <= 0 or h <= 0:
                 return False
-            # Size enforcement — an oversized cover fails outright; an
-            # undersized one is forgiven here (the aspect-ratio check below
-            # still applies to it).
+            # Size enforcement — dimensions must match the resolution
+            # target exactly (within tolerance) in BOTH directions: an
+            # undersized cover fails just like an oversized one.
             if enforce_size and resize_enabled and target > 0:
                 try:
                     tol = int(config.get("grader_cover_size_tolerance_px", 0) or 0)
                     tol = max(0, min(5, tol))
                 except Exception:
                     tol = 0
-                if w > target + tol or h > target + tol:
+                if abs(w - target) > tol or abs(h - target) > tol:
                     return False
             # Square enforcement (force_exact => strict)
             if enforce_square:
@@ -674,8 +728,30 @@ def _cover_image_ok(path, config):
                     return False
             return True
     except Exception:
-        # If Pillow can't open (e.g., JXL without plugin), treat as ok to avoid false failure
-        # But ensure size >0 already passed
+        # Pillow couldn't open (e.g. JXL without plugin) — try jxlinfo
+        # dimensions before giving up; only pass when truly unreadable.
+        try:
+            jw, jh = _get_cover_dimensions(path)
+            if jw and jh and enforce_size and resize_enabled and target > 0:
+                try:
+                    tol = int(config.get("grader_cover_size_tolerance_px", 0) or 0)
+                    tol = max(0, min(5, tol))
+                except Exception:
+                    tol = 0
+                if abs(jw - target) > tol or abs(jh - target) > tol:
+                    return False
+            if jw and jh and enforce_square:
+                ratio = jw / jh if jh else 1.0
+                try:
+                    thr = float(config.get("cover_crop_threshold", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    thr = 0.0
+                if abs(ratio - 1.0) > max(0.0, min(0.5, thr)):
+                    return False
+            if jw and jh:
+                return True
+        except Exception:
+            pass
         return True
 
 
@@ -765,8 +841,8 @@ def _grade_sidecars(album_dir, all_files, cfg):
                         if HAS_PIL:
                             with Image.open(full) as _im:
                                 _w, _h = _im.size
-                                if enforce_size and (_w > tgt + 1 or _h > tgt + 1):
-                                    detail = f"oversized {_w}x{_h} (need {tgt}x{tgt} max)"
+                                if enforce_size and (abs(_w - tgt) > 1 or abs(_h - tgt) > 1):
+                                    detail = f"wrong size {_w}x{_h} (need {tgt}x{tgt})"
                                 elif enforce_square:
                                     thr = float(cfg.get("cover_crop_threshold", 0.05) or 0.05)
                                     thr = max(0.0, min(0.5, thr))
@@ -914,7 +990,13 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             continue
 
         # Required per-track tags (skip if per-filetype disabled).
+        is_video_track = os.path.splitext(ap)[1].lower() in LIB_VIDEO_EXTS
         for t in PER_TRACK_TAGS:
+            if is_video_track and t in VIDEO_SKIP_TAGS:
+                # Video containers: ReplayGain / DR never apply (no engine
+                # script writes them there) — record, don't grade.
+                track["values"][t] = af.get_tag(t)
+                continue
             if not should_write_audio_tag(cfg, t, filepath=ap):
                 # Track not supposed to have this tag for its filetype — don't grade it
                 track["values"][t] = af.get_tag(t)
@@ -924,7 +1006,11 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             track["values"][t] = val
 
             if val is None or str(val).strip() == "":
-                if cfg.get("grade_check_missing_tags", True):
+                # ITUNESADVISORY is optional: absence means "unrated", not a
+                # defect — nothing auto-fills 0 anymore, so a missing tag
+                # must not fail the check (a PRESENT value is still validated
+                # as 0/1/2 below).
+                if cfg.get("grade_check_missing_tags", True) and t != "ITUNESADVISORY":
                     failed_checks += 1
                     add_issue(f"Missing {t}", basename)
                     track["issues"].append(t)
@@ -968,15 +1054,46 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         track["issues"].append(t)
 
         # Key & BPM (script 12 output) — required when the check is on.
-        # Excess tags: anything the optimizer's strip pass would remove —
-        # every key outside TAG_MAP plus the encoder identity tags. Their
-        # presence counts against grading so unoptimized files surface.
-        if cfg.get("grade_check_excess_tags", True):
+        # Excess tags: anything NEITHER this pipeline's scripts NOR beets
+        # would have written — the optimizer's strip pass would remove every
+        # key outside the shared vocabulary. Their presence counts against
+        # grading so unoptimized files surface.
+        if cfg.get("grade_check_excess_tags", True) and not is_video_track:
             from .audio import TAG_MAP as _TAG_MAP
-            _allowed_keys = {k.upper() for k in _TAG_MAP} | {
-                "ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION"}
-            _raw_keys = [str(k) for k in af.all_tags().keys()]
-            _extra = sorted({k for k in _raw_keys if k.upper() not in _allowed_keys})
+            # Script vocabulary: TAG_MAP keys (compared with spaces/
+            # underscores normalized away, so "DYNAMIC RANGE" and file-side
+            # spellings like "DYNAMIC_RANGE" match), the encoder identity
+            # tags, and beets/mediafile's own spellings (MUSICBRAINZ_* ids,
+            # TRACK/DISC/CATALOGNUM, …) — beets-tagged files are first-class
+            # citizens, only junk like vendor tags counts as excess.
+            _allowed = {_tag_key_norm(k) for k in _TAG_MAP} | {_tag_key_norm(k) for k in (
+                "ENCODER_PROGRAM", "ENCODER_QUALITY", "ENCODER_VERSION",
+                *BEETS_TAGS)}
+            # Language-specific lyrics transforms (TRANSLATION-EN,
+            # TRANSLITERATION-JA-LATN, …) are first-class tags, not excess.
+            _allowed_prefixes = ("TRANSLATION-", "TRANSLITERATION-")
+            _extra = []
+            for _k in af.all_tags().keys():
+                _k = str(_k)
+                _ku = _k.upper()
+                if _tag_key_norm(_k) in _allowed:
+                    continue
+                if _ku.startswith(_allowed_prefixes):
+                    continue
+                if _ku.startswith("TXXX:"):
+                    # ID3 freeform frames: allowed when the frame's
+                    # description names a tag the script or beets writes.
+                    if _tag_key_norm(_k.split(":", 1)[1]) in _allowed:
+                        continue
+                if _ku.startswith("----:"):
+                    # MP4 freeform atoms ("----:com.apple.iTunes:Name"):
+                    # same rule on the sub-name.
+                    if _tag_key_norm(_k.rsplit(":", 1)[-1]) in _allowed:
+                        continue
+                if _ku in BEETS_ID3_FRAMES:
+                    continue
+                _extra.append(_k)
+            _extra = sorted(set(_extra))
             if _extra:
                 total_checks += 1
                 failed_checks += 1
@@ -984,7 +1101,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 add_issue(f"Excess tags: {shown}", basename)
                 track["issues"].append("TAGS")
 
-        if cfg.get("grade_check_key_bpm", True):
+        if cfg.get("grade_check_key_bpm", True) and not is_video_track:
             for t in ("INITIALKEY", "BPM"):
                 if not should_write_audio_tag(cfg, t, filepath=ap):
                     continue
@@ -995,6 +1112,28 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                     failed_checks += 1
                     add_issue(f"Missing {t}", basename)
                     track["issues"].append(t)
+                    continue
+                # INITIALKEY must match the configured notation's exact
+                # format. Musical notation is standardized on FLAT spellings
+                # ("B♭ min") — a sharp spelling ("A# min") is pre-standard
+                # output and fails so stale tags surface.
+                if t == "INITIALKEY":
+                    notation = str(cfg.get("audiometa_key_notation", "musical")).lower()
+                    v = str(val).strip()
+                    if notation == "camelot":
+                        ok = re.fullmatch(r"\d{1,2}[AB]", v) is not None
+                    elif notation == "openkey":
+                        ok = re.fullmatch(r"\d{1,2}[dm]", v) is not None
+                    else:
+                        ok = re.fullmatch(r"[A-G]♭? (maj|min)", v) is not None
+                    if not ok:
+                        failed_checks += 1
+                        if notation == "musical":
+                            add_issue(f"INITIALKEY '{v}' not standard flat notation "
+                                      f"(expected e.g. 'B♭ min')", basename)
+                        else:
+                            add_issue(f"INITIALKEY '{v}' not {notation} notation", basename)
+                        track["issues"].append(t)
 
         # File/folder names must match the naming script (the same script the
         # organizer applies), relative to the music folder.
@@ -1143,7 +1282,11 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
         audit_val = af.get_tag("AUDIT")
         audit_clean = str(audit_val).strip() if audit_val is not None else ""
         track["audit"] = audit_clean or None
-        if should_write_audio_tag(cfg, "AUDIT", filepath=ap) and cfg.get("grade_check_audit", True):
+        if (
+            should_write_audio_tag(cfg, "AUDIT", filepath=ap)
+            and cfg.get("grade_check_audit", True)
+            and not is_video_track
+        ):
             total_checks += 1
             if not audit_clean:
                 failed_checks += 1
@@ -1200,10 +1343,13 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             str(lg_val).strip() if lg_val is not None
             and str(lg_val).strip() else None)
 
-        if media_clean:
+        # The album's MEDIA/SOURCE summary describes the RELEASE medium —
+        # bonus music videos on a disc don't change it, so they stay out of
+        # the consistency pool (a CD + music-video disc is not INCONSISTENT).
+        if media_clean and not is_video_track:
             media_values.append(media_clean)
 
-        if source_clean:
+        if source_clean and not is_video_track:
             source_values.append(source_clean)
 
         # Lyrics status.
@@ -1324,7 +1470,7 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 and cfg.get("lyrics_xlit_enabled", True) \
                 and needs_transliteration(_xlit_src, cfg):
             total_checks += 1
-            has_xlit = bool(str(af.get_tag("TRANSLITERATION") or "").strip()) \
+            has_xlit = bool(str(af.get_lyrics_transform("TRANSLITERATION") or "").strip()) \
                 or os.path.isfile(os.path.splitext(ap)[0] + XLIT_SIDECAR)
             if not has_xlit:
                 failed_checks += 1
@@ -1336,12 +1482,30 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 and needs_translation(_xlit_src, cfg):
             lang = primary_translation_lang(cfg)
             total_checks += 1
-            has_trans = bool(str(af.get_tag("TRANSLATION") or "").strip()) \
+            has_trans = bool(str(af.get_lyrics_transform("TRANSLATION", lang) or "").strip()) \
                 or os.path.isfile(os.path.splitext(ap)[0] + f".{lang}.lrc")
             if not has_trans:
                 failed_checks += 1
                 add_issue(f"No {lang} translation (run Lyrics Translate script)",
                           basename)
+                track["issues"].append("LYRICS")
+
+        # Transform tags must carry their language — TRANSLATION-EN,
+        # TRANSLITERATION-JA-LATN — never the bare legacy names, so the
+        # stored language is auditable (and gradeable) per file.
+        if cfg.get("grade_check_lyrics_lang_tags", True):
+            _bare_transforms = sorted(
+                str(k).upper() for k in (af.all_tags() or {})
+                if str(k).upper() in ("TRANSLATION", "TRANSLITERATION")
+            )
+            if _bare_transforms:
+                total_checks += 1
+                failed_checks += 1
+                _want = primary_translation_lang(cfg).upper()
+                add_issue(
+                    f"{', '.join(_bare_transforms)} tag lacks language detail "
+                    f"(expected e.g. TRANSLATION-{_want}, TRANSLITERATION-JA-LATN)",
+                    basename)
                 track["issues"].append("LYRICS")
 
         # Sidecar track cover (e.g. "01 - Song.flac" → "01 - Song.jpg" in same folder)

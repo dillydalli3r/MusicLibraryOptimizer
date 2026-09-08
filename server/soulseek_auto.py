@@ -142,6 +142,16 @@ def _album_root(path):
     return d if d.endswith("/") else d + "/"
 
 
+def _parent_root(root):
+    """The directory above an album root (…/Wish You Were Here/{Log,Cue,Music}
+    → …/Wish You Were Here/) — used to merge split releases."""
+    p = root.replace("\\", "/").rstrip("/")
+    parent = os.path.dirname(p)
+    if not parent or parent == p:
+        return root
+    return parent if parent.endswith("/") else parent + "/"
+
+
 def _disc_of(path):
     m = re.search(r"(?:cd|disc|dvd|bd)\s*(\d{1,2})", os.path.basename(os.path.dirname(path)), re.IGNORECASE)
     return int(m.group(1)) if m else 1
@@ -164,7 +174,11 @@ def find_candidates(results, release, cfg):
     complete when every expected track (across all discs) has a matching
     file (matched by track number, falling back to normalized title +
     duration) and — for CD releases — every disc carries a .log and .cue.
-    """
+
+    Split layouts (a parent folder holding SEPARATE sub-directories for the
+    music, .log and .cue files) have no single directory that carries the
+    release — when no per-directory candidate passes, each parent folder is
+    re-evaluated as one merged candidate."""
     min_ratio = float(cfg.get("soulseek_auto_complete_ratio", 1.0) or 1.0)
     expected = []  # [{disc, pos, title, length}]
     for t in release.get("media") or []:
@@ -186,13 +200,12 @@ def find_candidates(results, release, cfg):
         key = (f["username"], root)
         groups.setdefault(key, []).append(f)
 
-    candidates = []
-    for (username, root), files in groups.items():
+    def evaluate(username, root, files):
         audio = [f for f in files if os.path.splitext(f["file"])[1].lower() in _AUDIO_EXTS]
         logs = [f for f in files if f["file"].lower().endswith(".log")]
         cues = [f for f in files if f["file"].lower().endswith(".cue")]
         if not audio:
-            continue
+            return None
         log_discs = {_disc_of(f["file"]) for f in logs}
         cue_discs = {_disc_of(f["file"]) for f in cues}
         missing_logs = [d for d in discs_expected if d not in log_discs] if is_cd else []
@@ -227,18 +240,41 @@ def find_candidates(results, release, cfg):
         complete = (matched == len(expected)) and not missing_logs and not missing_cues
         acceptable = matched >= min_ratio * len(expected) and not missing_logs and not missing_cues
         if not acceptable:
-            continue
+            return None
         lossless = any(os.path.splitext(f["file"])[1].lower() in (".flac", ".wav", ".aiff", ".alac", ".ape", ".wv") for f in audio)
         slot = bool(files[0].get("slot"))
         queue = min(int(f.get("queue") or 0) for f in files)
         total = sum(int(f.get("size") or 0) for f in audio)
         score = (5 * matched + 2 * len(logs) + len(cues) + 8 * lossless + 4 * slot - queue / 100.0)
-        candidates.append({
+        return {
             "username": username, "dir": root, "files": files, "audio": audio,
             "logs": logs, "cues": cues, "matched": matched, "expected": len(expected),
             "complete": complete, "lossless": lossless, "slot": slot,
             "queue": queue, "total_size": total, "score": round(score, 1),
-        })
+        }
+
+    candidates = []
+    for (username, root), files in groups.items():
+        c = evaluate(username, root, files)
+        if c:
+            candidates.append(c)
+
+    if not candidates:
+        # split-layout rescue: merge every root group that shares a parent
+        # (…/Album/{Log,Cue,Music}) and score the union — but only when at
+        # least two different directories actually contribute, so normal
+        # single-folder and multi-disc layouts are never double-counted.
+        children = {}  # (username, parent_root) -> {root: files}
+        for (username, root), files in groups.items():
+            children.setdefault((username, _parent_root(root)), {}).setdefault(root, []).extend(files)
+        for (username, proot), per_root in children.items():
+            if len(per_root) < 2:
+                continue
+            union = [f for flist in per_root.values() for f in flist]
+            c = evaluate(username, proot, union)
+            if c:
+                candidates.append(c)
+
     candidates.sort(key=lambda c: (-c["score"], c["queue"]))
     return candidates
 
@@ -247,7 +283,12 @@ def find_candidates(results, release, cfg):
 # slskd helpers (search, wait, locate local files)
 # --------------------------------------------------------------------------- #
 def _search_once(slsk, query, wait_s):
-    sid = slsk.search(query)
+    """Run one search and collect responses for `wait_s` seconds.
+
+    The per-request `timeout` (milliseconds, slskd-side) stretches the
+    search itself — slskd's own default cuts searches off long before slow
+    responders have reported, which starved candidate discovery."""
+    sid = slsk.search(query, timeout_ms=int(wait_s * 1000))
     deadline = time.time() + wait_s
     best = {"responses": [], "state": None}
     while time.time() < deadline:
@@ -257,11 +298,13 @@ def _search_once(slsk, query, wait_s):
         except Exception:
             continue
         best = res
-        if res.get("state") == "Completed":
-            # give late responses 2 more seconds, then stop
-            time.sleep(2.0)
-            res = slsk.search_results(sid)
-            best = res
+        if res.get("state") in ("Completed", "TimedOut", "ResponseLimitReached"):
+            # give late responses 3 more seconds, then stop
+            time.sleep(3.0)
+            try:
+                best = slsk.search_results(sid)
+            except Exception:
+                pass
             break
     return best.get("responses") or []
 
@@ -588,11 +631,12 @@ def _run(release_mbid=None, release=None, queries=None, username=None, target_di
                 raise RuntimeError("No usable search queries for this release "
                                    "(no catalog number / title available)")
             candidates = []
+            search_wait = int(cfg.get("soulseek_auto_search_wait", 45) or 45)
             for q in queries_built:
                 if _cancelled():
                     return _finish("cancelled")
-                _log(f"Searching Soulseek: “{q}” …")
-                responses = _search_once(slsk, q, wait_s=18)
+                _log(f"Searching Soulseek: “{q}” … (waiting up to {search_wait}s)")
+                responses = _search_once(slsk, q, wait_s=search_wait)
                 found = find_candidates(responses, release, cfg)
                 _log(f"  {len(found)} candidate folder(s) from "
                      f"{len(responses)} result file(s)")

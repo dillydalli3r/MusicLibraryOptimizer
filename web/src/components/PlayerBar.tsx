@@ -1,14 +1,72 @@
-import { useEffect, useRef, useState, type SyntheticEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Timer, Volume2, X } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
-import { fmtTech } from "../lib/fmt";
+import { fmtTech, isVideoFile } from "../lib/fmt";
+import { AdvisoryMark } from "./Badges";
+import { applyReplayGain, attachAnalyser, resumeAnalyser } from "../lib/analyser";
 import NowPlayingView from "./NowPlayingView";
 import LyricsSidebar from "./LyricsSidebar";
 import TrackDownloadExport from "./TrackDownloadExport";
+import useSubtitleTracks from "./SubtitledVideo";
+
+/** Title line that auto-scrolls horizontally when it doesn't fit — long
+ * titles squeezed by the advisory badge / tech readout get a slow
+ * back-and-forth marquee instead of a hard ellipsis cut. The tech readout
+ * rides AT THE END of the title (it scrolls with it) rather than being
+ * pinned to the edge. Nothing animates while the whole line fits. */
+function ScrollingTitle({ text, advisory, tech }: {
+  text: string;
+  advisory?: ReactNode;
+  tech?: string;
+}) {
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const lineRef = useRef<HTMLSpanElement>(null);
+  const [shift, setShift] = useState(0);
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const el = lineRef.current;
+    if (!wrap || !el) return;
+    const measure = () => {
+      const over = Math.ceil(el.scrollWidth - wrap.clientWidth);
+      setShift(over > 2 ? over + 6 : 0); // 6px breathing room past the edge
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [text, tech]);
+
+  const dur = Math.max(5, Math.min(24, shift / 12));
+  return (
+    <span ref={wrapRef} className="block overflow-hidden min-w-0 flex-1">
+      <span
+        ref={lineRef}
+        className={`inline-flex items-baseline gap-2 whitespace-nowrap ${shift > 0 ? "will-change-transform" : ""}`}
+        style={
+          shift > 0
+            ? ({
+                "--title-shift": `-${shift}px`,
+                animation: `title-marquee ${dur}s ease-in-out infinite`,
+              } as CSSProperties)
+            : undefined
+        }
+      >
+        <span className="text-sm font-semibold">{text}</span>
+        {advisory}
+        {tech ? (
+          <span className="text-[10px] font-mono text-zinc-500 shrink-0" title="Codec · bitrate · bit depth/sample rate">
+            {tech}
+          </span>
+        ) : null}
+      </span>
+    </span>
+  );
+}
 
 export default function PlayerBar() {
   const { queue, index, setIndex, setQueue, queueRemoveAt, playing, setPlaying, queueId, vol, setVol } = useStore();
@@ -39,6 +97,28 @@ export default function PlayerBar() {
 
   const current = queue[index] ?? null;
   const idle = !current;
+  const isVideo = !!current && (isVideoFile(current.file) || isVideoFile(current.path));
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const media = () => (isVideo ? videoRef.current : audio()) as HTMLMediaElement | null;
+  // Per-track cover resolution: queue-carried filenames first, then the
+  // library payload (covers playlists/.m3u8 queues whose entries lack them).
+  const { data: libForCover } = useQuery({
+    queryKey: ["library"],
+    queryFn: api.library,
+    staleTime: 5 * 60 * 1000,
+  });
+  const libCover = (() => {
+    if (!current) return null;
+    if (current.coverFile || current.albumCover) return null; // queue already knows
+    for (const a of libForCover?.artists ?? [])
+      for (const al of a.albums)
+        for (const t of al.tracks)
+          if (t.path === current.path)
+            return { track: t.cover_file ?? null, album: al.cover_file ?? null };
+    return null;
+  })();
+  const coverFile = current?.coverFile ?? libCover?.track ?? current?.albumCover ?? libCover?.album ?? null;
+  const coverAlbumPath = current?.albumPath ?? "";
 
   // Queue entries built outside the library pages (e.g. .m3u8 playlist rows)
   // carry no title — fetch the tag lazily so the bar shows the song title,
@@ -70,7 +150,7 @@ export default function PlayerBar() {
           title: displayTitle,
           artist: current.artist ?? "",
           album: current.album ?? "",
-          artwork: [{ src: api.coverUrl(current.albumPath), sizes: "512x512", type: "image/jpeg" }],
+          artwork: [{ src: api.coverUrl(coverAlbumPath, coverFile), sizes: "512x512", type: "image/jpeg" }],
         });
       }
       ms.setActionHandler("play", () => {
@@ -86,7 +166,8 @@ export default function PlayerBar() {
     } catch {
       /* media session unsupported — ignore */
     }
-  }, [current, displayTitle]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, displayTitle, coverFile, coverAlbumPath]);
 
   const { data: likesData } = useQuery({ queryKey: ["likes"], queryFn: api.likes });
   const liked = !!current && (likesData?.paths ?? []).includes(current.path);
@@ -104,7 +185,29 @@ export default function PlayerBar() {
   // Reload + play whenever the queue identity or index changes (keyed on
   // queueId so a fresh queue at the same index still reloads). Skipped when
   // the gapless swap already loaded and started the next track.
+  // Music videos play through the popout <video> element (with sound) —
+  // the <audio> pair stays paused so there is exactly one decoder.
   useEffect(() => {
+    const track = queue[index];
+    if (!track) return;
+    const video = isVideoFile(track.file) || isVideoFile(track.path);
+    setTime(0);
+    setDuration(0);
+    if (video) {
+      for (const a of [aRef.current, bRef.current]) {
+        try { a?.pause(); a && (a.src = ""); } catch { /* ignore */ }
+      }
+      preloaded.current = -1;
+      swapped.current = false;
+      const v = videoRef.current;
+      if (v) {
+        v.playbackRate = speed;
+        v.volume = vol;
+        v.src = api.streamUrl(track.path);
+        v.play().catch(() => {});
+      }
+      return;
+    }
     if (swapped.current) {
       swapped.current = false;
       preloaded.current = -1;
@@ -117,13 +220,11 @@ export default function PlayerBar() {
     }
     preloaded.current = -1;
     const el = audio();
-    const track = queue[index];
-    if (!el || !track) return;
-    setTime(0);
-    setDuration(0);
+    if (!el) return;
     el.src = api.streamUrl(track.path);
     el.playbackRate = speed; // fresh <src> resets the rate
     el.play().catch(() => {});
+    try { videoRef.current?.pause(); } catch { /* ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, queueId]);
 
@@ -145,16 +246,58 @@ export default function PlayerBar() {
   }, [time, duration, index, queue, shuffle]);
 
   useEffect(() => {
-    const el = audio();
+    const el = media();
     if (el) el.playbackRate = speed;
-  }, [speed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speed, isVideo]);
 
-  // Global volume: the stored value is re-applied to the ACTIVE <audio>
-  // element whenever it changes or a new source loads.
+  // Global volume: the stored value is re-applied to the ACTIVE element
+  // (<video> for music videos, <audio> otherwise) whenever it changes.
   useEffect(() => {
-    const el = audio();
+    const el = media();
     if (el) el.volume = vol;
-  }, [vol, current?.path]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vol, current?.path, isVideo]);
+
+  // ReplayGain: fetched per track and applied to the WebAudio gain stage of
+  // BOTH elements (the gapless handover may swap them mid-album) so
+  // loudness stays even across tracks. Untagged tracks play at unity.
+  // Results are cached — a re-queued track costs no extra request.
+  const rgCache = useRef<Map<string, number | null>>(new Map());
+  // Last known preamp; re-applied when a WebAudio chain attaches (play).
+  const rgDb = useRef<number | null>(null);
+  const applyRG = (db: number | null) => {
+    rgDb.current = db;
+    applyReplayGain(aRef.current!, db);
+    applyReplayGain(bRef.current!, db);
+  };
+  useEffect(() => {
+    if (!current) {
+      applyRG(null);
+      return;
+    }
+    const path = current.path;
+    if (rgCache.current.has(path)) {
+      applyRG(rgCache.current.get(path) ?? null);
+      return;
+    }
+    let dead = false;
+    api
+      .replaygain(path)
+      .then((r) => {
+        if (!dead) {
+          rgCache.current.set(path, r.gain);
+          applyRG(r.gain);
+        }
+      })
+      .catch(() => {
+        if (!dead) applyRG(null);
+      });
+    return () => {
+      dead = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.path]);
 
   // Keyboard shortcuts: Space pause/play · [ / ] speed down/up · 0 reset ·
   // ← / → seek ±5s. Never hijacks typing or the lyrics editor (which owns
@@ -167,7 +310,7 @@ export default function PlayerBar() {
       if (code === "Space") {
         if (document.querySelector("[data-lrc-editor]")) return;
         e.preventDefault();
-        const a = audio();
+        const a = media();
         if (!a || !current) return;
         if (playing) {
           a.pause();
@@ -184,11 +327,11 @@ export default function PlayerBar() {
         setSpeed(1);
       } else if (code === "ArrowLeft") {
         if (document.querySelector("[data-lrc-editor]")) return; // lyrics editor owns seeking
-        const a = audio();
+        const a = media();
         if (a) a.currentTime = Math.max(0, a.currentTime - 5);
       } else if (code === "ArrowRight") {
         if (document.querySelector("[data-lrc-editor]")) return;
-        const a = audio();
+        const a = media();
         if (a && a.duration) a.currentTime = Math.min(a.duration, a.currentTime + 5);
       }
     };
@@ -239,6 +382,7 @@ export default function PlayerBar() {
   const step = (dir: 1 | -1) => {
     const n = queue.length;
     if (!n) return;
+    resumeAnalyser();
     let next: number;
     if (shuffle) {
       next = Math.floor(Math.random() * n);
@@ -336,17 +480,25 @@ export default function PlayerBar() {
   };
 
   // time/metadata events fire on both elements; only the active one drives
-  // the UI (the idle element's preloaded metadata must not touch the bar)
+  // the UI (the idle element's preloaded metadata must not touch the bar).
+  // The video popout drives the same state when a music video is playing.
   const onTime = (e: SyntheticEvent<HTMLAudioElement>) => {
     if (e.currentTarget === audio()) setTime(e.currentTarget.currentTime);
   };
   const onMeta = (e: SyntheticEvent<HTMLAudioElement>) => {
     if (e.currentTarget === audio()) setDuration(e.currentTarget.duration);
   };
+  const onVideoTime = (e: SyntheticEvent<HTMLVideoElement>) => {
+    setTime(e.currentTarget.currentTime);
+  };
+  const onVideoMeta = (e: SyntheticEvent<HTMLVideoElement>) => {
+    setDuration(e.currentTarget.duration || 0);
+  };
 
   const togglePlay = () => {
-    const a = audio();
+    const a = media();
     if (!a || !current) return;
+    resumeAnalyser();
     if (playing) {
       a.pause();
       setPlaying(null);
@@ -361,8 +513,12 @@ export default function PlayerBar() {
   return (
     <div className="shrink-0 px-3 pb-3 pt-1 relative z-10">
       <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 pr-4">
-        <audio ref={aRef} onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded} />
-        <audio ref={bRef} onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded} />
+        {/* crossOrigin keeps the streams CORS-clean so the WebAudio visualizer
+            can read them; attaching happens on the play gesture */}
+        <audio ref={aRef} crossOrigin="anonymous" onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded}
+          onPlay={(e) => { resumeAnalyser(); attachAnalyser(e.currentTarget); applyReplayGain(e.currentTarget, rgDb.current); }} />
+        <audio ref={bRef} crossOrigin="anonymous" onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded}
+          onPlay={(e) => { resumeAnalyser(); attachAnalyser(e.currentTarget); applyReplayGain(e.currentTarget, rgDb.current); }} />
 
         {/* left: cover art, flush with the bar's left edge (full bar height,
             square; the bar's own margin keeps it off the screen edge) */}
@@ -376,10 +532,10 @@ export default function PlayerBar() {
         >
           {current && !thumbFailed ? (
             <img
-              src={api.coverUrl(current.albumPath)}
+              src={api.coverUrl(coverAlbumPath, coverFile)}
               alt=""
               onError={() => setThumbFailed(true)}
-              className="h-full w-full object-cover group-hover/cover:scale-[1.04] transition-transform"
+              className="h-full w-full object-cover"
             />
           ) : (
             <Disc3 className={`h-5 w-5 ${idle ? "text-zinc-700" : "text-zinc-600"}`} />
@@ -389,14 +545,11 @@ export default function PlayerBar() {
         <div className="min-w-0 w-56 shrink-0" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
           {current ? (
             <>
-              <div className="flex items-baseline gap-2 min-w-0">
-                <span className="text-sm truncate font-semibold">{displayTitle}</span>
-                {techStr && (
-                  <span className="text-[10px] font-mono text-zinc-500 truncate shrink-0" title="Codec · bitrate · bit depth/sample rate">
-                    {techStr}
-                  </span>
-                )}
-              </div>
+              <ScrollingTitle
+                text={displayTitle}
+                advisory={<AdvisoryMark value={currentTags?.tags?.ITUNESADVISORY} />}
+                tech={techStr}
+              />
               <div className="text-[11px] text-zinc-500 truncate">{current.album ?? "—"}</div>
               <div className="text-[11px] text-zinc-500 truncate">{current.artist ?? current.albumPath.split("/").pop()}</div>
             </>
@@ -421,12 +574,12 @@ export default function PlayerBar() {
               step={0.05}
               value={Math.min(time, duration || 0)}
               onChange={(e) => {
-                const a = audio();
+                const a = media();
                 if (!a) return;
                 a.currentTime = Number(e.target.value);
                 setTime(Number(e.target.value));
               }}
-              className="flex-1"
+              className="flex-1 seek-fat"
               disabled={idle}
               title="Seek — ← / → nudge 5s"
             />
@@ -477,230 +630,279 @@ export default function PlayerBar() {
           </div>
         </div>
 
-        {/* right cluster, grouped: queue · track actions · volume · view */}
-        <div className="flex items-center gap-1 shrink-0">
-          {/* queue position — the fraction lives here, left of the playlist
-              button; clicking it (or the queue button) opens the queue */}
-          {current && queue.length > 1 && (
-            <button
-              className={`px-1.5 py-1 rounded-md font-mono text-[10px] tabular-nums shrink-0 transition-colors ${
-                queueOpen ? "text-accent bg-raise" : "text-zinc-500 hover:text-white hover:bg-raise"
-              }`}
-              onClick={() => setQueueOpen(!queueOpen)}
-              title={`Queue position — ${index + 1} of ${queue.length} · click to view the queue`}
-            >
-              {index + 1}/{queue.length}
-            </button>
-          )}
-
-          {/* queue popover: upcoming tracks, click to jump, ✕ to remove */}
-          <div className="relative">
-            <button
-              className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
-                queueOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
-              } ${idle ? "opacity-40 pointer-events-none" : ""}`}
-              onClick={() => setQueueOpen(!queueOpen)}
-              disabled={idle}
-              title="Queue"
-              aria-label="Queue"
-            >
-              <ListMusic className="h-4 w-4" />
-            </button>
-            {queueOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setQueueOpen(false)} />
-                <div className="absolute right-0 bottom-full mb-2 z-50 w-80 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-80 overflow-auto">
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1 flex items-center justify-between">
-                    Queue
-                    {queue.length > index + 1 && (
-                      <button
-                        className="text-[10px] normal-case text-zinc-500 hover:text-white"
-                        onClick={() => setQueue(queue.slice(0, index + 1))}
-                        title="Remove upcoming tracks"
-                      >
-                        clear upcoming
-                      </button>
-                    )}
-                  </div>
-                  {current && (
-                    <div className="px-2 py-1.5 rounded-md bg-raise/60 flex items-center gap-2">
-                      <Play className="h-3 w-3 text-accent shrink-0" />
-                      <span className="text-xs text-zinc-200 truncate flex-1">{displayTitle}</span>
-                      <span className="text-[10px] text-zinc-600 shrink-0">playing</span>
-                    </div>
-                  )}
-                  {queue.slice(index + 1).map((t, off) => {
-                    const i = index + 1 + off;
-                    return (
-                      <div key={`${t.path}-${i}`} className="group/qr flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10">
-                        <button
-                          className="min-w-0 flex-1 text-left"
-                          onClick={() => {
-                            setIndex(i);
-                            setPlaying(t.path);
-                            setQueueOpen(false);
-                          }}
-                          title="Play this track now"
-                        >
-                          <div className="text-xs text-zinc-300 truncate">{t.title || t.file.replace(/\.[^.]+$/, "")}</div>
-                          <div className="text-[10px] text-zinc-600 truncate">
-                            {[t.artist, t.album].filter(Boolean).join(" · ")}
-                          </div>
-                        </button>
-                        <button
-                          className="p-1 rounded text-zinc-600 hover:text-red-300 hover:bg-white/5 opacity-0 group-hover/qr:opacity-100 transition-opacity shrink-0"
-                          onClick={() => queueRemoveAt(i)}
-                          title="Remove from queue"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                  {queue.length <= index + 1 && (
-                    <div className="text-[10px] text-zinc-600 px-2 py-1">Nothing up next — it ends after this track.</div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* sleep timer */}
-          <div className="relative">
-            <button
-              className={`p-2 rounded-lg hover:bg-raise shrink-0 flex items-center gap-1 ${
-                sleepAt !== null || sleepStopNext
-                  ? "text-accent bg-raise"
-                  : "text-zinc-400 hover:text-white"
-              } ${idle ? "opacity-40 pointer-events-none" : ""}`}
-              onClick={() => setSleepOpen(!sleepOpen)}
-              disabled={idle}
-              title={sleepAt !== null ? `Sleep timer — ${fmtRemaining(sleepRemaining ?? 0)} left` : sleepStopNext ? "Sleep timer — stops after this track" : "Sleep timer"}
-              aria-label="Sleep timer"
-            >
-              <Timer className="h-4 w-4" />
-              {sleepAt !== null && (
-                <span className="text-[10px] font-mono tabular-nums">{fmtRemaining(sleepRemaining ?? 0)}</span>
+        {/* right cluster, two layers: the actions row with the volume bar
+            beneath it, then the lyrics / fullscreen buttons stacked on the
+            very right (lyrics on top of fullscreen) */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-col items-center gap-0.5 min-w-0">
+            <div className="flex items-center gap-0.5">
+              {/* queue position — the fraction lives here, left of the playlist
+                  button; clicking it (or the queue button) opens the queue */}
+              {current && queue.length > 1 && (
+                <button
+                  className={`px-1.5 py-1 rounded-md font-mono text-[10px] tabular-nums shrink-0 transition-colors ${
+                    queueOpen ? "text-accent bg-raise" : "text-zinc-500 hover:text-white hover:bg-raise"
+                  }`}
+                  onClick={() => setQueueOpen(!queueOpen)}
+                  title={`Queue position — ${index + 1} of ${queue.length} · click to view the queue`}
+                >
+                  {index + 1}/{queue.length}
+                </button>
               )}
-              {sleepStopNext && <span className="text-[10px] font-mono">1t</span>}
-            </button>
-            {sleepOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setSleepOpen(false)} />
-                <div className="absolute right-0 bottom-full mb-2 z-50 w-48 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5">
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Sleep timer</div>
-                  <button className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300" onClick={armSleepEndOfTrack}>
-                    After this track
-                  </button>
-                  {SLEEP_CHOICES.map((m) => (
-                    <button
-                      key={m}
-                      className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300 flex items-center justify-between"
-                      onClick={() => armSleep(m)}
-                    >
-                      <span>{m} minutes</span>
-                    </button>
-                  ))}
-                  {(sleepAt !== null || sleepStopNext) && (
-                    <button className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-red-300" onClick={cancelSleep}>
-                      Cancel timer
-                    </button>
+
+              {/* queue popover: upcoming tracks, click to jump, ✕ to remove */}
+              <div className="relative">
+                <button
+                  className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
+                    queueOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
+                  } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+                  onClick={() => setQueueOpen(!queueOpen)}
+                  disabled={idle}
+                  title="Queue"
+                  aria-label="Queue"
+                >
+                  <ListMusic className="h-4 w-4" />
+                </button>
+                {queueOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setQueueOpen(false)} />
+                    <div className="absolute right-0 bottom-full mb-2 z-50 w-80 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-80 overflow-auto">
+                      <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1 flex items-center justify-between">
+                        Queue
+                        {queue.length > index + 1 && (
+                          <button
+                            className="text-[10px] normal-case text-zinc-500 hover:text-white"
+                            onClick={() => setQueue(queue.slice(0, index + 1))}
+                            title="Remove upcoming tracks"
+                          >
+                            clear upcoming
+                          </button>
+                        )}
+                      </div>
+                      {current && (
+                        <div className="px-2 py-1.5 rounded-md bg-raise/60 flex items-center gap-2">
+                          <Play className="h-3 w-3 text-accent shrink-0" />
+                          <span className="text-xs text-zinc-200 truncate flex-1">{displayTitle}</span>
+                          <span className="text-[10px] text-zinc-600 shrink-0">playing</span>
+                        </div>
+                      )}
+                      {queue.slice(index + 1).map((t, off) => {
+                        const i = index + 1 + off;
+                        return (
+                          <div key={`${t.path}-${i}`} className="group/qr flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10">
+                            <button
+                              className="min-w-0 flex-1 text-left"
+                              onClick={() => {
+                                setIndex(i);
+                                setPlaying(t.path);
+                                setQueueOpen(false);
+                              }}
+                              title="Play this track now"
+                            >
+                              <div className="text-xs text-zinc-300 truncate">{t.title || t.file.replace(/\.[^.]+$/, "")}</div>
+                              <div className="text-[10px] text-zinc-600 truncate">
+                                {[t.artist, t.album].filter(Boolean).join(" · ")}
+                              </div>
+                            </button>
+                            <button
+                              className="p-1 rounded text-zinc-600 hover:text-red-300 hover:bg-white/5 opacity-0 group-hover/qr:opacity-100 transition-opacity shrink-0"
+                              onClick={() => queueRemoveAt(i)}
+                              title="Remove from queue"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                      {queue.length <= index + 1 && (
+                        <div className="text-[10px] text-zinc-600 px-2 py-1">Nothing up next — it ends after this track.</div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* sleep timer */}
+              <div className="relative">
+                <button
+                  className={`p-2 rounded-lg hover:bg-raise shrink-0 flex items-center gap-1 ${
+                    sleepAt !== null || sleepStopNext
+                      ? "text-accent bg-raise"
+                      : "text-zinc-400 hover:text-white"
+                  } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+                  onClick={() => setSleepOpen(!sleepOpen)}
+                  disabled={idle}
+                  title={sleepAt !== null ? `Sleep timer — ${fmtRemaining(sleepRemaining ?? 0)} left` : sleepStopNext ? "Sleep timer — stops after this track" : "Sleep timer"}
+                  aria-label="Sleep timer"
+                >
+                  <Timer className="h-4 w-4" />
+                  {sleepAt !== null && (
+                    <span className="text-[10px] font-mono tabular-nums">{fmtRemaining(sleepRemaining ?? 0)}</span>
                   )}
-                </div>
-              </>
-            )}
+                  {sleepStopNext && <span className="text-[10px] font-mono">1t</span>}
+                </button>
+                {sleepOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setSleepOpen(false)} />
+                    <div className="absolute right-0 bottom-full mb-2 z-50 w-48 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5">
+                      <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Sleep timer</div>
+                      <button className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300" onClick={armSleepEndOfTrack}>
+                        After this track
+                      </button>
+                      {SLEEP_CHOICES.map((m) => (
+                        <button
+                          key={m}
+                          className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300 flex items-center justify-between"
+                          onClick={() => armSleep(m)}
+                        >
+                          <span>{m} minutes</span>
+                        </button>
+                      ))}
+                      {(sleepAt !== null || sleepStopNext) && (
+                        <button className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-red-300" onClick={cancelSleep}>
+                          Cancel timer
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="relative">
+                <button
+                  className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
+                    plOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
+                  } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+                  onClick={() => setPlOpen(!plOpen)}
+                  disabled={idle}
+                  title="Add to playlist"
+                  aria-label="Add to playlist"
+                >
+                  <ListPlus className="h-4 w-4" />
+                </button>
+                {plOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setPlOpen(false)} />
+                    <div className="absolute right-0 bottom-full mb-2 z-50 w-56 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-64 overflow-auto">
+                      <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Add to playlist</div>
+                      <button
+                        className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-accent-soft"
+                        onClick={newPlaylistAndAdd}
+                      >
+                        <ListPlus className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" /> New playlist…
+                      </button>
+                      {(playlists ?? []).map((p) => (
+                        <button
+                          key={p.id}
+                          className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300 flex items-center justify-between gap-2"
+                          onClick={() => addToPlaylist(p.id, p.name)}
+                        >
+                          <span className="truncate">{p.name}</span>
+                          <span className="text-[10px] text-zinc-600 shrink-0">{p.track_count}</span>
+                        </button>
+                      ))}
+                      {(playlists ?? []).length === 0 && (
+                        <div className="text-[10px] text-zinc-600 px-2 py-1">No playlists yet — create one above.</div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {current && <TrackDownloadExport path={current.path} iconOnly />}
+
+              <button
+                className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
+                  liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"
+                } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+                onClick={toggleLike}
+                disabled={idle}
+                title={liked ? "Unlike" : "Like this track"}
+              >
+                <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
+              </button>
+            </div>
+
+            {/* layer 2: the volume bar beneath the buttons */}
+            <div className="flex items-center gap-1.5 w-full px-2 text-zinc-400" title={`Volume — ${Math.round(vol * 100)}%`}>
+              <Volume2 className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={vol}
+                onChange={(e) => setVol(Number(e.target.value))}
+                className="w-full min-w-0 seek-fat"
+                title="Volume — shared by the whole app"
+              />
+            </div>
           </div>
 
-          <div className="relative">
+          {/* far right: lyrics stacked on top of fullscreen */}
+          <div className="flex flex-col items-center gap-0.5 shrink-0 self-stretch justify-center">
             <button
               className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
-                plOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
-              } ${idle ? "opacity-40 pointer-events-none" : ""}`}
-              onClick={() => setPlOpen(!plOpen)}
-              disabled={idle}
-              title="Add to playlist"
-              aria-label="Add to playlist"
+                lyricsOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
+              }`}
+              onClick={() => setLyricsOpen(!lyricsOpen)}
+              title="Lyrics — open the sidebar"
+              aria-label="Lyrics"
             >
-              <ListPlus className="h-4 w-4" />
+              <Mic2 className="h-4 w-4" />
             </button>
-            {plOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setPlOpen(false)} />
-                <div className="absolute right-0 bottom-full mb-2 z-50 w-56 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-64 overflow-auto">
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Add to playlist</div>
-                  <button
-                    className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-accent-soft"
-                    onClick={newPlaylistAndAdd}
-                  >
-                    <ListPlus className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" /> New playlist…
-                  </button>
-                  {(playlists ?? []).map((p) => (
-                    <button
-                      key={p.id}
-                      className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 text-zinc-300 flex items-center justify-between gap-2"
-                      onClick={() => addToPlaylist(p.id, p.name)}
-                    >
-                      <span className="truncate">{p.name}</span>
-                      <span className="text-[10px] text-zinc-600 shrink-0">{p.track_count}</span>
-                    </button>
-                  ))}
-                  {(playlists ?? []).length === 0 && (
-                    <div className="text-[10px] text-zinc-600 px-2 py-1">No playlists yet — create one above.</div>
-                  )}
-                </div>
-              </>
-            )}
+
+            <button
+              className={`p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white shrink-0 ${
+                idle ? "opacity-40 pointer-events-none" : ""
+              }`}
+              onClick={() => setFullscreen(true)}
+              disabled={idle}
+              title="Fullscreen player with lyrics"
+            >
+              <Maximize2 className="h-4 w-4" />
+            </button>
           </div>
+        </div>
 
-          {current && <TrackDownloadExport path={current.path} iconOnly />}
-
-          <button
-            className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
-              liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"
-            } ${idle ? "opacity-40 pointer-events-none" : ""}`}
-            onClick={toggleLike}
-            disabled={idle}
-            title={liked ? "Unlike" : "Like this track"}
-          >
-            <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
-          </button>
-
-          <div className="flex items-center gap-2 text-zinc-400 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
-            <Volume2 className="h-4 w-4 text-zinc-500" />
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={vol}
-              onChange={(e) => setVol(Number(e.target.value))}
-              className="w-28"
-              title="Volume — shared by the whole app"
+        {/* music-video popout: the REAL decoder (with sound) behind every
+            video — visible during default playback, kept mounted (hidden)
+            while fullscreen so the fullscreen mirror it drives never loses
+            its clock. */}
+        {isVideo && current && (
+          <div className={fullscreen ? "hidden" : "absolute right-3 bottom-[5.25rem] z-30 w-80 max-w-[80vw] rounded-xl overflow-hidden border border-border bg-black shadow-2xl"}>
+            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-zinc-950/90">
+              <span className="text-[11px] text-zinc-300 break-words flex-1 min-w-0">{displayTitle}</span>
+              <button
+                className="p-1 rounded hover:bg-white/10 text-zinc-400 hover:text-white shrink-0"
+                onClick={() => setFullscreen(true)}
+                title="Open fullscreen player"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+              <button
+                className="p-1 rounded hover:bg-white/10 text-zinc-400 hover:text-white shrink-0"
+                onClick={() => step(1)}
+                title="Skip video"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <VideoPopout
+              path={current.path}
+              videoRef={videoRef}
+              onTime={onVideoTime}
+              onMeta={(e) => {
+                // A transcode-fallback remount creates a fresh element with
+                // default volume/rate — re-apply the stored ones.
+                e.currentTarget.volume = vol;
+                e.currentTarget.playbackRate = speed;
+                onVideoMeta(e);
+              }}
+              onEnded={handleEnded}
             />
           </div>
-
-          <button
-            className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
-              lyricsOpen ? "text-accent bg-raise" : "text-zinc-400 hover:text-white"
-            }`}
-            onClick={() => setLyricsOpen(!lyricsOpen)}
-            title="Lyrics — open the sidebar"
-            aria-label="Lyrics"
-          >
-            <Mic2 className="h-4 w-4" />
-          </button>
-
-          <button
-            className={`p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white shrink-0 ${
-              idle ? "opacity-40 pointer-events-none" : ""
-            }`}
-            onClick={() => setFullscreen(true)}
-            disabled={idle}
-            title="Fullscreen player with lyrics"
-          >
-            <Maximize2 className="h-4 w-4" />
-          </button>
-        </div>
+        )}
 
         {/* portal to <body>: the fullscreen player must escape the right
             column's stacking context (z-10) or the sidebar (z-20) paints
@@ -719,7 +921,7 @@ export default function PlayerBar() {
               liked={liked}
               onTogglePlay={togglePlay}
               onSeek={(t) => {
-                const a = audio();
+                const a = media();
                 if (!a) return;
                 a.currentTime = t;
                 setTime(t);
@@ -729,7 +931,7 @@ export default function PlayerBar() {
               onToggleLoop={() => setLoop(!loop)}
               onToggleLike={toggleLike}
               onClose={() => setFullscreen(false)}
-              getAudioTime={() => audio()?.currentTime ?? 0}
+              getAudioTime={() => media()?.currentTime ?? 0}
             />,
             document.body
           )}
@@ -740,16 +942,72 @@ export default function PlayerBar() {
             playing={!!playing}
             time={time}
             onSeek={(t) => {
-              const a = audio();
+              const a = media();
               if (!a) return;
               a.currentTime = t;
               setTime(t);
             }}
-            getAudioTime={() => audio()?.currentTime ?? 0}
+            getAudioTime={() => media()?.currentTime ?? 0}
             onClose={() => setLyricsOpen(false)}
           />
         )}
       </div>
     </div>
+  );
+}
+
+/** Popout music-video player: a REAL <video> element (with sound) wired to
+ * the player bar's clock, subtitles included. Remuxed MKV/MP4/WebM with
+ * browser-decodable codecs play directly; exotic containers show a hint. */
+function VideoPopout({
+  path,
+  videoRef,
+  onTime,
+  onMeta,
+  onEnded,
+}: {
+  path: string;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  onTime: (e: SyntheticEvent<HTMLVideoElement>) => void;
+  onMeta: (e: SyntheticEvent<HTMLVideoElement>) => void;
+  onEnded: (e?: SyntheticEvent<HTMLVideoElement>) => void;
+}) {
+  const tracks = useSubtitleTracks(path);
+  const [failed, setFailed] = useState(false);
+  const [transcoded, setTranscoded] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+    setTranscoded(false);
+  }, [path]);
+  if (failed) {
+    return (
+      <div className="p-3 text-[11px] text-zinc-400">
+        This video can't play in the browser. Remux it (album page → Remux videos) or open the file externally.
+      </div>
+    );
+  }
+  return (
+    <video
+      key={`${path}|${transcoded ? "x" : "direct"}`}
+      ref={videoRef}
+      src={api.videoStreamUrl(path, transcoded)}
+      controls
+      autoPlay
+      playsInline
+      preload="auto"
+      onTimeUpdate={onTime}
+      onLoadedMetadata={onMeta}
+      onEnded={onEnded}
+      onError={() => {
+        // Direct bytes failed (MPEG-2/VC-1/etc.) — retry via live transcode.
+        if (!transcoded) setTranscoded(true);
+        else setFailed(true);
+      }}
+      className="w-full aspect-video bg-black"
+    >
+      {tracks.map((t) => (
+        <track key={t.key} kind="subtitles" src={t.src} label={t.label} default={t.default} />
+      ))}
+    </video>
   );
 }

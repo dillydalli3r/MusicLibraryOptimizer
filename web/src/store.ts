@@ -7,6 +7,10 @@ export interface QueueTrack {
   artist?: string;
   album?: string;
   title?: string; // TITLE tag — the player bar must never fall back to the file name while the tag exists
+  /** Per-track sidecar cover filename (e.g. "01 - Song.jpg"); falls back to the album cover. */
+  coverFile?: string | null;
+  /** Album cover filename fallback when the track has no own cover. */
+  albumCover?: string | null;
 }
 
 interface Store {

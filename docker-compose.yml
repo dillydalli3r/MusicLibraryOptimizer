@@ -1,20 +1,15 @@
 services:
-  musiclibraryoptimizer:
+  lamusica:
     build: .
-    container_name: mlo
+    container_name: la-musica
     ports:
       - "8000:8000"
     environment:
       - MLO_MUSIC_FOLDER=/music
     volumes:
       # Point this at your music library (artist/album folders).
+      # ALL app state (config.json, playlists + favourites database, beets
+      # library, slskd config, lyrics-AI cache) lives in /music/.data, so
+      # this one mount persists everything across rebuilds.
       - ./music:/music
-      # App state: config.json lives at /app/config.json, playlists at
-      # /app/server/data/playlists.db — persist both across rebuilds.
-      - mlo-config:/app/config.json
-      - mlo-data:/app/server/data
     restart: unless-stopped
-
-volumes:
-  mlo-config:
-  mlo-data:

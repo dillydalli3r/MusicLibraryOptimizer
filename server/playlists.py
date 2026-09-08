@@ -16,15 +16,18 @@ import threading
 import time
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-DB_PATH = DATA_DIR / "playlists.db"
-
 _lock = threading.Lock()
 
 
+def db_path():
+    """Playlists + likes live in <music folder>/.data/playlists.db."""
+    from mlo.paths import app_data_dir
+    return os.path.join(app_data_dir(), "playlists.db")
+
+
 def _conn():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    os.makedirs(os.path.dirname(db_path()), exist_ok=True)
+    conn = sqlite3.connect(db_path(), timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 

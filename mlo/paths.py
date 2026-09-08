@@ -3,6 +3,7 @@
 When frozen (PyInstaller) SCRIPT_DIR points at the exe's folder so that
 config.json and the .dependencies toolchain live next to the executable.
 """
+import json
 import os
 import sys
 
@@ -35,6 +36,41 @@ SCRIPT_DIR = _resolve_script_dir()
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 
 
+# Legacy locations (repo-local) that predate the .data folder; a stub
+# config.json left behind by the migration keeps pointing at the music dir.
+LEGACY_DATA_DIR = os.path.join(SCRIPT_DIR, "server", "data")
+
+
+def read_music_folder_guess():
+    """Best-effort music folder from whichever config file exists.
+
+    Used to locate the .data directory before and after the migration: the
+    legacy repo-local config.json knows the music folder, and after the
+    move a stub remains behind at the legacy path for the same purpose."""
+    mf = os.environ.get("MLO_MUSIC_FOLDER")
+    if mf:
+        return mf
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            mf = (json.load(f) or {}).get("music_folder")
+        if mf:
+            return str(mf)
+    except Exception:
+        pass
+    return None
+
+
+def app_data_dir(music_folder=None):
+    """The folder holding ALL app state: <music folder>/.data.
+
+    Falls back to the legacy repo-local server/data only while no music
+    folder is configured (fresh setup), so first-run still works."""
+    mf = music_folder or read_music_folder_guess()
+    if mf:
+        return os.path.join(mf, ".data")
+    return LEGACY_DATA_DIR
+
+
 DEPS_DIR = os.path.join(SCRIPT_DIR, ".dependencies")
 
 
@@ -62,12 +98,28 @@ def ensure_data_dirs():
 
 AUDIO_EXTS = (".flac", ".ogg", ".opus", ".aac", ".m4a", ".mp3")
 
+# Music-video containers the library treats as first-class tracks. They
+# appear in album tracklists (a disc of music videos is still a disc),
+# play in the app's video player, and can be tagged / graded / remuxed.
+# MP4/M4V are already taggable via mutagen; the rest are read and written
+# through ffprobe/ffmpeg (see mlo.audio).
+LIB_VIDEO_EXTS = (
+    ".mp4", ".m4v", ".mkv", ".webm", ".mov",
+    ".vob", ".mpg", ".mpeg", ".m2v", ".ts", ".m2ts", ".mts",
+    ".avi", ".wmv", ".flv", ".ogv", ".3gp", ".3g2",
+)
+
 # Audio (+ music-video) extensions the library treats as tracks. MP4/M4A
 # carry taggable AAC or FLAC audio, so album discovery and grading see them
 # as music — a folder with only music videos is still an album, and music
 # videos inside an album don't fail the "disallowed file types" check.
 # Engine scripts (audit/DR/etc.) keep walking the stricter AUDIO_EXTS.
-LIB_AUDIO_EXTS = AUDIO_EXTS + (".m4a", ".mp4")
+LIB_AUDIO_EXTS = AUDIO_EXTS + LIB_VIDEO_EXTS
+
+
+def is_video_file(path) -> bool:
+    """Whether *path* is a music-video container the library supports."""
+    return os.path.splitext(str(path))[1].lower() in LIB_VIDEO_EXTS
 
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".jxl")
@@ -140,7 +192,7 @@ def is_sidecar_cover_file(album_dir, filename, all_track_basenames=None):
     return base.lower() in {b.lower() for b in all_track_basenames}
 
 
-SKIP_DIRS = {".dependencies", ".mlo_trash", "__pycache__", "$RECYCLE.BIN",
+SKIP_DIRS = {".dependencies", ".mlo_trash", ".data", "__pycache__", "$RECYCLE.BIN",
              "System Volume Information", ".git", ".thumbnails", ".tmp"}
 
 

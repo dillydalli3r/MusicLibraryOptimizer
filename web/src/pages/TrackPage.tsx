@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
 import { ExternalLink, Save, Play, Disc3, ListPlus, ListStart, ListMusic, ShieldCheck, ImageUp, Clapperboard, Search, FolderOpen } from "lucide-react";
 import { api } from "../api";
-import { fmtTech } from "../lib/fmt";
+import { fmtTech, isVideoFile } from "../lib/fmt";
 import { LinkChips, LinkEditorButton } from "../components/Links";
 import { SubtitledVideo } from "../components/SubtitledVideo";
 import { useStore, toast } from "../store";
@@ -61,7 +61,7 @@ export default function TrackPage() {
   if (isLoading || !data) return <div className="p-8 text-zinc-500">Loading track…</div>;
 
   const fileName = decoded.split("/").pop() ?? decoded;
-  const isVideo = fileName.toLowerCase().endsWith(".mp4");
+  const isVideo = isVideoFile(fileName);
   const tech = track?.tech ?? data.tech ?? {};
   const issues: string[] = track?.issues ?? [];
   const audit = track?.audit ?? null;
@@ -270,8 +270,23 @@ export default function TrackPage() {
               <div>Bit depth <span className="text-zinc-200">{tech.bits_per_sample ?? "—"}</span></div>
               <div>Sample rate <span className="text-zinc-200">{tech.sample_rate ? `${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz` : "—"}</span></div>
               <div>Channels <span className="text-zinc-200">{tech.channels ?? "—"}</span></div>
+              {typeof tech.width === "number" && typeof tech.height === "number" && (
+                <div>Video <span className="text-zinc-200">{tech.width}×{tech.height}{tech.codec ? ` · ${tech.codec}` : ""}</span></div>
+              )}
             </div>
           </div>
+
+          {isVideo && (
+            <VideoTagCard
+              path={realPath}
+              tags={tags}
+              onSaved={() => {
+                qc.invalidateQueries({ queryKey: ["track-tags", decoded] });
+                qc.invalidateQueries({ queryKey: ["album", albumDir] });
+                qc.invalidateQueries({ queryKey: ["library"] });
+              }}
+            />
+          )}
 
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">
@@ -353,6 +368,93 @@ export default function TrackPage() {
           onClose={() => setManagerOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+const VIDEO_TAG_FIELDS = ["TITLE", "ARTIST", "ALBUM", "GENRE", "DATE", "DISCNUMBER", "TRACKNUMBER"];
+
+/** Tag editor for music-video files. Saving writes the tags via ffmpeg —
+ * for containers that can't carry them (VOB, MPEG-PS…) the file is remuxed
+ * to MKV with every stream stream-copied, so nothing is re-encoded and
+ * captions / audio / video quality are untouched. */
+function VideoTagCard({
+  path,
+  tags,
+  onSaved,
+}: {
+  path: string;
+  tags: Record<string, string>;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [advisory, setAdvisory] = useState("0");
+  const [busy, setBusy] = useState(false);
+  const [initFor, setInitFor] = useState(path);
+
+  if (initFor !== path) {
+    setInitFor(path);
+    setForm(Object.fromEntries(VIDEO_TAG_FIELDS.map((k) => [k, tags[k] ?? ""])));
+    setAdvisory(tags.ITUNESADVISORY ?? "0");
+  }
+
+  const set = (k: string, v: string) => setForm((m) => ({ ...m, [k]: v }));
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const clean: Record<string, string> = {};
+      for (const [k, v] of Object.entries(form)) if (v.trim()) clean[k] = v.trim();
+      if (advisory.trim()) clean.ITUNESADVISORY = advisory.trim();
+      const r = await api.videoTag(path, clean);
+      toast(r.renamed
+        ? `Tags written — remuxed to MKV: ${String(r.path).split(/[\/]/).pop()}`
+        : "Tags written");
+      onSaved();
+    } catch (e) {
+      toast(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-lg border border-border p-4 space-y-2.5">
+      <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500 flex items-center gap-1.5">
+        <Clapperboard className="h-3.5 w-3.5" /> Tag this music video
+      </div>
+      <div className="grid grid-cols-2 gap-2.5">
+        {VIDEO_TAG_FIELDS.map((k) => (
+          <label key={k} className="text-[10px] text-zinc-500 uppercase block">
+            {k.replace("TRACKNUMBER", "Track").replace("DISCNUMBER", "Disc")}
+            <input
+              className="input !py-1 !px-2 text-xs mt-0.5 w-full"
+              value={form[k] ?? ""}
+              onChange={(e) => set(k, e.target.value)}
+            />
+          </label>
+        ))}
+        <label className="text-[10px] text-zinc-500 uppercase block">
+          Advisory
+          <select
+            className="input !py-1 !px-2 text-xs mt-0.5 w-full"
+            value={advisory}
+            onChange={(e) => setAdvisory(e.target.value)}
+          >
+            <option value="0">Clean (0)</option>
+            <option value="1">Explicit (1)</option>
+            <option value="2">Cleaned (2)</option>
+          </select>
+        </label>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button className="btn-primary !py-1 text-xs" disabled={busy} onClick={save}>
+          <Save className="h-3.5 w-3.5" /> Save video tags
+        </button>
+        <span className="text-[10px] text-zinc-600">
+          Video / audio / captions are stream-copied — containers that can't hold tags are remuxed to MKV losslessly.
+        </span>
+      </div>
     </div>
   );
 }

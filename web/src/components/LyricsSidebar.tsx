@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { AudioLines, X } from "lucide-react";
 import { api } from "../api";
 import { parsePlayerLrc, type LrcLine } from "./LyricsViewer";
+import Visualizer from "./Visualizer";
+
+// Shared with the fullscreen player: toggling the visualizer from either
+// surface keeps the same preference.
+const VIZ_KEY = "mlo.np.viz";
 
 /** A right-docked lyrics panel for the player bar's lyrics button: the
  * current track's lyrics with the same synced-line treatment as the
@@ -35,6 +40,12 @@ export default function LyricsSidebar({
     title?: string;
     album?: string;
   } | null>(null);
+  const [viz, setViz] = useState(() => localStorage.getItem(VIZ_KEY) !== "0");
+  const toggleViz = () => {
+    const v = !viz;
+    setViz(v);
+    localStorage.setItem(VIZ_KEY, v ? "1" : "0");
+  };
 
   const path = current?.path ?? null;
   useEffect(() => {
@@ -107,6 +118,9 @@ export default function LyricsSidebar({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  // Center the PRIMARY text line, not the block — sub-lines (translation /
+  // transliteration) under it must not push the sung line off the middle.
+  const primaryRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const seekMarkRef = useRef(0);
   const prevDispRef = useRef(-1);
   useEffect(() => {
@@ -117,7 +131,7 @@ export default function LyricsSidebar({
 
   useEffect(() => {
     const c = scrollRef.current;
-    const el = lineRefs.current[activeLine];
+    const el = primaryRefs.current[activeLine] ?? lineRefs.current[activeLine];
     if (!c || !el || activeLine < 0) return;
     const animate = Date.now() - seekMarkRef.current > 600;
     const top =
@@ -144,6 +158,13 @@ export default function LyricsSidebar({
           {album && <div className="text-[10px] text-zinc-500 truncate">{album}</div>}
         </div>
         <button
+          className={`p-1.5 rounded-md transition-colors ${viz ? "text-accent hover:text-accent-soft" : "text-zinc-500 hover:text-white"} hover:bg-raise`}
+          onClick={toggleViz}
+          title="Toggle visualizer"
+        >
+          <AudioLines className="h-4 w-4" />
+        </button>
+        <button
           className="p-1.5 rounded-md text-zinc-500 hover:text-white hover:bg-raise transition-colors"
           onClick={onClose}
           title="Close lyrics"
@@ -168,6 +189,9 @@ export default function LyricsSidebar({
                 title={synced ? "Click to seek" : undefined}
               >
                 <div
+                  ref={(el) => {
+                    primaryRefs.current[i] = el;
+                  }}
                   className={`text-[15px] leading-snug font-semibold transition-[transform,color] duration-300 ${
                     isActive ? "text-white" : synced ? "text-zinc-500" : "text-zinc-300"
                   }`}
@@ -204,6 +228,11 @@ export default function LyricsSidebar({
         )}
         <div className="h-24" />
       </div>
+      {viz && (
+        <div className="border-t border-border/60 px-4 py-2">
+          <Visualizer playing={playing} className="h-10 w-full" />
+        </div>
+      )}
     </aside>
   );
 }

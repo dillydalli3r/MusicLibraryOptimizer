@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListMusic, Plus, Trash2, Download, Upload, Play, ChevronUp, ChevronDown, Pencil } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
-import { EmptyState, GradeBadge } from "../components/Badges";
+import { EmptyState, GradeBadge, AdvisoryMark } from "../components/Badges";
+import { TrackCover } from "../components/CoverImg";
 import FavHeart from "../components/FavHeart";
 import { auditFails } from "../lib/status";
 import type { Playlist, FilterCondition } from "../types";
@@ -40,11 +41,11 @@ export default function PlaylistsPage() {
   const { data: lib } = useQuery({ queryKey: ["library"], queryFn: api.library });
   // path -> tag-derived title/artist/album so the player bar shows real names
   const trackInfo = useMemo(() => {
-    const map = new Map<string, { artist?: string; album?: string; title?: string }>();
+    const map = new Map<string, { artist?: string; album?: string; title?: string; coverFile?: string | null; albumCover?: string | null; albumPath?: string }>();
     for (const a of lib?.artists ?? [])
       for (const al of a.albums)
         for (const t of al.tracks)
-          map.set(t.path, { artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined });
+          map.set(t.path, { artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined, coverFile: t.cover_file ?? null, albumCover: al.cover_file ?? null, albumPath: al.path });
     return map;
   }, [lib]);
   const [newName, setNewName] = useState("");
@@ -137,6 +138,8 @@ export default function PlaylistsPage() {
               artist: trackInfo.get(path)?.artist,
               album: trackInfo.get(path)?.album,
               title: trackInfo.get(path)?.title,
+              coverFile: trackInfo.get(path)?.coverFile ?? null,
+              albumCover: trackInfo.get(path)?.albumCover ?? null,
             })))} onSmart={() => smartFilter(p)} />
       ))}
 
@@ -151,6 +154,8 @@ export default function PlaylistsPage() {
               artist: trackInfo.get(path)?.artist,
               album: trackInfo.get(path)?.album,
               title: trackInfo.get(path)?.title,
+              coverFile: trackInfo.get(path)?.coverFile ?? null,
+              albumCover: trackInfo.get(path)?.albumCover ?? null,
             })))} onSmart={() => smartFilter(p)} />
           ))}
         </div>
@@ -231,7 +236,7 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
   };
 
   const trackMeta = useMemo(() => {
-    const map = new Map<string, { title: string; audit: string | null; pass: boolean; artist?: string; album?: string }>();
+    const map = new Map<string, { title: string; audit: string | null; pass: boolean; artist?: string; album?: string; advisory?: string | null; coverFile?: string | null; albumCover?: string | null; albumPath?: string; trackNo?: number | null }>();
     for (const a of lib?.artists ?? [])
       for (const al of a.albums)
         for (const t of al.tracks)
@@ -241,13 +246,18 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
             pass: t.grade_pass,
             artist: al.album_artist || a.name,
             album: al.meta?.ALBUM ?? undefined,
+            advisory: t.tags.ITUNESADVISORY ?? null,
+            coverFile: t.cover_file ?? null,
+            albumCover: al.cover_file ?? null,
+            albumPath: al.path,
+            trackNo: t.tracknumber ?? null,
           });
     return map;
   }, [lib]);
 
   return (
-    <div>
-      <div className="flex items-center gap-3 px-4 py-2">
+    <div className="bg-card rounded-lg border border-border overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
         <div className="flex items-center gap-1.5">
           <button className="btn-ghost !px-2 !py-1 text-xs" title="Play playlist" onClick={() => onPlay(tracks)}><Play className="h-3.5 w-3.5" /></button>
           {renaming ? (
@@ -274,17 +284,29 @@ function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playl
         </div>
       </div>
       {tracks.length > 0 && (
-        <div className="border-t border-border/60 max-h-72 overflow-auto">
+        <div className="max-h-72 overflow-auto">
           {tracks.map((t, i) => (
-            <div key={`${playlist.id}-${i}-${t}`} className="flex items-center gap-2 px-4 py-1.5 text-sm border-t border-border/40 first:border-t-0 hover:bg-panel">
-              <span className="text-xs text-zinc-600 w-6">{i + 1}</span>
-              <span className="flex-1 truncate">{trackMeta.get(t)?.title ?? t.split("/").pop()}</span>
+            <div
+              key={`${playlist.id}-${i}-${t}`}
+              className="flex items-center gap-2 px-4 py-2 text-sm border-t border-border/40 first:border-t-0 hover:bg-panel cursor-pointer"
+              title="Click to play from here"
+              onClick={() => onPlay(tracks.slice(i))}
+            >
+              <span className="text-xs text-zinc-600 w-6 shrink-0 tabular-nums">{trackMeta.get(t)?.trackNo ?? i + 1}</span>
+              <TrackCover
+                albumPath={trackMeta.get(t)?.albumPath ?? t.split("/").slice(0, -1).join("/")}
+                trackCover={trackMeta.get(t)?.coverFile}
+                albumCover={trackMeta.get(t)?.albumCover}
+                wrapperClass="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0"
+              />
+              <span className="flex-1 break-words min-w-0">{trackMeta.get(t)?.title ?? t.split("/").pop()}</span>
               <GradeBadge
                 pass={!!trackMeta.get(t)?.pass && !auditFails(trackMeta.get(t)?.audit)}
                 audit={trackMeta.get(t)?.audit}
                 size="sm"
               />
-              <div className="flex gap-0.5">
+              <AdvisoryMark value={trackMeta.get(t)?.advisory} />
+              <div className="flex gap-0.5" onClick={(e) => e.stopPropagation()}>
                 <button className="text-zinc-600 hover:text-zinc-300 disabled:opacity-30" onClick={() => move(i, -1)} disabled={i === 0}><ChevronUp className="h-4 w-4" /></button>
                 <button className="text-zinc-600 hover:text-zinc-300 disabled:opacity-30" onClick={() => move(i, 1)} disabled={i === tracks.length - 1}><ChevronDown className="h-4 w-4" /></button>
                 {playlist.kind === "manual" && (

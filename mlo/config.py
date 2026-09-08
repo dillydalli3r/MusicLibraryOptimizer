@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 
-from .paths import CONFIG_FILE, DEFAULT_DIGITAL_SOURCE
+from .paths import CONFIG_FILE, DEFAULT_DIGITAL_SOURCE, app_data_dir, read_music_folder_guess
 from .ui import c, Color
 
 # Run All order — strict pipeline v1.7.0: 1 Lyrics → 2 CUEs → 8 Auto Tagging → 3 FLAC → 5 Images → 9 AccurateRip → 6 Audit → 4 Grade → 7 DR/ReplayGain → 10 Format All.
@@ -265,6 +265,8 @@ DEFAULT_CONFIG = {
     "grade_check_instrumental": True,
     "grade_check_lyrics": True,
     "grade_check_lyrics_format": True,
+    # Transform tags must carry their language (TRANSLATION-EN, not TRANSLATION)
+    "grade_check_lyrics_lang_tags": True,
     "grade_check_sidecar_cover": True,
     "grade_check_media": True,
     "grade_check_source": True,
@@ -398,7 +400,10 @@ DEFAULT_CONFIG = {
     # Auto Tagging (script 8)
     "auto_advisory": True,
     "auto_instrumental": True,
-    "auto_zero_advisory_for_instrumental": True,
+    # OFF by default: a track without a specified advisory stays untagged —
+    # ITUNESADVISORY=0 is never assumed just because a track is instrumental
+    # (or for any other reason). Re-enable to restore the old zero-fill.
+    "auto_zero_advisory_for_instrumental": False,
     "force_auto_tag": False,
 
     # Key & BPM analysis (script 12): librosa-backed BPM + initial key.
@@ -712,11 +717,68 @@ def normalize_config(user=None) -> dict:
     return cfg
 
 
+def active_config_file():
+    """Where the live configuration lives: <music folder>/.data/config.json
+    once a music folder is known, the repo-local config.json otherwise."""
+    mf = read_music_folder_guess()
+    if mf:
+        cand = os.path.join(app_data_dir(mf), "config.json")
+        if os.path.isfile(cand):
+            return cand
+    return CONFIG_FILE
+
+
+_MIGRATED = False
+
+
+def _migrate_to_data_dir():
+    """One-time move of ALL app state into <music folder>/.data:
+    config.json plus everything in the legacy repo-local server/data
+    (beets library + config, playlists/likes database, slskd.yaml, the
+    lyrics-AI cache). Existing files are moved, never clobbered, and a
+    stub config.json stays behind at the legacy path so the music folder
+    can still be located on the next run."""
+    global _MIGRATED
+    if _MIGRATED:
+        return
+    _MIGRATED = True
+    import shutil
+
+    mf = read_music_folder_guess()
+    if not mf or not os.path.isdir(mf):
+        return
+    d = app_data_dir(mf)
+    if os.path.abspath(d) == os.path.abspath(os.path.dirname(CONFIG_FILE)):
+        return
+    try:
+        os.makedirs(d, exist_ok=True)
+        legacy_data = os.path.join(os.path.dirname(CONFIG_FILE), "server", "data")
+        if os.path.isdir(legacy_data):
+            for name in os.listdir(legacy_data):
+                if name == "tray.lock":  # runtime lock, not data
+                    continue
+                src = os.path.join(legacy_data, name)
+                dst = os.path.join(d, name)
+                if not os.path.exists(dst):
+                    shutil.move(src, dst)
+        new_cfg = os.path.join(d, "config.json")
+        if os.path.isfile(CONFIG_FILE) and not os.path.exists(new_cfg):
+            shutil.move(CONFIG_FILE, new_cfg)
+            # stub so read_music_folder_guess() keeps resolving after the move
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump({"music_folder": mf}, f, indent=2)
+                f.write("\n")
+    except Exception as e:
+        print(f"WARNING: .data migration failed: {e}")
+
+
 def load_config() -> dict:
+    _migrate_to_data_dir()
+    path = active_config_file()
     user = None
-    if os.path.exists(CONFIG_FILE):
+    if os.path.exists(path):
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 user = json.load(f)
         except Exception:
             user = None
@@ -725,9 +787,11 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> bool:
     """Validate and atomically replace the persisted configuration."""
+    global _MIGRATED
     try:
         normalized = normalize_config(cfg)
-        directory = os.path.dirname(CONFIG_FILE) or "."
+        path = active_config_file()
+        directory = os.path.dirname(path) or "."
         fd, temp_path = tempfile.mkstemp(
             prefix=".mlo_config_", suffix=".json", dir=directory
         )
@@ -737,10 +801,13 @@ def save_config(cfg: dict) -> bool:
                 f.write("\n")
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(temp_path, CONFIG_FILE)
+            os.replace(temp_path, path)
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
+        # a save that introduces/changes the music folder triggers the move
+        _MIGRATED = False
+        _migrate_to_data_dir()
         return True
     except Exception as e:
         print(c(f"ERROR: Could not save config: {e}", Color.RED))

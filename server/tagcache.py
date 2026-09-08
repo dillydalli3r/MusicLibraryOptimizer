@@ -80,22 +80,27 @@ def read_track(path, tag_list=None):
         else:
             tags = {t: af.get_tag(t) for t in tag_list}
         tech = {}
-        info = af.audio.info
-        if info is not None:
-            for attr in ("length", "bitrate", "sample_rate", "bits_per_sample", "channels"):
-                try:
-                    v = getattr(info, attr, None)
-                    if v is not None:
-                        tech[attr] = round(float(v), 3) if isinstance(v, (int, float)) else str(v)
-                except Exception:
-                    pass
-        # Codec (FLAC / MP3 / ALAC / …) shown next to bitrate and depth.
-        try:
-            codec = _detect_codec(path, af)
-            if codec:
-                tech["codec"] = codec
-        except Exception:
-            pass
+        if getattr(af, "is_video", False):
+            # Video containers carry their tech from ffprobe (video codec,
+            # dimensions, duration) instead of mutagen stream info.
+            tech.update(getattr(af, "tech", {}) or {})
+        else:
+            info = af.audio.info
+            if info is not None:
+                for attr in ("length", "bitrate", "sample_rate", "bits_per_sample", "channels"):
+                    try:
+                        v = getattr(info, attr, None)
+                        if v is not None:
+                            tech[attr] = round(float(v), 3) if isinstance(v, (int, float)) else str(v)
+                    except Exception:
+                        pass
+            # Codec (FLAC / MP3 / ALAC / …) shown next to bitrate and depth.
+            try:
+                codec = _detect_codec(path, af)
+                if codec:
+                    tech["codec"] = codec
+            except Exception:
+                pass
     with _lock:
         _tag_cache[key] = (tags, tech)
         _tag_cache.move_to_end(key)

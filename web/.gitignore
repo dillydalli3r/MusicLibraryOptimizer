@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# App state — secrets (Soulseek credentials, AI keys) and user data live here
+config.json
+server/data/

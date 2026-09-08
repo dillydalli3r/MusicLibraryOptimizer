@@ -284,9 +284,60 @@ TAG_MAP = {
     },
 }
 
+# Video containers routed through ffprobe/ffmpeg (MP4/M4V stay on mutagen).
+VIDEO_FFMPEG_EXTS = (
+    ".mkv", ".webm", ".mov", ".vob", ".mpg", ".mpeg", ".m2v",
+    ".ts", ".m2ts", ".mts", ".avi", ".wmv", ".flv", ".ogv", ".3gp", ".3g2",
+)
+
+# Container-native aliases other taggers use inside video files, folded onto
+# the semantic names (MKV muxers write MOV-style PART_NUMBER/DISC/SHOW keys).
+_VIDEO_TAG_ALIASES = {
+    "TRACK": "TRACKNUMBER",
+    "TRACKNUM": "TRACKNUMBER",
+    "PART_NUMBER": "TRACKNUMBER",
+    "PART": "TRACKNUMBER",
+    "TOTAL_PARTS": "TRACKTOTAL",
+    "PART_TOTAL": "TRACKTOTAL",
+    "DISC": "DISCNUMBER",
+    "SHOW": "ALBUM",
+    "COLLECTION": "ALBUM",
+    "ALBUM_ARTIST": "ALBUMARTIST",
+    "AARTIST": "ALBUMARTIST",
+    "DATE_RELEASED": "DATE",
+    "DATE_RELEASE": "DATE",
+    "YEAR": "DATE",
+    "RETAILDATE": "DATE",
+}
+
+_FFPROBE_CACHE = {"exe": None, "checked": False}
+
+
+def _ffprobe_exe():
+    """Cached ffprobe path (tool detection walks the deps dir + PATH)."""
+    if not _FFPROBE_CACHE["checked"]:
+        try:
+            from .tools import detect_all_tools
+            _FFPROBE_CACHE["exe"] = (detect_all_tools().get("ffmpeg") or {}).get("ffprobe_exe")
+        except Exception:
+            _FFPROBE_CACHE["exe"] = None
+        _FFPROBE_CACHE["checked"] = True
+    return _FFPROBE_CACHE["exe"]
+
+
+class VideoHandle:
+    """Lightweight stand-in for the mutagen object on video files so the
+    rest of the codebase can treat `af.audio is not None` as "readable"."""
+
+    def __init__(self, tags, tech):
+        self.tags = tags
+        self.info = None
+        self.tech = tech
+
 
 class AudioFile:
-    """Unified abstraction over FLAC / OGG / Opus / MP3 / MP4."""
+    """Unified abstraction over FLAC / OGG / Opus / MP3 / MP4 (and, read via
+    ffprobe, every music-video container in paths.LIB_VIDEO_EXTS)."""
 
     def __init__(self, path):
         self.path = path
@@ -295,6 +346,12 @@ class AudioFile:
         self.audio = None
         self.error = None
         self._tag_cache = None
+        # Video containers: True once ffprobe supplied tags/tech, and the
+        # path actually holding the data after a tag write (tagging a VOB
+        # remuxes it into a same-stem MKV, so the file name can change).
+        self.is_video = self.kind == "video"
+        self.tag_output_path = None
+        self._video_tags = {}
         self._load()
 
     def _invalidate_cache(self):
@@ -312,8 +369,12 @@ class AudioFile:
             return "mp3"
         if self.ext == ".aac":
             return "aac"
-        if self.ext in (".m4a", ".mp4"):
+        if self.ext in (".m4a", ".mp4", ".m4v"):
+            # MP4-family (M4V is the video-flavored same container) — mutagen
+            # reads and writes tags for both audio and music-video files.
             return "mp4"
+        if self.ext in VIDEO_FFMPEG_EXTS:
+            return "video"
         return None
 
     def _load(self):
@@ -330,6 +391,8 @@ class AudioFile:
                     self.audio.add_tags()
             elif self.kind == "mp4":
                 self.audio = MP4(self.path)
+            elif self.kind == "video":
+                self._load_video()
             elif self.kind == "aac":
                 try:
                     from mutagen.aac import AAC
@@ -345,9 +408,219 @@ class AudioFile:
             self.error = f"{type(e).__name__}: {e}"
 
     # ------------------------------------------------------------------
-    # Tag read
+    # Video containers (MKV / VOB / AVI / ...): ffprobe-backed reads,
+    # ffmpeg stream-copy writes. Playback streams are never re-encoded.
     # ------------------------------------------------------------------
-    @staticmethod
+    def _load_video(self):
+        """Probe a video container for tags + tech via ffprobe.
+
+        Mutagen has no Matroska/VOB/AVI support, so tags come from the
+        container's format metadata (upper-cased, common MOV/MKV-style
+        aliases folded onto the semantic names) and tech carries the
+        video codec plus dimensions alongside the usual audio fields.
+        """
+        try:
+            import json as _json
+            ffprobe = _ffprobe_exe()
+            if not ffprobe:
+                self.error = "ffprobe not available"
+                return
+            from .subproc import run_tool
+            proc = run_tool(
+                [ffprobe, "-v", "error", "-print_format", "json",
+                 "-show_format", "-show_streams", self.path],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=60,
+            )
+            if proc.returncode != 0 or not proc.stdout:
+                self.error = (proc.stderr or "ffprobe failed").strip()[:200]
+                return
+            data = _json.loads(proc.stdout)
+        except Exception as e:
+            self.audio = None
+            self.error = f"probe failed: {e}"
+            return
+
+        fmt = data.get("format") or {}
+        raw_tags = {}
+        for k, v in (fmt.get("tags") or {}).items():
+            if isinstance(v, list):
+                v = "; ".join(str(x) for x in v)
+            raw_tags[str(k).upper()] = str(v)
+        tags = {}
+        for k, v in raw_tags.items():
+            canonical = _VIDEO_TAG_ALIASES.get(k, k)
+            if canonical and canonical not in tags:
+                tags[canonical] = v.strip()
+        # A bare YEAR only fills in when no full DATE was carried.
+        if "DATE" not in tags and raw_tags.get("YEAR"):
+            tags["DATE"] = raw_tags["YEAR"]
+        self._video_tags = tags
+
+        tech = {}
+        try:
+            tech["length"] = round(float(fmt.get("duration")), 3)
+        except (TypeError, ValueError):
+            pass
+        try:
+            # bits per second — the same unit mutagen reports for audio, so
+            # the shared "1022k" formatter needs no special casing.
+            tech["bitrate"] = round(float(fmt.get("bit_rate")), 1)
+        except (TypeError, ValueError):
+            pass
+        for st in data.get("streams") or []:
+            if st.get("codec_type") == "video":
+                disp = st.get("disposition") or {}
+                if st.get("codec_name") in ("mjpeg", "png") and disp.get("attached_pic"):
+                    continue  # embedded cover art, not the program
+                if "codec" not in tech:
+                    tech["codec"] = str(st.get("codec_name") or "").upper() or None
+                    try:
+                        tech["width"] = int(st.get("width"))
+                        tech["height"] = int(st.get("height"))
+                    except (TypeError, ValueError):
+                        pass
+            elif st.get("codec_type") == "audio" and "sample_rate" not in tech:
+                try:
+                    tech["sample_rate"] = int(st.get("sample_rate"))
+                    tech["channels"] = int(st.get("channels"))
+                except (TypeError, ValueError):
+                    pass
+        self.tech = {k: v for k, v in tech.items() if v is not None}
+        # Truthy stub: get_tag/tech consumers treat `audio is None` as an
+        # unreadable file, so video files present a lightweight handle.
+        self.audio = VideoHandle(tags, self.tech)
+
+    def _video_canonical(self, name):
+        """Semantic tag name for a video lookup: aliases -> canonical."""
+        return _VIDEO_TAG_ALIASES.get(str(name).upper(), str(name).upper())
+
+    def set_video_tags(self, mapping):
+        """Write several tags into a video container in ONE ffmpeg pass
+        (each individual write would be a full stream-copy rewrite)."""
+        clean = {}
+        for k, v in (mapping or {}).items():
+            if v is None:
+                continue
+            v = str(v).strip()
+            if not v:
+                continue
+            key = str(k).upper()
+            if key in ("LYRICS", "UNSYNCEDLYRICS"):
+                continue
+            clean[key] = v
+        if not clean:
+            return True
+        # MKV muxers expose the track number as PART_NUMBER and the disc
+        # as DISC; every other semantic name is stored verbatim.
+        mkv_keys = {"TRACKNUMBER": "PART_NUMBER", "DISCNUMBER": "DISC"}
+        return self._set_video_tags_batch({mkv_keys.get(k, k): v for k, v in clean.items()})
+
+    def _set_video_tags_batch(self, mkv_meta):
+        import tempfile
+
+        ffprobe = _ffprobe_exe()
+        try:
+            from .tools import detect_all_tools
+            ffmpeg = (detect_all_tools().get("ffmpeg") or {}).get("ffmpeg_exe")
+        except Exception:
+            ffmpeg = None
+        if not ffmpeg:
+            self.error = "ffmpeg not available — install Dependencies first"
+            return False
+
+        src = self.path
+        in_place = self.ext == ".mkv"
+        if in_place:
+            fd, tmp = tempfile.mkstemp(prefix=".videotag_", suffix=".mkv",
+                                       dir=os.path.dirname(src) or ".")
+            os.close(fd)
+            dest = tmp
+        else:
+            stem = os.path.splitext(src)[0]
+            dest = stem + ".mkv"
+            n = 2
+            while os.path.exists(dest) and os.path.normcase(dest) != os.path.normcase(src):
+                dest = f"{stem} ({n}).mkv"
+                n += 1
+
+        meta_args = []
+        for k, v in mkv_meta.items():
+            meta_args += ["-metadata", f"{k}={v}"]
+        try:
+            cmd = [
+                ffmpeg, "-y", "-v", "error", "-nostdin",
+                "-fflags", "+genpts", "-i", str(src).replace("\\", "/"),
+                "-map", "0", "-c", "copy", "-ignore_unknown",
+                "-map_metadata", "0", *meta_args,
+                "-f", "matroska", str(dest).replace("\\", "/"),
+            ]
+            from .subproc import run_tool
+            proc = run_tool(cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=60 * 60)
+            if proc.returncode != 0:
+                self.error = "; ".join((proc.stderr or "").strip().splitlines()[-2:]) or "ffmpeg failed"
+                try:
+                    if os.path.exists(dest):
+                        os.remove(dest)
+                except OSError:
+                    pass
+                return False
+        except Exception as e:
+            self.error = f"ffmpeg failed: {e}"
+            try:
+                if os.path.exists(dest):
+                    os.remove(dest)
+            except OSError:
+                pass
+            return False
+
+        ok = False
+        if ffprobe:
+            try:
+                from .remux import _stream_info
+                info = _stream_info(dest, ffprobe)
+                ok = bool(info and info[0])
+            except Exception:
+                ok = False
+        else:
+            ok = os.path.getsize(dest) > 0
+        if not ok:
+            self.error = "tag write failed verification"
+            try:
+                if os.path.exists(dest):
+                    os.remove(dest)
+            except OSError:
+                pass
+            return False
+
+        if in_place:
+            os.replace(dest, src)
+            final = src
+        else:
+            try:
+                os.remove(src)
+            except OSError:
+                pass
+            final = dest
+
+        self.path = final
+        self.ext = os.path.splitext(final)[1].lower()
+        self.tag_output_path = final
+        self._load_video()
+        self.is_video = True
+        return True
+
+    def _set_video_tag(self, name, value):
+        """Write one tag into a video container (see set_video_tags).
+
+        MKV files are rewritten in place (stream copy); every other
+        container is remuxed losslessly into a same-stem MKV — so tagging
+        a raw VOB hands back a tagged MKV in one step. Video, audio and
+        subtitle streams are all mapped and copied bit-exact; nothing is
+        re-encoded and captions are never dropped.
+        """
+        return self.set_video_tags({name: value})
     def _id3_text(frame):
         value = getattr(frame, "text", None)
         if isinstance(value, list):
@@ -386,6 +659,9 @@ class AudioFile:
         kind = self.kind
 
         try:
+            if kind == "video":
+                return self._video_tags.get(self._video_canonical(spec["flac"]))
+
             if kind in ("flac", "ogg", "opus"):
                 if self.audio.tags is None:
                     return None
@@ -455,6 +731,40 @@ class AudioFile:
         v = self.get_tag(name)
         return v is not None and str(v).strip() != ""
 
+    def get_lyrics_transform(self, kind, lang=None):
+        """Stored translation / transliteration text for this track.
+
+        kind is "TRANSLATION" or "TRANSLITERATION". The specific tags are
+        language-suffixed — TRANSLATION-EN, TRANSLITERATION-JA-LATN — so the
+        stored language is explicit and gradeable; the bare legacy names
+        still read. *lang* ("en") prefers that language when several are
+        stored (first subtag match: JA-LATN satisfies "ja").
+        """
+        if self.audio is None:
+            return None
+        want = str(kind).upper()
+        found = {}
+        try:
+            for key, val in (self.all_tags() or {}).items():
+                k = str(key).upper()
+                if k == want:
+                    found.setdefault("", val)
+                elif k.startswith(want + "-") and len(k) > len(want) + 1:
+                    found.setdefault(k[len(want) + 1:], val)
+        except Exception:
+            return None
+        if not found:
+            return None
+        if lang:
+            want_lang = str(lang).strip().lower()
+            for suffix, val in found.items():
+                if suffix and suffix.lower().split("-")[0] == want_lang:
+                    return val
+        for suffix in sorted(found):
+            if suffix:
+                return found[suffix]
+        return found.get("")
+
 # ------------------------------------------------------------------
     # Generic tag enumeration / edit (semantic key mapping)
     # ------------------------------------------------------------------
@@ -471,6 +781,10 @@ class AudioFile:
 
         out = {}
         try:
+            if self.kind == "video":
+                # ffprobe tags already carry canonical semantic names.
+                return dict(self._video_tags)
+
             if self.kind in ("flac", "ogg", "opus"):
                 for k, v in self.audio.tags.items():
                     val = v[0] if isinstance(v, list) and v else v
@@ -680,6 +994,8 @@ class AudioFile:
         self._invalidate_cache()
         if self.audio is None:
             return False
+        if self.kind == "video":
+            return self._set_video_tag(name, value)
 
         name = str(name).upper()
         if name == "LYRICS":

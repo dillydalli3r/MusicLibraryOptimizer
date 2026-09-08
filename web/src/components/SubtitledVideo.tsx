@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 
@@ -39,6 +40,7 @@ export function SubtitledVideo({
   videoRef,
   className,
   onClick,
+  onError,
   controls = true,
 }: {
   path: string;
@@ -46,18 +48,30 @@ export function SubtitledVideo({
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   className?: string;
   onClick?: () => void;
+  onError?: () => void;
   controls?: boolean;
 }) {
   const tracks = useSubtitleTracks(path);
+  // Codecs the browser can't decode (MPEG-2 VOB/MPG/M2TS, VC-1, ...) fail
+  // on the direct stream — retry once through the server's live H.264
+  // transcode before reporting an error.
+  const [transcoded, setTranscoded] = useState(false);
+  useEffect(() => setTranscoded(false), [path]);
   return (
     <video
+      key={`${path}|${transcoded ? "x" : "direct"}`}
       ref={videoRef}
-      src={api.streamUrl(path)}
+      src={api.videoStreamUrl(path, transcoded)}
       controls={controls}
       autoPlay
       muted={muted}
       playsInline
+      preload="auto"
       onClick={onClick}
+      onError={() => {
+        if (!transcoded) setTranscoded(true);
+        else onError?.();
+      }}
       className={className}
     >
       {tracks.map((t) => (

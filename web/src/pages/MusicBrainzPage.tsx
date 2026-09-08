@@ -1,16 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, Loader2, Search, Zap } from "lucide-react";
+import {
+  keepPreviousData, useInfiniteQuery, useQuery, useQueryClient,
+} from "@tanstack/react-query";
+import { ArrowDown, ArrowUp, ArrowUpDown, ArrowUpRight, Loader2, Search, Zap } from "lucide-react";
 import { api } from "../api";
 import { EmptyState } from "../components/Badges";
 import { MbIcon } from "../components/Links";
 import { toast } from "../store";
 
 /* In-app MusicBrainz browser: search across the four browsable entities and
- * drill into artist / release-group / release / recording pages. Every page
- * deep-links to MusicBrainz itself and hands release names to the Soulseek
- * search so a browse can turn into an import without retyping anything. */
+ * drill into artist / release-group / release / recording pages. Everything
+ * renders as column tables (same language as the library views), pages 100
+ * rows at a time with load-more footers, keeps the previous results visible
+ * while a new query loads, and prefetches entity pages on row hover. Bare
+ * MusicBrainz IDs and musicbrainz.org links pasted into the search box are
+ * detected and routed to their entity page. */
+
+const PAGE = 100;
 
 const TYPES = [
   { id: "artist", label: "Artists" },
@@ -24,6 +31,9 @@ type MBType = (typeof TYPES)[number]["id"];
 const routeFor = (type: string) =>
   type === "release-group" ? "rg" : type === "release" ? "release" : type;
 
+const MB_URL_RE = /musicbrainz\.org\/(artist|release-group|release|recording)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+const MBID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 interface RGRow {
   id: string; title: string; primary_type?: string; secondary_types?: string[];
   first_release_date?: string;
@@ -34,10 +44,19 @@ interface MBTrackRow {
 }
 interface RelRow {
   id: string; title: string; date?: string; country?: string; status?: string;
-  formats?: string; track_count?: number; barcode?: string; release_group?: string;
+  formats?: string; disc_count?: number; track_count?: number;
+  track_breakdown?: string; barcode?: string; release_group?: string;
+  disambiguation?: string;
 }
 const mbUrl = (type: string, id: string) =>
   `https://musicbrainz.org/${type === "release-group" ? "release-group" : type}/${id}`;
+
+/** '2 discs · 14 + 5' for multi-disc editions, plain count otherwise. */
+const tracksLabel = (r: RelRow) => {
+  if (!r.track_count && !r.track_breakdown) return "";
+  if ((r.disc_count ?? 1) > 1) return `${r.track_breakdown}`;
+  return `${r.track_count}`;
+};
 
 const fmtLen = (ms?: number | null) => {
   if (!ms) return "—";
@@ -75,6 +94,98 @@ function LoadError({ e }: { e: unknown }) {
       hint={String(e instanceof Error ? e.message : e)}
     />
   );
+}
+
+/** Footer under a paged list: what's shown, and a load-more control. */
+function LoadMore({ loaded, total, busy, onLoad }: {
+  loaded: number; total: number; busy: boolean; onLoad: () => void;
+}) {
+  if (loaded >= total) return null;
+  return (
+    <button
+      className="w-full py-2 text-xs text-zinc-400 hover:text-white hover:bg-raise transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+      onClick={onLoad}
+      disabled={busy}
+    >
+      {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+      Load more — showing {loaded} of {total}
+    </button>
+  );
+}
+
+/* ---- client-side column sorting ------------------------------------------ */
+
+interface SortState { key: string; dir: 1 | -1 }
+
+function useSort<T extends Record<string, any>>(rows: T[], defaultKey: string | null) {
+  // defaultKey=null keeps the source order (MusicBrainz ranks searches by
+  // relevance) until the user clicks a column header.
+  const [sort, setSort] = useState<SortState | null>(
+    defaultKey ? { key: defaultKey, dir: 1 } : null
+  );
+  const onSort = (key: string) =>
+    setSort((s) => (s && s.key === key ? { key, dir: (s.dir === 1 ? -1 : 1) } : { key, dir: 1 }));
+  const sorted = useMemo(() => {
+    if (!sort) return rows;
+    const val = (r: T) => {
+      const v = r[sort.key];
+      return v == null ? (typeof v === "number" ? 0 : "") : v;
+    };
+    return [...rows].sort((a, b) => {
+      const va = val(a);
+      const vb = val(b);
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * sort.dir;
+      return String(va).localeCompare(String(vb), undefined, { numeric: true }) * sort.dir;
+    });
+  }, [rows, sort]);
+  return { sort, onSort, sorted };
+}
+
+function SortTh({ label, k, sort, onSort, className }: {
+  label: string; k: string; sort: SortState | null; onSort: (k: string) => void; className?: string;
+}) {
+  return (
+    <th className={`th cursor-pointer select-none hover:text-zinc-300 ${className ?? ""}`} onClick={() => onSort(k)}>
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {sort && sort.key === k ? (
+          sort.dir === 1 ? <ArrowUp className="h-3 w-3 text-accent" /> : <ArrowDown className="h-3 w-3 text-accent" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 opacity-30" />
+        )}
+      </span>
+    </th>
+  );
+}
+
+/** Warm an entity page while the pointer is over a row that links to it —
+ * by click time the payload is usually already in the query cache. */
+function useMbPrefetch() {
+  const qc = useQueryClient();
+  return (type: string, id: string) => {
+    if (!id) return;
+    if (type === "artist") {
+      qc.prefetchInfiniteQuery({
+        queryKey: ["mbArtist", id],
+        queryFn: ({ pageParam }: any) => api.mbArtist(id, pageParam ?? 0),
+        initialPageParam: 0,
+      });
+    } else if (type === "release-group") {
+      qc.prefetchInfiniteQuery({
+        queryKey: ["mbRG", id],
+        queryFn: ({ pageParam }: any) => api.mbReleaseGroup(id, pageParam ?? 0),
+        initialPageParam: 0,
+      });
+    } else if (type === "release") {
+      qc.prefetchQuery({ queryKey: ["mbRelease", id], queryFn: () => api.mbRelease(id) });
+    } else if (type === "recording") {
+      qc.prefetchInfiniteQuery({
+        queryKey: ["mbRecording", id],
+        queryFn: ({ pageParam }: any) => api.mbRecording(id, pageParam ?? 0),
+        initialPageParam: 0,
+      });
+    }
+  };
 }
 
 /** Page header shared by the detail views: title, meta line, chips + actions. */
@@ -139,59 +250,208 @@ function PageHeader({
 /* Search                                                              */
 /* ------------------------------------------------------------------ */
 
+/** Column layout per entity — same table language as the library views. */
+const COLUMNS: Record<MBType, { k: string; label: string; className?: string }[]> = {
+  artist: [
+    { k: "title", label: "Name" },
+    { k: "type", label: "Type", className: "w-[10%]" },
+    { k: "country", label: "Country", className: "w-[12%]" },
+    { k: "life", label: "Life span", className: "w-[16%]" },
+    { k: "tags", label: "Tags", className: "w-[18%]" },
+    { k: "score", label: "Score", className: "w-20 cell-nowrap text-right" },
+  ],
+  "release-group": [
+    { k: "title", label: "Title" },
+    { k: "artist", label: "Artist", className: "w-[24%]" },
+    { k: "typeLabel", label: "Type", className: "w-[14%]" },
+    { k: "first_release_date", label: "First released", className: "w-[12%]" },
+    { k: "score", label: "Score", className: "w-20 cell-nowrap text-right" },
+  ],
+  release: [
+    { k: "title", label: "Title" },
+    { k: "artist", label: "Artist", className: "w-[20%]" },
+    { k: "date", label: "Date", className: "w-[9%]" },
+    { k: "formats", label: "Format", className: "w-[12%]" },
+    { k: "track_count", label: "Tracks", className: "w-[7%] text-right" },
+    { k: "country", label: "Country", className: "w-[8%]" },
+    { k: "catalog_number", label: "Cat #", className: "w-[12%]" },
+    { k: "score", label: "Score", className: "w-20 cell-nowrap text-right" },
+  ],
+  recording: [
+    { k: "title", label: "Title" },
+    { k: "artist", label: "Artist", className: "w-[26%]" },
+    { k: "len", label: "Length", className: "w-[9%]" },
+    { k: "first_release_date", label: "First released", className: "w-[13%]" },
+    { k: "score", label: "Score", className: "w-20 cell-nowrap text-right" },
+  ],
+};
+
 export function MBSearchPage() {
   const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
   const type = (params.get("type") as MBType) || "release";
   const [text, setText] = useState(q);
   const nav = useNavigate();
+  const prefetch = useMbPrefetch();
 
   useEffect(() => setText(q), [q]); // stay in sync with back/forward
+
+  const pushParams = (nextQ: string) => {
+    const next = new URLSearchParams();
+    if (nextQ.trim()) next.set("q", nextQ.trim());
+    next.set("type", type);
+    setParams(next, { replace: true });
+  };
 
   // Debounced URL sync so every keystroke doesn't fire a request.
   useEffect(() => {
     if (text === q) return;
-    const t = setTimeout(() => {
-      const next = new URLSearchParams();
-      if (text.trim()) next.set("q", text.trim());
-      next.set("type", type);
-      setParams(next, { replace: true });
-    }, 400);
+    const t = setTimeout(() => pushParams(text), 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
 
+  // A pasted musicbrainz.org link or bare MBID routes to its entity page —
+  // bare IDs are type-probed server-side so the user never picks one.
+  const urlMatch = MB_URL_RE.exec(q);
+  const bareId = !urlMatch && MBID_RE.test(q.trim()) ? q.trim() : null;
+  const detect = useQuery({
+    queryKey: ["mbIdentify", bareId],
+    queryFn: () => api.mbIdentify(bareId!),
+    enabled: !!bareId,
+    retry: false,
+  });
+  useEffect(() => {
+    if (urlMatch) nav(`/mb/${routeFor(urlMatch[1])}/${urlMatch[2]}`);
+  }, [urlMatch?.[1], urlMatch?.[2]]);
+  useEffect(() => {
+    if (detect.data) nav(`/mb/${routeFor(detect.data.type)}/${detect.data.id}`);
+  }, [detect.data]);
+
   // Catalog numbers and barcodes ("SRCS 8757") often don't rank in a free
   // text search — when the query looks like one, run the exact catno/barcode
-  // search in parallel and merge both result sets (exact hits first).
+  // search instead and fall back to free text only if it comes up empty.
   const looksCatno = /^[a-z0-9]{1,8}[\s-]?\d{3,8}([-]?\d{1,4})?$/i.test(q.trim());
   const looksBarcode = /^\d{8,14}$/.test(q.trim());
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["mbSearch", type, q, looksCatno ? "catno" : looksBarcode ? "barcode" : "free"],
-    queryFn: async () => {
-      const free = await api.mbSearch(type, q, 20);
-      if (type !== "release" || (!looksCatno && !looksBarcode)) return free;
-      // Exact catno/barcode hits replace the free-text list entirely — a
-      // catalog number search is precise, and free-text matching on a catno
-      // only surfaces noise.
-      const extra = await api.mbSearch(type, q, 20, looksBarcode ? "barcode" : "catno").catch(() => []);
-      return (extra as any[]).length ? extra : free;
+  const mode = type === "release" ? (looksBarcode ? "barcode" : looksCatno ? "catno" : "free") : "free";
+  const idLike = !!urlMatch || !!bareId;
+  const search = useInfiniteQuery({
+    queryKey: ["mbSearch", type, q, mode],
+    queryFn: async ({ pageParam }) => {
+      const page = await api.mbSearch(type, q, PAGE, mode, pageParam as number);
+      if (mode === "free" || page.rows.length) return page;
+      // exact search found nothing at this offset — show the free-text list
+      return api.mbSearch(type, q, PAGE, "free", pageParam as number);
     },
-    enabled: q.trim().length >= 2,
+    initialPageParam: 0,
+    getNextPageParam: (last, all) => {
+      const loaded = all.reduce((n, p) => n + p.rows.length, 0);
+      return loaded < (last.total ?? 0) ? loaded : undefined;
+    },
+    enabled: q.trim().length >= 2 && !idLike,
+    placeholderData: keepPreviousData, // keep rows visible while re-querying
   });
 
-  const rows = (data ?? []) as Record<string, string | number | null | undefined | string[] | number>[];
+  const rows = (search.data?.pages ?? []).flatMap((p) => p.rows);
+  const total = search.data?.pages.at(-1)?.total ?? 0;
+
+  // Flatten entity-specific shapes into sortable flat rows for the columns.
+  const shaped = useMemo(
+    () =>
+      rows.map((r: any) => {
+        if (type === "artist")
+          return {
+            ...r,
+            life: (r.life_span ?? []).filter(Boolean).join(" – "),
+            tags: (r.tags ?? []).join(" · "),
+          };
+        if (type === "release-group")
+          return {
+            ...r,
+            typeLabel: [r.primary_type, ...(r.secondary_types ?? [])].filter(Boolean).join("/"),
+          };
+        if (type === "recording") return { ...r, len: r.length ? fmtLen(Number(r.length)) : "" };
+        return r;
+      }),
+    [rows, type]
+  );
+  const { sort, onSort, sorted } = useSort(shaped, null);
+
+  const renderCells = (r: any) => {
+    switch (type) {
+      case "artist":
+        return (
+          <>
+            <td className="td">
+              <span className="font-medium text-zinc-100">{r.title}</span>
+              {r.disambiguation ? <span className="text-zinc-500"> ({r.disambiguation})</span> : null}
+            </td>
+            <td className="td text-zinc-500">{r.type || "—"}</td>
+            <td className="td text-zinc-500">{r.country || "—"}</td>
+            <td className="td text-zinc-500">{r.life || "—"}</td>
+            <td className="td text-zinc-500 truncate">{r.tags || "—"}</td>
+            <td className="td text-right font-mono text-[10px] text-zinc-600">{r.score ?? ""}</td>
+          </>
+        );
+      case "release-group":
+        return (
+          <>
+            <td className="td">
+              <span className="font-medium text-zinc-100">{r.title}</span>
+              {r.disambiguation ? <span className="text-zinc-500"> ({r.disambiguation})</span> : null}
+            </td>
+            <td className="td text-zinc-400 truncate">{r.artist || "—"}</td>
+            <td className="td text-zinc-500">{r.typeLabel || "—"}</td>
+            <td className="td text-zinc-500">{r.first_release_date || "—"}</td>
+            <td className="td text-right font-mono text-[10px] text-zinc-600">{r.score ?? ""}</td>
+          </>
+        );
+      case "release":
+        return (
+          <>
+            <td className="td">
+              <span className="font-medium text-zinc-100">{r.title}</span>
+              {r.disambiguation ? <span className="text-zinc-500"> ({r.disambiguation})</span> : null}
+            </td>
+            <td className="td text-zinc-400 truncate">{r.artist || "—"}</td>
+            <td className="td text-zinc-500">{r.date || "—"}</td>
+            <td className="td text-zinc-500">{r.formats || "—"}</td>
+            <td className="td text-zinc-500 text-right">{r.track_count || "—"}</td>
+            <td className="td text-zinc-500">{r.country || "—"}</td>
+            <td className="td text-zinc-500 truncate">{r.catalog_number || "—"}</td>
+            <td className="td text-right font-mono text-[10px] text-zinc-600">{r.score ?? ""}</td>
+          </>
+        );
+      default:
+        return (
+          <>
+            <td className="td">
+              <span className="font-medium text-zinc-100">{r.title}</span>
+              {r.disambiguation ? <span className="text-zinc-500"> ({r.disambiguation})</span> : null}
+            </td>
+            <td className="td text-zinc-400 truncate">{r.artist || "—"}</td>
+            <td className="td text-zinc-500 font-mono">{r.len || "—"}</td>
+            <td className="td text-zinc-500">{r.first_release_date || "—"}</td>
+            <td className="td text-right font-mono text-[10px] text-zinc-600">{r.score ?? ""}</td>
+          </>
+        );
+    }
+  };
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-xl font-bold">MusicBrainz</h1>
       <div className="relative mt-3">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
         <input
           className="input !pl-10"
-          placeholder="Search artists, release groups, releases, recordings…"
+          placeholder="Search artists, releases, recordings… — or paste an MB ID / link"
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter is an explicit search — skip the typing debounce
+            if (e.key === "Enter") pushParams(text);
+          }}
           autoFocus
         />
       </div>
@@ -216,54 +476,57 @@ export function MBSearchPage() {
       </div>
 
       <div className="mt-4">
-        {!q || q.trim().length < 2 ? (
-          <EmptyState title="Type at least two characters" hint="Results come straight from musicbrainz.org (rate-limited to 1 request/second — repeated views are cached)." />
-        ) : isLoading ? (
+        {urlMatch ? (
           <Spinner />
-        ) : error ? (
-          <LoadError e={error} />
+        ) : bareId ? (
+          detect.isLoading ? (
+            <div className="flex items-center justify-center gap-2 py-24 text-sm text-zinc-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Looking up {bareId}…
+            </div>
+          ) : detect.error ? (
+            <EmptyState title="No MusicBrainz entity found" hint={`Nothing lives at ${bareId}.`} />
+          ) : null
+        ) : !q || q.trim().length < 2 ? (
+          <EmptyState title="Type at least two characters" hint="Results come straight from musicbrainz.org (rate-limited to 1 request/second — repeated views are cached and pages prefetch on hover)." />
+        ) : search.isLoading || (search.isPlaceholderData && !rows.length) ? (
+          <Spinner />
+        ) : search.error ? (
+          <LoadError e={search.error} />
         ) : rows.length === 0 ? (
           <EmptyState title="No results" hint={`Nothing on MusicBrainz for “${q}”.`} />
         ) : (
-          <div className="rounded-lg border border-border overflow-hidden">
-            {rows.map((r) => (
-              <div
-                key={String(r.id)}
-                className="table-row !cursor-pointer"
-                onClick={() => nav(`/mb/${routeFor(type)}/${r.id}`)}
-              >
-                <div className="px-3 py-2.5 flex items-center gap-3 min-w-0">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-zinc-100 truncate">
-                      {String(r.title)}
-                      {r.disambiguation ? (
-                        <span className="text-zinc-500 font-normal"> ({String(r.disambiguation)})</span>
-                      ) : null}
-                    </div>
-                    <div className="text-[11px] text-zinc-500 truncate">
-                      {type === "artist" &&
-                        [r.type, r.country, (r.life_span as string[])?.filter(Boolean).join(" – "), (r.tags as string[])?.join(" · ")]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      {type === "release-group" &&
-                        [r.artist, [r.primary_type, ...(r.secondary_types as string[] ?? [])].filter(Boolean).join("/"), r.first_release_date]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      {type === "release" &&
-                        [r.artist, r.date, r.formats, r.country, r.catalog_number].filter(Boolean).join(" · ")}
-                      {type === "recording" &&
-                        [r.artist, r.first_release_date, r.length ? fmtLen(Number(r.length)) : ""]
-                          .filter(Boolean)
-                          .join(" · ")}
-                    </div>
-                  </div>
-                  <span className="text-[10px] font-mono text-zinc-600 shrink-0" title="Search score">
-                    {String(r.score ?? "")}
-                  </span>
-                  <ExtLink href={mbUrl(type, String(r.id))} title="Open on MusicBrainz" />
-                </div>
-              </div>
-            ))}
+          <div className={`rounded-lg border border-border overflow-hidden transition-opacity ${search.isPlaceholderData ? "opacity-50" : ""}`}>
+            <table className="w-full text-sm">
+              <thead className="border-b border-border">
+                <tr>
+                  {COLUMNS[type].map((c) => (
+                    <SortTh key={c.k} label={c.label} k={c.k} sort={sort} onSort={onSort} className={c.className} />
+                  ))}
+                  <th className="th w-10"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((r: any) => (
+                  <tr
+                    key={String(r.id)}
+                    className="table-row !cursor-pointer"
+                    onClick={() => nav(`/mb/${routeFor(type)}/${r.id}`)}
+                    onMouseEnter={() => prefetch(type, String(r.id))}
+                  >
+                    {renderCells(r)}
+                    <td className="td w-10 pr-2">
+                      <ExtLink href={mbUrl(type, String(r.id))} title="Open on MusicBrainz" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <LoadMore
+              loaded={rows.length}
+              total={total}
+              busy={search.isFetchingNextPage}
+              onLoad={() => search.fetchNextPage()}
+            />
           </div>
         )}
       </div>
@@ -277,23 +540,51 @@ export function MBSearchPage() {
 
 export function MBArtistPage() {
   const { id = "" } = useParams();
-  const { data: a, isLoading, error } = useQuery({
+  const prefetch = useMbPrefetch();
+  const discography = useInfiniteQuery({
     queryKey: ["mbArtist", id],
-    queryFn: () => api.mbArtist(id),
+    queryFn: ({ pageParam }) => api.mbArtist(id, pageParam as number),
+    initialPageParam: 0,
+    getNextPageParam: (last: any, all: any[]) => {
+      const loaded = all.reduce((n, p) => n + (p.release_groups?.length ?? 0), 0);
+      return loaded < (last.total ?? 0) ? loaded : undefined;
+    },
     enabled: !!id,
+    placeholderData: keepPreviousData,
   });
+  const { isLoading, error } = discography;
+  const [typeFilter, setTypeFilter] = useState<string>("All");
+  useEffect(() => setTypeFilter("All"), [id]);
+
+  const groups: RGRow[] = (discography.data?.pages ?? []).flatMap((p: any) => p.release_groups ?? []);
+  const rgTotal: number = discography.data?.pages.at(-1)?.total ?? groups.length;
+
+  // Release TYPE grouping: primary type splits the sections (Album / EP /
+  // Single / …); secondary types (Compilation, Live, …) keep an edition in
+  // its own combined category instead of vanishing into "Album".
+  const primaryOf = (rg: RGRow) => rg.primary_type || "Other";
+  const catOf = (rg: RGRow) =>
+    [rg.primary_type || "Other", ...(rg.secondary_types ?? [])].join(" + ");
+
+  const primaries = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const rg of groups) {
+      const p = primaryOf(rg);
+      counts.set(p, (counts.get(p) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((x, y) => y[1] - x[1]);
+  }, [groups]);
+  const shown = typeFilter === "All" ? groups : groups.filter((rg) => primaryOf(rg) === typeFilter);
+
+  const byCat: Record<string, RGRow[]> = {};
+  for (const rg of shown) (byCat[catOf(rg)] ??= []).push(rg);
+
+  if (!id) return null;
   if (isLoading) return <Spinner />;
   if (error) return <div className="p-6"><LoadError e={error} /></div>;
+  const a = discography.data?.pages[0];
   if (!a) return null;
   const life = (a.life_span ?? []).filter(Boolean).join(" – ");
-
-  // Discography grouped by primary type keeps long artist pages scannable.
-  const groups: RGRow[] = a.release_groups ?? [];
-  const byType: Record<string, RGRow[]> = {};
-  for (const rg of groups) {
-    const key = rg.primary_type || "Other";
-    (byType[key] ??= []).push(rg);
-  }
 
   return (
     <div>
@@ -304,37 +595,70 @@ export function MBArtistPage() {
         chips={[...(a.genres ?? []), ...(a.tags ?? []).slice(0, 5)].slice(0, 8)}
         mbHref={mbUrl("artist", a.id)}
       />
-      <div className="px-6 pb-8 max-w-4xl mx-auto space-y-5">
-        {groups.length === 0 && <EmptyState title="No release groups on MusicBrainz" />}
-        {Object.entries(byType).map(([type, list]) => (
-          <div key={type}>
-            <div className="text-[11px] uppercase tracking-widest text-zinc-500 mb-1.5">
-              {type}s · {list.length}
-            </div>
-            <div className="rounded-lg border border-border overflow-hidden">
-              {list.map((rg) => (
-                <div
-                  key={rg.id}
-                  className="table-row !cursor-pointer"
-                  onClick={() => location.assign(`/mb/rg/${rg.id}`)}
+      <div className="px-6 pb-8 max-w-4xl mx-auto">
+        {groups.length === 0 ? (
+          <EmptyState title="No release groups on MusicBrainz" />
+        ) : (
+          <>
+            <div className="flex gap-1 flex-wrap mb-4">
+              {["All", ...primaries.map(([p]) => p)].map((p) => (
+                <button
+                  key={p}
+                  className={`chip px-2.5 py-1 border ${
+                    typeFilter === p
+                      ? "bg-accent on-accent border-transparent font-semibold"
+                      : "bg-raise border-border text-zinc-400 hover:text-white"
+                  }`}
+                  onClick={() => setTypeFilter(p)}
                 >
-                  <div className="px-3 py-2 flex items-center gap-3 min-w-0">
-                    <span className="text-xs font-mono text-zinc-500 w-10 shrink-0">
-                      {(rg.first_release_date || "—").slice(0, 4)}
-                    </span>
-                    <span className="text-sm text-zinc-200 truncate flex-1">
-                      {rg.title}
-                      {rg.secondary_types?.length ? (
-                        <span className="text-zinc-500 text-xs"> ({rg.secondary_types.join(" + ")})</span>
-                      ) : null}
-                    </span>
-                    <ExtLink href={mbUrl("release-group", rg.id)} title="Open on MusicBrainz" />
-                  </div>
-                </div>
+                  {p}
+                  {p === "All" ? ` (${groups.length})` : ` (${primaries.find(([x]) => x === p)?.[1] ?? 0})`}
+                </button>
               ))}
             </div>
-          </div>
-        ))}
+            {groups.length !== shown.length && (
+              <div className="text-[11px] text-zinc-500 mb-3">
+                Showing {shown.length} of {groups.length} release groups
+              </div>
+            )}
+            {Object.entries(byCat).map(([cat, list]) => (
+              <div key={cat} className="mb-5">
+                <div className="text-[11px] uppercase tracking-widest text-zinc-500 mb-1.5">
+                  {cat} · {list.length}
+                </div>
+                <div className="rounded-lg border border-border overflow-hidden">
+                  {list.map((rg) => (
+                    <div
+                      key={rg.id}
+                      className="table-row !cursor-pointer"
+                      onClick={() => location.assign(`/mb/rg/${rg.id}`)}
+                      onMouseEnter={() => prefetch("release-group", rg.id)}
+                    >
+                      <div className="px-3 py-2 flex items-center gap-3 min-w-0">
+                        <span className="text-xs font-mono text-zinc-500 w-10 shrink-0">
+                          {(rg.first_release_date || "—").slice(0, 4)}
+                        </span>
+                        <span className="text-sm text-zinc-200 truncate flex-1">
+                          {rg.title}
+                          {rg.secondary_types?.length ? (
+                            <span className="text-zinc-500 text-xs"> ({rg.secondary_types.join(" + ")})</span>
+                          ) : null}
+                        </span>
+                        <ExtLink href={mbUrl("release-group", rg.id)} title="Open on MusicBrainz" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <LoadMore
+              loaded={groups.length}
+              total={rgTotal}
+              busy={discography.isFetchingNextPage}
+              onLoad={() => discography.fetchNextPage()}
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -346,13 +670,27 @@ export function MBArtistPage() {
 
 export function MBReleaseGroupPage() {
   const { id = "" } = useParams();
-  const { data: rg, isLoading, error } = useQuery({
+  const prefetch = useMbPrefetch();
+  const editions = useInfiniteQuery({
     queryKey: ["mbRG", id],
-    queryFn: () => api.mbReleaseGroup(id),
+    queryFn: ({ pageParam }) => api.mbReleaseGroup(id, pageParam as number),
+    initialPageParam: 0,
+    getNextPageParam: (last: any, all: any[]) => {
+      const loaded = all.reduce((n, p) => n + (p.releases?.length ?? 0), 0);
+      return loaded < (last.total ?? 0) ? loaded : undefined;
+    },
     enabled: !!id,
+    placeholderData: keepPreviousData,
   });
+  const { isLoading, error } = editions;
+  const releasesAll: RelRow[] = (editions.data?.pages ?? []).flatMap((p: any) => p.releases ?? []);
+  const relTotal: number = editions.data?.pages.at(-1)?.total ?? releasesAll.length;
+  const { sort, onSort, sorted } = useSort(releasesAll, "date");
+
+  if (!id) return null;
   if (isLoading) return <Spinner />;
   if (error) return <div className="p-6"><LoadError e={error} /></div>;
+  const rg = editions.data?.pages[0];
   if (!rg) return null;
   const typeLabel = [rg.primary_type, ...(rg.secondary_types ?? [])].filter(Boolean).join(" + ");
 
@@ -378,34 +716,70 @@ export function MBReleaseGroupPage() {
           </Link>
         )}
       </PageHeader>
-      <div className="px-6 pb-8 max-w-4xl mx-auto">
+      <div className="px-6 pb-8 max-w-5xl mx-auto">
         <div className="text-[11px] uppercase tracking-widest text-zinc-500 mb-1.5">
-          Releases · {rg.releases?.length ?? 0}
+          Releases{releasesAll.length < relTotal ? ` · ${releasesAll.length} of ${relTotal}` : ` · ${relTotal}`}
         </div>
-        <div className="rounded-lg border border-border overflow-hidden">
-          {((rg.releases ?? []) as RelRow[]).map((r) => (
-            <div
-              key={r.id}
-              className="table-row !cursor-pointer"
-              onClick={() => location.assign(`/mb/release/${r.id}`)}
-            >
-              <div className="px-3 py-2 flex items-center gap-3 min-w-0">
-                <span className="text-xs font-mono text-zinc-500 w-12 shrink-0">
-                  {r.date || "—"}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-zinc-200 truncate">{r.title}</div>
-                  <div className="text-[11px] text-zinc-500 truncate">
-                    {[r.formats, r.country, r.status, r.track_count ? `${r.track_count} tracks` : "", r.barcode]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </div>
-                </div>
-                <ExtLink href={mbUrl("release", r.id)} title="Open on MusicBrainz" />
-              </div>
-            </div>
-          ))}
-          {!rg.releases?.length && <EmptyState title="No releases in this group" />}
+        <div className={`rounded-lg border border-border overflow-hidden transition-opacity ${editions.isPlaceholderData ? "opacity-50" : ""}`}>
+          <table className="w-full text-sm">
+            <thead className="border-b border-border">
+              <tr>
+                <SortTh label="Date" k="date" sort={sort} onSort={onSort} className="w-24 cell-nowrap" />
+                <SortTh label="Title" k="title" sort={sort} onSort={onSort} />
+                <th className="th w-[11%]">Format</th>
+                <SortTh label="Discs" k="disc_count" sort={sort} onSort={onSort} className="w-[8%] cell-nowrap text-right" />
+                <SortTh label="Tracks" k="track_count" sort={sort} onSort={onSort} className="w-[12%] text-right" />
+                <th className="th w-[7%]">Country</th>
+                <th className="th w-[9%]">Status</th>
+                <th className="th w-[14%]">Barcode</th>
+                <th className="th w-10"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => (
+                <tr
+                  key={r.id}
+                  className="table-row !cursor-pointer"
+                  onClick={() => location.assign(`/mb/release/${r.id}`)}
+                  onMouseEnter={() => prefetch("release", r.id)}
+                  title="Open this release"
+                >
+                  <td className="td text-zinc-500 cell-nowrap">{r.date || "—"}</td>
+                  <td className="td text-zinc-200">
+                    <span className="truncate">{r.title}</span>
+                    {r.disambiguation ? <span className="text-zinc-500"> ({r.disambiguation})</span> : null}
+                  </td>
+                  <td className="td text-zinc-500">{r.formats || "—"}</td>
+                  <td className="td text-zinc-500 text-right">{r.disc_count || "—"}</td>
+                  <td
+                    className="td text-zinc-500 text-right tabular-nums cell-nowrap"
+                    title={(r.disc_count ?? 1) > 1 ? `${r.track_count} tracks across ${r.disc_count} discs` : undefined}
+                  >
+                    {tracksLabel(r) || "—"}
+                  </td>
+                  <td className="td text-zinc-500">{r.country || "—"}</td>
+                  <td className="td text-zinc-500">{r.status || "—"}</td>
+                  <td className="td text-zinc-600 font-mono text-[11px] truncate">{r.barcode || ""}</td>
+                  <td className="td w-10 pr-2">
+                    <ExtLink href={mbUrl("release", r.id)} title="Open on MusicBrainz" />
+                  </td>
+                </tr>
+              ))}
+              {!releasesAll.length && (
+                <tr>
+                  <td colSpan={9} className="p-0">
+                    <EmptyState title="No releases in this group" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          <LoadMore
+            loaded={releasesAll.length}
+            total={relTotal}
+            busy={editions.isFetchingNextPage}
+            onLoad={() => editions.fetchNextPage()}
+          />
         </div>
       </div>
     </div>
@@ -538,13 +912,27 @@ export function MBReleasePage() {
 
 export function MBRecordingPage() {
   const { id = "" } = useParams();
-  const { data: r, isLoading, error } = useQuery({
+  const prefetch = useMbPrefetch();
+  const appearances = useInfiniteQuery({
     queryKey: ["mbRecording", id],
-    queryFn: () => api.mbRecording(id),
+    queryFn: ({ pageParam }) => api.mbRecording(id, pageParam as number),
+    initialPageParam: 0,
+    getNextPageParam: (last: any, all: any[]) => {
+      const loaded = all.reduce((n, p) => n + (p.releases?.length ?? 0), 0);
+      return loaded < (last.total ?? 0) ? loaded : undefined;
+    },
     enabled: !!id,
+    placeholderData: keepPreviousData,
   });
+  const { isLoading, error } = appearances;
+  const releasesAll: RelRow[] = (appearances.data?.pages ?? []).flatMap((p: any) => p.releases ?? []);
+  const relTotal: number = appearances.data?.pages.at(-1)?.total ?? releasesAll.length;
+  const { sort, onSort, sorted } = useSort(releasesAll, "date");
+
+  if (!id) return null;
   if (isLoading) return <Spinner />;
   if (error) return <div className="p-6"><LoadError e={error} /></div>;
+  const r = appearances.data?.pages[0];
   if (!r) return null;
 
   return (
@@ -570,30 +958,59 @@ export function MBRecordingPage() {
           </Link>
         )}
       </PageHeader>
-      <div className="px-6 pb-8 max-w-4xl mx-auto">
+      <div className="px-6 pb-8 max-w-5xl mx-auto">
         <div className="text-[11px] uppercase tracking-widest text-zinc-500 mb-1.5">
-          Appears on · {r.releases?.length ?? 0} releases
+          Appears on{releasesAll.length < relTotal ? ` · ${releasesAll.length} of ${relTotal} releases` : ` · ${relTotal} releases`}
         </div>
-        <div className="rounded-lg border border-border overflow-hidden">
-          {((r.releases ?? []) as RelRow[]).map((rel) => (
-            <div
-              key={rel.id}
-              className="table-row !cursor-pointer"
-              onClick={() => location.assign(`/mb/release/${rel.id}`)}
-            >
-              <div className="px-3 py-2 flex items-center gap-3 min-w-0">
-                <span className="text-xs font-mono text-zinc-500 w-12 shrink-0">{rel.date || "—"}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-zinc-200 truncate">{rel.title}</div>
-                  <div className="text-[11px] text-zinc-500 truncate">
-                    {[rel.release_group, rel.formats, rel.country, rel.status].filter(Boolean).join(" · ")}
-                  </div>
-                </div>
-                <ExtLink href={mbUrl("release", rel.id)} title="Open on MusicBrainz" />
-              </div>
-            </div>
-          ))}
-          {!r.releases?.length && <EmptyState title="No releases carry this recording" />}
+        <div className={`rounded-lg border border-border overflow-hidden transition-opacity ${appearances.isPlaceholderData ? "opacity-50" : ""}`}>
+          <table className="w-full text-sm">
+            <thead className="border-b border-border">
+              <tr>
+                <SortTh label="Date" k="date" sort={sort} onSort={onSort} className="w-24 cell-nowrap" />
+                <SortTh label="Title" k="title" sort={sort} onSort={onSort} />
+                <th className="th w-[10%]">Format</th>
+                <th className="th w-[10%]">Type</th>
+                <SortTh label="Tracks" k="track_count" sort={sort} onSort={onSort} className="w-[11%] text-right" />
+                <th className="th w-[8%]">Country</th>
+                <th className="th w-10"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((rel) => (
+                <tr
+                  key={rel.id}
+                  className="table-row !cursor-pointer"
+                  onClick={() => location.assign(`/mb/release/${rel.id}`)}
+                  onMouseEnter={() => prefetch("release", rel.id)}
+                >
+                  <td className="td text-zinc-500 cell-nowrap">{rel.date || "—"}</td>
+                  <td className="td text-zinc-200">
+                    <span className="truncate">{rel.title}</span>
+                  </td>
+                  <td className="td text-zinc-500">{rel.formats || "—"}</td>
+                  <td className="td text-zinc-500">{rel.release_group || "—"}</td>
+                  <td className="td text-zinc-500 text-right tabular-nums cell-nowrap">{tracksLabel(rel) || "—"}</td>
+                  <td className="td text-zinc-500">{rel.country || "—"}</td>
+                  <td className="td w-10 pr-2">
+                    <ExtLink href={mbUrl("release", rel.id)} title="Open on MusicBrainz" />
+                  </td>
+                </tr>
+              ))}
+              {!releasesAll.length && (
+                <tr>
+                  <td colSpan={7} className="p-0">
+                    <EmptyState title="No releases carry this recording" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          <LoadMore
+            loaded={releasesAll.length}
+            total={relTotal}
+            busy={appearances.isFetchingNextPage}
+            onLoad={() => appearances.fetchNextPage()}
+          />
         </div>
       </div>
     </div>

@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronDown, Heart, ListMusic, ListPlus, Pause, Play, Repeat, Settings2, Shuffle,
+  AudioLines, ChevronDown, Heart, ListMusic, ListPlus, Pause, Play, Repeat, Settings2, Shuffle,
   SkipBack, SkipForward, Volume1, Volume2, VolumeX, X,
 } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
-import { fmtTech } from "../lib/fmt";
+import { fmtTech, isVideoFile } from "../lib/fmt";
 import CoverImg from "./CoverImg";
+import { activeAnalyser } from "../lib/analyser";
 import { SubtitledVideo } from "./SubtitledVideo";
+import Visualizer from "./Visualizer";
 import { parsePlayerLrc, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
 
 const XLIT_KEY = "mlo.np.xlit";
@@ -17,10 +19,11 @@ const SIZE_KEY = "mlo.np.size"; // sm | md | lg
 const KARAOKE_KEY = "mlo.np.karaoke"; // "1" = word-level karaoke, "0" = line highlight
 const ORBS_KEY = "mlo.np.orbs"; // "1" = animated background
 const VIS_KEY = "mlo.np.vis"; // "1" = background pulses with the beat
+const VIZ_KEY = "mlo.np.viz"; // "1" = frequency-bar visualizer visible
 const ZOOM_KEY = "mlo.np.lyrzoom.v2"; // lyrics zoom multiplier (persisted)
 
 interface Props {
-  current: { path: string; file: string; albumPath: string; artist?: string; album?: string; title?: string };
+  current: { path: string; file: string; albumPath: string; artist?: string; album?: string; title?: string; coverFile?: string | null; albumCover?: string | null };
   queuePos: string;
   playing: boolean;
   time: number;
@@ -88,6 +91,8 @@ export default function NowPlayingView(p: Props) {
   const [karaoke, setKaraoke] = useState(() => localStorage.getItem(KARAOKE_KEY) !== "0");
   const [orbs, setOrbs] = useState(() => localStorage.getItem(ORBS_KEY) !== "0");
   const [vis, setVis] = useState(() => localStorage.getItem(VIS_KEY) !== "0");
+  // Frequency-bar visualizer (fullscreen + sidebar), default on.
+  const [viz, setViz] = useState(() => localStorage.getItem(VIZ_KEY) !== "0");
   const [options, setOptions] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   const [plOpen, setPlOpen] = useState(false);
@@ -96,9 +101,19 @@ export default function NowPlayingView(p: Props) {
   const [tech, setTech] = useState<{ bitrate?: number; sample_rate?: number; bits_per_sample?: number; codec?: string } | null>(null);
   const [lyricsText, setLyricsText] = useState<string | null>(null);
   const [lyricsFor, setLyricsFor] = useState<string | null>(null);
+  // Which track `tags`/`tech` belong to. They are deliberately NOT cleared on
+  // track change: blanking them collapsed the tech line under the title and
+  // everything below jumped vertically on next/previous (the "title shake").
+  // Stale values render until the fresh payload lands; freshness is gated
+  // where wrong info would matter (title fallback, instrumental, BPM).
+  const [tagsFor, setTagsFor] = useState<string | null>(null);
   const [transforms, setTransforms] = useState<Record<string, string[]>>({});
   const inFlight = useRef<Set<string>>(new Set());
   const lineRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  // The PRIMARY text line of each block — with translations/romanization the
+  // outer block also carries sub-lines, and centering the block would push
+  // the sung line off the middle. The scroller centers this element.
+  const primaryRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const lyricsScrollRef = useRef<HTMLDivElement>(null);
   const qc = useQueryClient();
 
@@ -156,7 +171,9 @@ export default function NowPlayingView(p: Props) {
     queryFn: () => api.album(p.current.albumPath),
     staleTime: 5 * 60 * 1000,
   });
-  const coverFile = album?.cover_file ?? null;
+  // Per-track sidecar art wins; the album cover is the fallback — the
+  // now-playing art must match the track, not just the album.
+  const coverFile = p.current.coverFile ?? album?.cover_file ?? p.current.albumCover ?? null;
   const { data: colorData } = useQuery({
     queryKey: ["coverColor", p.current.albumPath],
     queryFn: () => api.coverColor(p.current.albumPath),
@@ -166,18 +183,19 @@ export default function NowPlayingView(p: Props) {
   const rgb = hexToRgbTriplet(colorData?.color) ?? [113, 113, 122];
 
   // ---- background ambience (Apple Music-style, layered) --------------------
-  // No uniform brightness flashing: three independent layers keep the
-  // background alive —
-  //   * the blurred cover slowly "breathes" in scale with a gentle beat pump,
-  //   * a colored bloom ring behind the artwork swells only on the beat,
-  //   * each color orb waves with its own phase, so light washes around.
-  // The envelope is a rAF clock anchored to the track's BPM tag, never tapped
-  // from the audio graph, so the shared <audio> element can never be muted by
-  // a cross-origin taint. Paused, everything eases into a slow breath.
+  // Driven by the ACTUAL audio signal, never a synthetic clock: each frame
+  // reads the shared WebAudio analyser's mean spectrum energy and eases it,
+  // so the bloom/background swell with the music that's really playing.
+  // With no signal (paused, idle, unobservable stream) everything settles
+  // into a barely-there breath — no beat pumping against silence.
+  //   * the blurred cover slowly breathes in scale,
+  //   * a colored bloom ring behind the artwork swells with real energy,
+  //   * each color orb waves with its own phase (CSS keyframes), so light
+  //     washes around.
   const bgRef = useRef<HTMLDivElement>(null);
   const bloomRef = useRef<HTMLDivElement>(null);
   const orbsRef = useRef<HTMLDivElement>(null);
-  const eased = useRef({ bloom: 0 });
+  const eased = useRef({ energy: 0 });
   useEffect(() => {
     if (!vis) {
       // effect disabled → restore the static ambience
@@ -192,31 +210,50 @@ export default function NowPlayingView(p: Props) {
       }
       return;
     }
-    const bpm = parseFloat(String(tags?.BPM ?? "")) || 0;
-    const bps = bpm > 0 ? Math.min(2.2, bpm / 60) : 1.4; // beats per second
     let raf = 0;
+    let freq: Uint8Array | null = null;
     const t0 = performance.now();
     const tick = () => {
       const t = (performance.now() - t0) / 1000;
-      const frac = p.playing ? (t * bps) % 1 : 0;
-      // fast-attack / slow-release envelope on every beat
-      const env = p.playing ? Math.pow(Math.exp(-2.2 * frac), 1.4) : 0.12;
-      // Blurred cover: a very slow breathing zoom. Opacity never changes —
-      // brightness pumping is what read as "flashing" before.
+      // Real signal energy 0..1 from the shared analyser (same source the
+      // visualizer bars draw). Zero when paused or unobservable.
+      let energy = 0;
+      if (p.playing) {
+        try {
+          const an = activeAnalyser();
+          if (an) {
+            if (!freq || freq.length !== an.frequencyBinCount) {
+              freq = new Uint8Array(an.frequencyBinCount);
+            }
+            an.getByteFrequencyData(freq as Uint8Array<ArrayBuffer>);
+            let sum = 0;
+            for (let i = 0; i < freq.length; i++) sum += freq[i];
+            energy = Math.min(1, sum / (freq.length * 255) * 3.2);
+          }
+        } catch {
+          energy = 0;
+        }
+      }
+      // Fast attack / slow release so swells follow transients, not noise.
+      const prev = eased.current.energy;
+      eased.current.energy = energy > prev ? energy : prev + (energy - prev) * 0.06;
+      const env = eased.current.energy;
+      // Blurred cover: a very slow breathing zoom plus a touch of the real
+      // energy. Opacity never changes — brightness pumping is what read as
+      // "flashing" before.
       const breathe = 0.5 + 0.5 * Math.sin(t * 0.21);
       if (bgRef.current) {
         bgRef.current.style.transform = `scale(${(1.08 + 0.06 * breathe + 0.03 * env).toFixed(4)})`;
       }
-      // Bloom: the only beat-visible layer, eased so it swells rather than
-      // snaps, and capped well below flash territory.
-      eased.current.bloom += (env - eased.current.bloom) * 0.06;
+      // Bloom: the only energy-visible layer, eased so it swells rather
+      // than snaps, and capped well below flash territory.
       if (bloomRef.current) {
-        bloomRef.current.style.opacity = String(0.14 + 0.16 * eased.current.bloom);
-        bloomRef.current.style.transform = `scale(${(0.96 + 0.1 * eased.current.bloom).toFixed(4)})`;
+        bloomRef.current.style.opacity = String(0.14 + 0.16 * env);
+        bloomRef.current.style.transform = `scale(${(0.96 + 0.1 * env).toFixed(4)})`;
       }
       // Color field: all motion lives in the CSS keyframes (large travel,
-      // 9-16s loops, per-orb hue). The beat only nudges the field's scale —
-      // never opacity or brightness, so nothing can flash.
+      // 9-16s loops, per-orb hue). The energy only nudges the field's
+      // scale — never opacity or brightness, so nothing can flash.
       if (orbsRef.current) {
         orbsRef.current.style.transform = `scale(${(1 + 0.012 * env).toFixed(4)})`;
       }
@@ -224,22 +261,35 @@ export default function NowPlayingView(p: Props) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [vis, p.playing, tags?.BPM]);
+  }, [vis, p.playing]);
+
+  // Persisted-toggle helper shared by the options menu and inline buttons.
+  const persist = (key: string, v: string) => localStorage.setItem(key, v);
 
   // ---- video mirror (music videos in the queue) ----------------------------
-  // The <audio> element in the player bar owns the sound — a second unmuted
-  // decoder would double the audio — so the picture plays muted and follows
-  // the audio clock with a small drift tolerance.
-  const videoPath = /\.(mp4|webm|m4v)$/i.test(p.current.file || p.current.path) ? p.current.path : null;
+  // The player bar's popout <video> owns the sound — a second unmuted
+  // decoder would double the audio — so the fullscreen picture plays muted
+  // and follows the bar's media clock with a small drift tolerance.
+  // (The bar routes music videos through its popout video, never <audio>,
+  // so the clock is always a real video clock.)
+  const videoPath = isVideoFile(p.current.file || p.current.path) ? p.current.path : null;
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoFailed, setVideoFailed] = useState(false);
+  useEffect(() => setVideoFailed(false), [videoPath]);
   useEffect(() => {
     if (!videoPath) return;
+    // Safety: never let a stray <audio> decoder double the video's sound.
+    for (const a of Array.from(document.querySelectorAll("audio"))) {
+      try { (a as HTMLAudioElement).pause(); } catch { /* ignore */ }
+    }
     let raf = 0;
     const tick = () => {
       const v = videoRef.current;
-      if (v) {
+      if (v && !videoFailed) {
         const t = p.getAudioTime?.() ?? 0;
-        if (isFinite(t) && Math.abs(v.currentTime - t) > 0.35) v.currentTime = t;
+        if (isFinite(t) && t > 0 && Math.abs(v.currentTime - t) > 0.35) {
+          try { v.currentTime = t; } catch { /* ignore */ }
+        }
         if (p.playing && v.paused) v.play().catch(() => {});
         if (!p.playing && !v.paused) v.pause();
       }
@@ -247,7 +297,7 @@ export default function NowPlayingView(p: Props) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [videoPath, p.playing, p.getAudioTime]);
+  }, [videoPath, videoFailed, p.playing, p.getAudioTime]);
 
   // ---- lyrics for the current track --------------------------------------
   // Stored transforms (script 15 tags / .romaji.lrc / .<lang>.lrc sidecars)
@@ -258,8 +308,6 @@ export default function NowPlayingView(p: Props) {
   // the cover jump sizes / flash to the middle on next / previous.
   useEffect(() => {
     let dead = false;
-    setTags(null);
-    setTech(null);
     setSmoothTime(0);
     inFlight.current.clear();
     api
@@ -268,6 +316,7 @@ export default function NowPlayingView(p: Props) {
         if (dead) return;
         setTags(t.tags ?? {});
         setTech((t.tech as typeof tech) ?? null);
+        setTagsFor(p.current.path);
         setLyricsText(typeof t.lyrics === "string" ? t.lyrics : null);
         setLyricsFor(p.current.path);
         const seeded: Record<string, string[]> = {};
@@ -284,6 +333,7 @@ export default function NowPlayingView(p: Props) {
       .catch(() => {
         if (!dead) {
           setTags({});
+          setTagsFor(p.current.path);
           setLyricsFor(p.current.path);
         }
       });
@@ -298,6 +348,7 @@ export default function NowPlayingView(p: Props) {
   // payload arrives they are stale — kept for layout stability, dimmed,
   // never highlighted and never sent to the AI.
   const staleLyrics = lyricsFor !== p.current.path;
+  const tagsStale = tagsFor !== p.current.path;
   const lines: LrcLine[] = useMemo(
     () => (lyricsText && !instrumental ? parsePlayerLrc(lyricsText) : []),
     [lyricsText, instrumental]
@@ -388,7 +439,7 @@ export default function NowPlayingView(p: Props) {
     // programmatically scrollable), which shifts the whole layout and leaves
     // the view "stuck" — half filled, impossible to scroll back.
     const c = lyricsScrollRef.current;
-    const el = lineRefs.current[activeLine];
+    const el = primaryRefs.current[activeLine] ?? lineRefs.current[activeLine];
     if (!c || !el) return;
     const now = Date.now();
     const animate = now - glideMarkRef.current < 1500 || now - seekMarkRef.current > 600;
@@ -420,7 +471,6 @@ export default function NowPlayingView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plOpen]);
 
-  const persist = (key: string, v: string) => localStorage.setItem(key, v);
   const toggleOpt = (which: "xlit" | "trans") => {
     if (which === "xlit") {
       const v = !showXlit;
@@ -511,6 +561,9 @@ export default function NowPlayingView(p: Props) {
             target never shifts under it. Weight is constant for the same
             reason (weight changes re-flow glyph widths). */}
         <div
+          ref={(el) => {
+            primaryRefs.current[i] = el;
+          }}
           className={`${size.active} leading-snug ${synced ? `${LINE_EASE} font-semibold` : ""} ${
             isActive ? "text-white" : synced ? "text-zinc-500" : "text-zinc-200"
           }`}
@@ -540,10 +593,14 @@ export default function NowPlayingView(p: Props) {
     );
   };
 
-  const title = p.current.title || tags?.TITLE || p.current.file.replace(/\.[^.]+$/, "");
+  // Freshness-gated tag fallbacks: while the next track's payload loads,
+  // never substitute the PREVIOUS track's tag values into these strings —
+  // the queue already knows title/artist/album, so prefer those.
+  const freshTags = tagsStale ? undefined : tags;
+  const title = p.current.title || freshTags?.TITLE || p.current.file.replace(/\.[^.]+$/, "");
   const albumArtist =
-    album?.album_artist || tags?.ALBUMARTIST || p.current.artist || p.current.albumPath.split("/").pop() || "";
-  const albumName = album?.meta?.ALBUM || p.current.album || tags?.ALBUM || "";
+    album?.album_artist || freshTags?.ALBUMARTIST || p.current.artist || p.current.albumPath.split("/").pop() || "";
+  const albumName = album?.meta?.ALBUM || p.current.album || freshTags?.ALBUM || "";
   const upNext = queue[index + 1] as
     | { title?: string; artist?: string; file: string }
     | undefined;
@@ -615,6 +672,17 @@ export default function NowPlayingView(p: Props) {
             <ChevronDown className="h-5 w-5" />
           </button>
           <div className="flex items-center gap-1">
+            <button
+              className={`p-2 rounded-lg hover:bg-white/10 ${viz ? "text-accent" : "text-zinc-400 hover:text-white"}`}
+              onClick={() => {
+                const v = !viz;
+                setViz(v);
+                persist(VIZ_KEY, v ? "1" : "0");
+              }}
+              title="Toggle visualizer bars"
+            >
+              <AudioLines className="h-5 w-5" />
+            </button>
             {p.queuePos && (
               <span className="text-[10px] font-mono text-zinc-500 mr-1 tabular-nums" title="Queue position">
                 {p.queuePos}
@@ -721,6 +789,19 @@ export default function NowPlayingView(p: Props) {
                     />
                     Background pulse
                   </label>
+                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer text-xs text-zinc-300">
+                    <input
+                      type="checkbox"
+                      className="accent-[var(--accent)]"
+                      checked={viz}
+                      onChange={() => {
+                        const v = !viz;
+                        setViz(v);
+                        persist(VIZ_KEY, v ? "1" : "0");
+                      }}
+                    />
+                    Visualizer bars
+                  </label>
                   <div className="text-[10px] text-zinc-600 px-2 pt-1">
                     AI translation uses Settings → AI; results are cached per track.
                   </div>
@@ -734,26 +815,36 @@ export default function NowPlayingView(p: Props) {
           </div>
         </div>
 
-        {/* main area */}
-        <div className={`flex-1 min-h-0 flex flex-col lg:flex-row items-center gap-8 px-8 pb-4 overflow-clip ${layoutHasLyrics ? "" : "lg:justify-center"}`}>
+        {/* main area — music videos get a cinema layout: big 16:9 picture
+            centered, no lyrics column, transport underneath */}
+        <div className={`flex-1 min-h-0 flex flex-col lg:flex-row items-center gap-8 px-8 pb-4 overflow-clip ${videoPath ? "justify-center" : layoutHasLyrics ? "" : "lg:justify-center"}`}>
           {/* left column: cover, track/album/artist, all playback controls —
               centered as a group inside the full column height */}
           <div
             className={`flex flex-col items-center justify-center gap-4 shrink-0 min-w-0 ${
-              layoutHasLyrics ? "lg:w-[42%] lg:h-full" : ""
+              videoPath ? "w-full max-w-5xl" : layoutHasLyrics ? "lg:w-[42%] lg:h-full" : ""
             }`}
           >
             {videoPath ? (
-              /* music video: muted picture synced to the shared audio clock,
-                 subtitles wired in; click toggles playback */
+              /* music video: muted mirror of the player bar's popout decoder
+                 (which owns the sound), subtitles wired in; the transport
+                 below drives the real decoder so every button works */
+              videoFailed ? (
+                <div className="aspect-video w-full max-w-4xl rounded-2xl bg-black border border-white/10 flex items-center justify-center p-6 text-center text-xs text-zinc-400">
+                  This video can't play in the browser. Remux it (album page → Remux videos) or open the file externally.
+                </div>
+              ) : (
               <SubtitledVideo
+                key={videoPath}
                 path={videoPath!}
                 muted
                 controls={false}
                 videoRef={videoRef}
                 onClick={p.onTogglePlay}
-                className="relative aspect-video w-72 lg:w-[min(30rem,50vh)] rounded-2xl bg-black border border-white/10 shadow-2xl object-contain cursor-pointer"
+                onError={() => setVideoFailed(true)}
+                className="relative aspect-video w-full max-w-4xl rounded-2xl bg-black border border-white/10 shadow-2xl object-contain cursor-pointer"
               />
+              )
             ) : (
               <div className="relative">
                 {orbs && (
@@ -769,32 +860,30 @@ export default function NowPlayingView(p: Props) {
                 />
               </div>
             )}
+            {/* Every text row keeps a fixed height and is ALWAYS rendered —
+                blanking a row while the next track's tags load is what made
+                the block (and the title itself) shake on next/previous. */}
             <div className="text-center w-full max-w-[26rem] min-w-0">
-              <div className="text-2xl font-bold text-white truncate" title={title}>
-                {title}
+              <div className="h-8 flex items-center justify-center" title={title}>
+                <div className="text-2xl font-bold text-white truncate">{title}</div>
               </div>
-              <div className="text-zinc-300 mt-1 truncate" title={albumArtist}>
-                {albumArtist}
+              <div className="h-6 mt-1 flex items-center justify-center" title={albumArtist}>
+                <div className="text-zinc-300 truncate">{albumArtist}</div>
               </div>
-              {albumName && (
-                <div className="text-xs text-zinc-500 mt-0.5 truncate" title={albumName}>
-                  {albumName}
-                </div>
-              )}
-              {techStr && (
-                <div className="text-[11px] text-zinc-500 mt-1 font-mono" title={techStr}>
-                  {techStr}
-                </div>
-              )}
-              {upNextLabel && (
-                <div
-                  className="text-[11px] text-zinc-500 mt-2.5 flex items-center justify-center gap-1.5 min-w-0"
-                  title={upNextLabel}
-                >
-                  <span className="text-[9px] uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
-                  <span className="text-zinc-400 truncate">{upNextLabel}</span>
-                </div>
-              )}
+              <div className="h-4 mt-0.5 flex items-center justify-center" title={albumName}>
+                <div className="text-xs text-zinc-500 truncate">{albumName}</div>
+              </div>
+              <div className="h-4 mt-1 flex items-center justify-center" title={techStr}>
+                <div className="text-[11px] text-zinc-500 font-mono truncate">{techStr}</div>
+              </div>
+              <div className="h-4 mt-2.5 flex items-center justify-center gap-1.5 min-w-0" title={upNextLabel}>
+                {upNextLabel ? (
+                  <>
+                    <span className="text-[9px] uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
+                    <span className="text-[11px] text-zinc-400 truncate">{upNextLabel}</span>
+                  </>
+                ) : null}
+              </div>
             </div>
 
             {/* transport + like + add to playlist — directly under the cover */}
@@ -885,7 +974,7 @@ export default function NowPlayingView(p: Props) {
                 step={0.05}
                 value={Math.min(dispTime, duration || 0)}
                 onChange={(e) => p.onSeek(Number(e.target.value))}
-                className="flex-1 min-w-0"
+                className="flex-1 min-w-0 seek-fat"
                 title="Seek"
               />
               <span className="w-10 font-mono tabular-nums">{fmtDuration(duration)}</span>
@@ -899,11 +988,19 @@ export default function NowPlayingView(p: Props) {
                   step={0.05}
                   value={vol}
                   onChange={(e) => setVol(Number(e.target.value))}
-                  className="w-20"
+                  className="w-20 seek-fat"
                   title="Volume"
                 />
               </div>
             </div>
+
+            {/* frequency-bar visualizer — the same one the fullscreen view
+                uses; toggle via the button in the top bar or options menu */}
+            {viz && (
+              <div className="w-full max-w-[26rem] px-2">
+                <Visualizer playing={p.playing} className="h-12 w-full" />
+              </div>
+            )}
           </div>
 
           {/* lyrics column — plain, no panel, hugging the right edge; flex-1
@@ -912,7 +1009,7 @@ export default function NowPlayingView(p: Props) {
               outside the scroll pane). While the next track's lyrics load,
               the previous ones stay on screen dimmed instead of collapsing
               the layout (which flashed the cover to the middle). */}
-          {layoutHasLyrics && (
+          {!videoPath && layoutHasLyrics && (
             <div className="flex-1 min-h-0 w-full lg:h-full flex flex-col max-w-3xl lg:max-w-none lg:flex-none lg:w-[56%] lg:ml-auto">
               <div
                 ref={lyricsScrollRef}

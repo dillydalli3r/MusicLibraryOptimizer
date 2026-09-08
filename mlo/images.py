@@ -2300,6 +2300,22 @@ def run_process_images(config):
             ))
 
         else:
+            # Default cover policy: covers should end up as .jpg (1200x1200
+            # 90% per defaults). When convert-to-JPEG is on, route cover
+            # images from other formats (PNG/JXL/WEBP/...) through the
+            # JPEG converter instead of optimizing them in place, so e.g. a
+            # cover.png becomes cover.jpg. Non-cover images keep their
+            # lossless in-place path.
+            if convert_to_jpeg and ext not in (".jpg", ".jpeg"):
+                _base = os.path.splitext(os.path.basename(f).lower())[0]
+                _is_coverish = _renames(f) or _base in ("cover", "front", "folder") or ("cover" in _base or "front" in _base)
+                if _is_coverish:
+                    tasks.append((
+                        _process_convert_image,
+                        (f, ".jpg", _renames(f), config),
+                        f,
+                    ))
+                    continue
             if ext in (".jpg", ".jpeg"):
                 if ljt:
                     tasks.append((

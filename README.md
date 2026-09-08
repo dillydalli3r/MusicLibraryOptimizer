@@ -1,10 +1,15 @@
-# Music Library Optimizer v2
+# la musica
 
-A modern web-based music library optimizer. Built on the proven `mlo` engine
-(grading, auditing, FLAC/image optimization, CUE/lyrics formatting,
-AccurateRip, **lossless video remuxing**) with a React UI, playback of music
-*and* music videos, playlists, MusicBrainz / LRCLIB / RateYourMusic
-integration, and an import wizard.
+**la musica** (formerly Music Library Optimizer) — a modern web-based music
+library manager and player. Built on the proven `mlo` engine (grading,
+auditing, FLAC/image optimization, CUE/lyrics formatting, AccurateRip,
+**lossless video remuxing**) with a React UI, playback of music *and* music
+videos, playlists, MusicBrainz / LRCLIB / RateYourMusic integration, and a
+Soulseek auto-importer.
+
+All app state (config, playlists, favourites, the beets library, the
+Soulseek config) lives in a single `.data` folder inside your music
+directory — one folder to back up or carry between machines.
 
 Grading and auditing own all tag writes — there is no manual tag editor by
 design. Album and per-track cover art are fully supported (upload, sidecar

@@ -15,7 +15,7 @@ import httpx
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 LRCLIB_BASE = "https://lrclib.net/api"
-USER_AGENT = "la-musica/2.0 (https://github.com/dillydalli3r/MusicLibraryOptimizer)"
+USER_AGENT = "la-musica/2.0 (https://github.com/dillydalli3r/la-musica)"
 
 _last_request = 0.0
 _mb_lock = threading.Lock()
@@ -70,27 +70,119 @@ def mb_get(endpoint, params=None, timeout=30.0, retries=3):
 # --------------------------------------------------------------------------- #
 _BROWSE_CACHE: dict = {}
 _BROWSE_LOCK = threading.Lock()
-_BROWSE_TTL = 600.0
+_INFLIGHT: dict = {}
+# MB data moves slowly; an hour of TTL keeps repeat views instant (and well
+# within the 1 req/s etiquette) without serving anything meaningfully stale.
+_BROWSE_TTL = 1800.0
 
 
 def mb_get_cached(endpoint, params=None, timeout=30.0, retries=5):
+    """Cached MB GET with stale-while-revalidate and single-flight.
+
+    A fresh cached copy returns instantly. A stale copy ALSO returns
+    instantly while a background thread refreshes it — only genuinely
+    unknown payloads block on the rate-limited network, and identical
+    concurrent requests share one flight instead of queueing several
+    1-second-spaced calls."""
     key = (endpoint, tuple(sorted((k, str(v)) for k, v in (params or {}).items())))
     now = time.time()
     with _BROWSE_LOCK:
         hit = _BROWSE_CACHE.get(key)
-        if hit and now - hit[0] < _BROWSE_TTL:
+        flight = _INFLIGHT.get(key)
+    if hit and now - hit[0] < _BROWSE_TTL:
+        return hit[1]
+    if hit and flight is None:
+        # serve stale, refresh in the background
+        def _refresh():
+            try:
+                data = mb_get(endpoint, params, timeout=timeout, retries=retries)
+                with _BROWSE_LOCK:
+                    _BROWSE_CACHE[key] = (time.time(), data)
+            except Exception:
+                pass  # keep the stale copy on refresh failure
+            finally:
+                with _BROWSE_LOCK:
+                    _INFLIGHT.pop(key, None)
+
+        with _BROWSE_LOCK:
+            if _INFLIGHT.get(key) is None:
+                _INFLIGHT[key] = threading.Event()
+            else:
+                return hit[1]  # someone else is already refreshing
+        threading.Thread(target=_refresh, daemon=True).start()
+        return hit[1]
+    if flight is not None:
+        # an identical request is already on the wire — wait for it instead
+        # of queueing a second rate-limited call behind it
+        flight.wait(timeout=45)
+        with _BROWSE_LOCK:
+            hit = _BROWSE_CACHE.get(key)
+        if hit:
             return hit[1]
-    # MusicBrainz enforces ~1 req/s and answers occasional 503s even below
-    # it — browse/search calls get a couple of extra polite retries so a
-    # transient limit doesn't surface as an error in the UI.
-    data = mb_get(endpoint, params, timeout=timeout, retries=retries)
+        raise RuntimeError("concurrent MusicBrainz request did not complete")
     with _BROWSE_LOCK:
-        _BROWSE_CACHE[key] = (now, data)
+        flight = _INFLIGHT.get(key)
+        if flight is None:
+            flight = _INFLIGHT[key] = threading.Event()
+    try:
+        data = mb_get(endpoint, params, timeout=timeout, retries=retries)
+    finally:
+        with _BROWSE_LOCK:
+            _INFLIGHT.pop(key, None)
+        flight.set()
+    with _BROWSE_LOCK:
+        _BROWSE_CACHE[key] = (time.time(), data)
         # keep the cache from growing without bound
-        if len(_BROWSE_CACHE) > 300:
-            for k in list(_BROWSE_CACHE)[:100]:
+        if len(_BROWSE_CACHE) > 600:
+            for k in list(_BROWSE_CACHE)[:200]:
                 _BROWSE_CACHE.pop(k, None)
     return data
+
+
+def detect_mbid(mbid):
+    """Which MusicBrainz entity kind does this MBID belong to?
+
+    Tries a minimal lookup per browsable entity (cache-shared with the
+    entity pages) and reports the first hit — lets the UI route a pasted
+    bare ID without the user picking a type."""
+    for entity in MB_ENTITIES:
+        try:
+            data = mb_get_cached(f"{entity}/{mbid}", {"fmt": "json"})
+        except Exception:
+            continue
+        return {
+            "type": entity,
+            "id": data.get("id") or mbid,
+            "title": data.get("title") or data.get("name") or "",
+        }
+    raise LookupError("no MusicBrainz entity found for this ID")
+
+
+def _browse_collect(endpoint, extra_params, list_key, count_key, limit=300, offset=0):
+    """Browse rows across MusicBrainz's 100-per-request pages.
+
+    Browse has NO server-side sort, so a single arbitrary 100-row slice
+    misrepresents a discography (one page can be all albums, the next all
+    singles) and any date ordering would be a lie. This walks the pages
+    (still 1 req/s) up to `limit` rows starting at `offset` so the caller
+    can sort and filter over an honest window. Returns (rows, total)."""
+    items = []
+    pos = offset
+    total = None
+    while pos < offset + limit:
+        data = mb_get_cached(
+            endpoint,
+            {**extra_params, "limit": min(100, offset + limit - pos), "offset": pos, "fmt": "json"},
+        )
+        batch = data.get(list_key) or []
+        total = data.get(count_key) or total
+        items.extend(batch)
+        pos += len(batch)
+        if not batch or pos >= min(total or 0, offset + limit):
+            break
+    if total is None:
+        total = len(items)
+    return items, total
 
 
 def _mbid(value):
@@ -282,7 +374,7 @@ def search_releases(query, limit=10, mode="release"):
     elif mode == "track":
         q = f'track:"{q}"'
     try:
-        data = mb_get("release", {"query": q, "limit": limit, "fmt": "json"})
+        data = mb_get_cached("release", {"query": q, "limit": limit, "fmt": "json"})
         out = []
         for r in data.get("releases", []):
             credit = "".join(
@@ -311,7 +403,7 @@ def search_releases(query, limit=10, mode="release"):
 
 def search_artists(query, limit=5):
     try:
-        data = mb_get("artist", {"query": query, "limit": limit, "fmt": "json"})
+        data = mb_get_cached("artist", {"query": query, "limit": limit, "fmt": "json"})
         return [{"id": a.get("id"), "name": a.get("name"), "type": a.get("type")}
                 for a in data.get("artists", [])]
     except Exception as e:
@@ -344,12 +436,26 @@ def _media_summary(node):
     return " + ".join((f"{n}×{f}" if n > 1 else f) for f, n in parts)
 
 
-def search_mb(entity, query, limit=12, mode="free"):
+def _release_counts(node):
+    """Track/disc numbers for a release: (total, per-disc breakdown).
+
+    The breakdown keeps one number per medium joined with ' + ' — a two-disc
+    edition with 10 then 11 tracks reads '10 + 11'; a single disc collapses
+    to its plain count."""
+    counts = [(m.get("track-count") or 0) for m in node.get("media") or []]
+    total = sum(counts)
+    breakdown = " + ".join(str(c) for c in counts) if len(counts) > 1 else str(total)
+    return total, breakdown
+
+
+def search_mb(entity, query, limit=100, mode="free", offset=0):
     """Normalized MB search rows for the four browsable entities.
 
     mode="free" is the plain full-text search; for releases, mode="catno" /
     "barcode" search by catalog number / barcode (catalog numbers like
-    'SRCS 8757' are how pressings are identified)."""
+    'SRCS 8757' are how pressings are identified). Returns {rows, total} —
+    total is MusicBrainz's match count so the UI can offer deeper paging
+    (searches cap at 100 rows per request)."""
     if entity not in MB_ENTITIES:
         raise ValueError("entity must be artist, release-group, release or recording")
     q = query
@@ -357,7 +463,7 @@ def search_mb(entity, query, limit=12, mode="free"):
         q = f'catno:"{query}"'
     elif entity == "release" and mode == "barcode":
         q = f"barcode:{query}"
-    data = mb_get_cached(entity, {"query": q, "limit": limit, "fmt": "json"})
+    data = mb_get_cached(entity, {"query": q, "limit": limit, "offset": offset, "fmt": "json"})
     # MB search responses use plural collection keys
     key = {"artist": "artists", "release-group": "release-groups",
            "release": "releases", "recording": "recordings"}[entity]
@@ -409,14 +515,20 @@ def search_mb(entity, query, limit=12, mode="free"):
                 "first_release_date": item.get("first-release-date") or "",
             })
         rows.append(row)
-    return rows
+    return {"rows": rows, "total": data.get("count") or len(rows)}
 
 
-def artist_browse(mbid):
-    """Artist page: identity + genres + discography (release groups)."""
-    data = mb_get_cached(
-        f"artist/{mbid}",
-        {"inc": "release-groups+genres+artist-credits", "fmt": "json"},
+def artist_browse(mbid, limit=300, offset=0):
+    """Artist page: identity + genres + full discography (release groups).
+
+    Discography comes from the *browse* endpoint (release-group?artist=…)
+    rather than a lookup's inc= subquery — lookups silently cap the related
+    list. Pages are collected (up to `limit`) so type filters and the
+    chronological order are honest across MusicBrainz's unsorted pages."""
+    data = mb_get_cached(f"artist/{mbid}", {"inc": "genres", "fmt": "json"})
+    rgs, total = _browse_collect(
+        "release-group", {"artist": mbid}, "release-groups", "release-group-count",
+        limit=limit, offset=offset,
     )
     area = data.get("area") or {}
     return {
@@ -431,6 +543,8 @@ def artist_browse(mbid):
         ],
         "genres": _title_genres(data),
         "tags": [t.get("name") for t in (data.get("tags") or [])[:8]],
+        "total": total,
+        "offset": offset,
         "release_groups": [
             {
                 "id": rg.get("id"),
@@ -440,19 +554,45 @@ def artist_browse(mbid):
                 "first_release_date": rg.get("first-release-date") or "",
             }
             for rg in sorted(
-                data.get("release-groups") or [],
+                rgs,
                 key=lambda g: g.get("first-release-date") or "9999",
             )
         ],
     }
 
 
-def release_group_browse(mbid):
-    """Release-group page: identity + its releases (editions)."""
+def release_group_browse(mbid, limit=300, offset=0):
+    """Release-group page: identity + its releases (editions), each with
+    media so every row carries format, disc count and its '10 + 11' track
+    breakdown. Releases come from the browse endpoint (collected across
+    pages) because the lookup's release subquery both truncates and omits
+    media."""
     data = mb_get_cached(
         f"release-group/{mbid}",
-        {"inc": "artist-credits+releases+genres", "fmt": "json"},
+        {"inc": "artist-credits+genres", "fmt": "json"},
     )
+    rel_rows, total = _browse_collect(
+        "release", {"release-group": mbid, "inc": "media"}, "releases", "release-count",
+        limit=limit, offset=offset,
+    )
+    releases = []
+    for r in sorted(
+        rel_rows,
+        key=lambda r: r.get("date") or "9999",
+    ):
+        track_count, track_breakdown = _release_counts(r)
+        releases.append({
+            "id": r.get("id"),
+            "title": r.get("title"),
+            "date": r.get("date") or "",
+            "country": r.get("country") or "",
+            "status": r.get("status") or "",
+            "formats": _media_summary(r),
+            "disc_count": len(r.get("media") or []),
+            "track_count": track_count,
+            "track_breakdown": track_breakdown,
+            "barcode": r.get("barcode") or "",
+        })
     return {
         "id": data.get("id"),
         "title": data.get("title"),
@@ -465,31 +605,43 @@ def release_group_browse(mbid):
         "secondary_types": data.get("secondary-types") or [],
         "genres": _title_genres(data),
         "first_release_date": data.get("first-release-date") or "",
-        "releases": [
-            {
-                "id": r.get("id"),
-                "title": r.get("title"),
-                "date": r.get("date") or "",
-                "country": r.get("country") or "",
-                "status": r.get("status") or "",
-                "formats": _media_summary(r),
-                "track_count": sum((m.get("track-count") or 0) for m in r.get("media") or []),
-                "barcode": r.get("barcode") or "",
-            }
-            for r in sorted(
-                data.get("releases") or [],
-                key=lambda r: r.get("date") or "9999",
-            )
-        ],
+        "total": total,
+        "offset": offset,
+        "releases": releases,
     }
 
 
-def recording_browse(mbid):
-    """Recording ('track') page: identity + releases carrying it."""
+def recording_browse(mbid, limit=300, offset=0):
+    """Recording ('track') page: identity + releases carrying it (browsed,
+    with media, for the same reasons as the release-group page)."""
     data = mb_get_cached(
         f"recording/{mbid}",
-        {"inc": "artist-credits+releases+release-groups+isrcs+genres", "fmt": "json"},
+        {"inc": "artist-credits+isrcs+genres", "fmt": "json"},
     )
+    rel_rows, total = _browse_collect(
+        "release",
+        {"recording": mbid, "inc": "media+artist-credits+release-groups"},
+        "releases", "release-count",
+        limit=limit, offset=offset,
+    )
+    releases = []
+    for r in sorted(
+        rel_rows,
+        key=lambda r: r.get("date") or "9999",
+    ):
+        track_count, track_breakdown = _release_counts(r)
+        releases.append({
+            "id": r.get("id"),
+            "title": r.get("title"),
+            "date": r.get("date") or "",
+            "country": r.get("country") or "",
+            "status": r.get("status") or "",
+            "formats": _media_summary(r),
+            "disc_count": len(r.get("media") or []),
+            "track_count": track_count,
+            "track_breakdown": track_breakdown,
+            "release_group": (r.get("release-group") or {}).get("primary-type") or "",
+        })
     return {
         "id": data.get("id"),
         "title": data.get("title"),
@@ -501,21 +653,9 @@ def recording_browse(mbid):
         "length": data.get("length"),
         "genres": _title_genres(data),
         "isrcs": [i.get("isrc") for i in data.get("isrcs") or [] if i.get("isrc")],
-        "releases": [
-            {
-                "id": r.get("id"),
-                "title": r.get("title"),
-                "date": r.get("date") or "",
-                "country": r.get("country") or "",
-                "status": r.get("status") or "",
-                "formats": _media_summary(r),
-                "release_group": (r.get("release-group") or {}).get("primary-type") or "",
-            }
-            for r in sorted(
-                data.get("releases") or [],
-                key=lambda r: r.get("date") or "9999",
-            )
-        ],
+        "total": total,
+        "offset": offset,
+        "releases": releases,
     }
 
 
@@ -632,6 +772,47 @@ def lrclib_get(artist, track, album=None, duration=None):
                 return pool[0]
         return None
     raise httpx.HTTPStatusError(f"lrclib get {r.status_code}", request=r.request, response=r)
+
+def lrclib_publish(artist, track, album, duration, plain=None, synced=None):
+    """Submit lyrics to LRCLIB (POST /api/publish).
+
+    At least one of plain/synced must be non-empty; both may be sent.
+    Returns (ok, message). The public API requires a descriptive
+    User-Agent, which _LRCLIB_HEADERS already carries."""
+    artist = (artist or "").strip()
+    track = (track or "").strip()
+    album = (album or "").strip()
+    plain = (plain or "").strip() or None
+    synced = (synced or "").strip() or None
+    if not artist or not track:
+        return False, "artist and track name are required"
+    if not plain and not synced:
+        return False, "nothing to publish — add plain or synced lyrics"
+    try:
+        duration = int(duration or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    if duration <= 0:
+        return False, "track duration is required for publishing"
+    params = {
+        "artist_name": artist,
+        "track_name": track,
+        "album_name": album or track,
+        "duration": duration,
+    }
+    body = {"plainLyrics": plain or "", "syncedLyrics": synced or ""}
+    try:
+        r = httpx.post(f"{LRCLIB_BASE}/publish", params=params, json=body,
+                       headers=_LRCLIB_HEADERS, timeout=20)
+    except Exception as e:
+        return False, f"publish failed: {e}"
+    if r.status_code in (200, 201):
+        return True, "published to LRCLIB — thank you for contributing!"
+    if r.status_code == 429:
+        return False, "LRCLIB is rate-limiting this IP — try again in a minute"
+    detail = (r.text or "").strip()[:200]
+    return False, f"LRCLIB refused ({r.status_code}): {detail or 'unknown error'}"
+
 
 
 # --------------------------------------------------------------------------- #

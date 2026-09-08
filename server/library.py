@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from mlo.stats import _find_albums, worker_count
 from mlo.grader import _grade_album
 from mlo.audio import AudioFile
-from mlo.paths import get_sidecar_cover_path
+from mlo.paths import LIB_VIDEO_EXTS, get_sidecar_cover_path
 from server import tagcache
 
 # Tags surfaced per track for sorting/filtering on the frontend.
@@ -26,14 +26,19 @@ TRACK_TAGS = [
     "ALBUMARTISTSORT", "ORIGINALDATE", "RELEASETYPE", "RELEASECOUNTRY",
     "CATALOGNUMBER", "LABEL", "TRACKTOTAL", "DISCTOTAL",
     "COMPOSER", "COPYRIGHT", "ISRC", "LYRICIST", "REMIXER",
+    "DYNAMIC RANGE",
+    # read on every track so _album_meta can lift the album-level value
+    "ALBUM DYNAMIC RANGE",
 ]
 
 # Tags read from the first track to represent album-level metadata.
 ALBUM_LEVEL_TAGS = [
     "ALBUM", "ALBUMARTIST", "ARTIST", "DATE", "ORIGINALDATE", "ORIGINALYEAR",
+    "ITUNESADVISORY", "ALBUMITUNESADVISORY",
     "MUSICBRAINZ_ALBUMID", "MUSICBRAINZ_ALBUMARTISTID",
     "MUSICBRAINZ_RELEASEGROUPID",
     "RATEYOURMUSIC_ALBUM", "MEDIA", "CATALOGNUMBER", "LABEL",
+    "ALBUM DYNAMIC RANGE",
 ]
 
 TECH_ATTRS = ("length", "bitrate", "sample_rate", "bits_per_sample", "channels")
@@ -100,6 +105,9 @@ def _enrich_track(tr, album_dir):
             disc = f_disc
     tr["discnumber"] = disc
     tr["tracknumber"] = num
+    # Music-video containers ride the same track shape; the UI uses this
+    # to offer the video player / remux+tag tooling instead of the audio path.
+    tr["is_video"] = p.lower().endswith(LIB_VIDEO_EXTS)
     # Per-track audit/grade convenience fields for sorting.
     tr["grade_pass"] = not tr.get("issues")
     tr["lyrics_present"] = bool(tr.get("lyrics_embedded") or tr.get("lyrics_lrc"))

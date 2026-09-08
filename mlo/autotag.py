@@ -75,6 +75,8 @@ def run_auto_tagging(config):
     if config.get("auto_advisory", True):
         log("  ALBUMITUNESADVISORY: from per-track ITUNESADVISORY "
             "(any explicit -> 1, else any safe -> 2, else 0)")
+    if config.get("auto_zero_advisory_for_instrumental", False):
+        log("  ITUNESADVISORY: zeroed on instrumentals (auto_zero_advisory_for_instrumental)")
     if config.get("auto_instrumental", True):
         log("  INSTRUMENTAL: 0 when lyrics present (no-lyrics tracks left "
             "untouched)")
@@ -82,7 +84,10 @@ def run_auto_tagging(config):
     force = config.get("force_auto_tag", False)
     do_advisory = config.get("auto_advisory", True)
     do_instrumental = config.get("auto_instrumental", True)
-    do_zero_advisory_for_instrumental = config.get("auto_zero_advisory_for_instrumental", True)
+    # Advisory zero-fill is OFF by default: a missing ITUNESADVISORY means
+    # "unrated" and stays missing — only an explicit setting turns the
+    # instrumental zero-fill back on.
+    do_zero_advisory_for_instrumental = config.get("auto_zero_advisory_for_instrumental", False)
 
     if config.get("targets") is not None:
         target_files = _collect_targets(config["targets"], AUDIO_EXTS)

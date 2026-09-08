@@ -66,6 +66,10 @@ export const api = {
     }),
 
   streamUrl: (path: string) => `${API}/stream?path=${encodeURIComponent(path)}`,
+  /** Library music-video stream: direct bytes by default (?transcode=1 pipes
+   * MPEG-2/VC-1/etc. through ffmpeg into playable H.264/AAC MP4). */
+  videoStreamUrl: (path: string, transcode = false) =>
+    `${API}/videos/stream?path=${encodeURIComponent(path)}${transcode ? "&transcode=1" : ""}`,
   subtitles: (path: string) =>
     json<{ muxed: { n: number; codec: string; title: string }[]; sidecars: { file: string; name: string; language: string | null }[] }>(
       `${API}/videos/subtitles?path=${encodeURIComponent(path)}`
@@ -74,6 +78,11 @@ export const api = {
     `${API}/videos/subtitle?path=${encodeURIComponent(path)}${sidecar ? `&sidecar=${encodeURIComponent(sidecar)}` : ""}${typeof n === "number" && n >= 0 ? `&n=${n}` : ""}`,
   // Read-only tag view (tag writing was removed; grading scripts own writes).
   tags: (path: string) => json<any>(`${API}/tags?path=${encodeURIComponent(path)}`),
+  // ReplayGain preamp for playback loudness matching (null when untagged).
+  replaygain: (path: string) =>
+    json<{ path: string; gain: number | null; peak: number | null }>(
+      `${API}/replaygain?path=${encodeURIComponent(path)}`
+    ),
   lyricsEmbed: (path: string, lyrics: string) =>
     json<{ ok: boolean }>(`${API}/lyrics/embed`, {
       method: "POST",
@@ -85,6 +94,18 @@ export const api = {
       `${API}/videos/scan${path ? `?path=${encodeURIComponent(path)}` : ""}`,
       undefined,
       60000
+    ),
+  // Tag a music video (TITLE/ARTIST/DISCNUMBER/...). Non-MKV containers are
+  // remuxed losslessly to MKV — the response path is the final file.
+  videoTag: (path: string, tags: Record<string, string>) =>
+    json<{ ok: boolean; path: string; renamed: boolean; tech: Record<string, number | string> }>(`${API}/videos/tag`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, tags }),
+    }, 600000),
+  coverInfo: (albumPath: string, coverFile?: string | null) =>
+    json<{ file: string | null; format: string; bytes: number; width: number | null; height: number | null; aspect: string | null; aspect_label: string | null; megapixels: number | null }>(
+      `${API}/cover/info?album=${encodeURIComponent(albumPath)}${coverFile ? `&file=${encodeURIComponent(coverFile)}` : ""}`
     ),
 
   run: (ids: number[], targets?: string[], force?: Record<string, boolean>) =>
@@ -154,12 +175,20 @@ export const api = {
   mbSearchReleases: (q: string, mode: "release" | "track" | "catno" | "barcode" = "release") =>
     json<any[]>(`${API}/mb/search/releases?q=${encodeURIComponent(q)}&mode=${mode}`),
   mbSearchArtists: (q: string) => json<any[]>(`${API}/mb/search/artists?q=${encodeURIComponent(q)}`),
-  // Generic MusicBrainz browser (in-app entity pages)
-  mbSearch: (type: string, q: string, limit = 12, mode: "free" | "catno" | "barcode" = "free") =>
-    json<any[]>(`${API}/mb/search?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}&limit=${limit}&mode=${mode}`),
-  mbArtist: (id: string) => json<any>(`${API}/mb/artist/${id}`),
-  mbReleaseGroup: (id: string) => json<any>(`${API}/mb/release-group/${id}`),
-  mbRecording: (id: string) => json<any>(`${API}/mb/recording/${id}`),
+  // Generic MusicBrainz browser (in-app entity pages). Searches and
+  // discographies page 100 rows at a time — pass offset for "load more".
+  mbSearch: (type: string, q: string, limit = 100, mode: "free" | "catno" | "barcode" = "free", offset = 0) =>
+    json<{ rows: any[]; total: number }>(
+      `${API}/mb/search?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}&mode=${mode}`
+    ),
+  mbArtist: (id: string, offset = 0, limit = 300) =>
+    json<any>(`${API}/mb/artist/${id}?offset=${offset}&limit=${limit}`),
+  mbReleaseGroup: (id: string, offset = 0, limit = 300) =>
+    json<any>(`${API}/mb/release-group/${id}?offset=${offset}&limit=${limit}`),
+  mbRecording: (id: string, offset = 0, limit = 300) =>
+    json<any>(`${API}/mb/recording/${id}?offset=${offset}&limit=${limit}`),
+  mbIdentify: (id: string) =>
+    json<{ type: string; id: string; title: string }>(`${API}/mb/detect/${id}`),
   mbMatch: (albumPath: string, releaseId: string) =>
     json<{ release: import("./types").MBRelease; suggestions: import("./types").MatchSuggestion[] }>(
       `${API}/mb/match`,
@@ -188,6 +217,13 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, lrc }),
     }),
+  // Submit lyrics to LRCLIB on behalf of a track (or with explicit fields).
+  lyricsPublish: (body: { path?: string; artist?: string; track?: string; album?: string; duration?: number; plain?: string; synced?: string }) =>
+    json<{ ok: boolean; message: string }>(`${API}/lyrics/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }, 60000),
   lyricsAi: (
     mode: "clean" | "repair" | "wordsync",
     text: string,
@@ -316,11 +352,13 @@ export const api = {
     ),
 
   soulseekStatus: () =>
-    json<{ installed: boolean; running: boolean; logged_in: boolean | null; server: any; download_dir: string; web_port: number }>(`${API}/soulseek/status`),
+    json<any>(`${API}/soulseek/status`),
   soulseekStart: () =>
-    json<{ ok: boolean; message: string }>(`${API}/soulseek/start`, { method: "POST" }, 60000),
+    json<{ ok: boolean; ready: boolean; message: string; has_credentials: boolean }>(`${API}/soulseek/start`, { method: "POST" }, 30000),
+  soulseekRestart: () =>
+    json<{ ok: boolean }>(`${API}/soulseek/restart`, { method: "POST" }, 60000),
   soulseekStop: () =>
-    json<{ ok: boolean; message: string }>(`${API}/soulseek/stop`, { method: "POST" }, 30000),
+    json<{ ok: boolean; message: string }>(`${API}/soulseek/stop`, { method: "POST" }, 15000),
   soulseekSearch: (query: string) =>
     json<{ id: string }>(`${API}/soulseek/search`, {
       method: "POST",
@@ -341,6 +379,21 @@ export const api = {
     }, 60000),
   soulseekDownloads: () =>
     json<{ downloads: any[] }>(`${API}/soulseek/downloads`, undefined, 30000),
+  // Completed downloads on disk — the review workflow (preview → tag → import).
+  soulseekReview: () =>
+    json<{ dir: string; files: { path: string; file: string; ext: string; is_video: boolean; size: number; mtime: number; user: string; tags: Record<string, string | null>; tech: Record<string, number | string> }[] }>(
+      `${API}/soulseek/review`, undefined, 60000
+    ),
+  soulseekLocalFileUrl: (path: string) => `${API}/soulseek/local-file?path=${encodeURIComponent(path)}`,
+  // Playable video preview — native stream when the browser can decode the
+  // container, otherwise a live ffmpeg transcode (DVD VOB / Blu-ray M2TS).
+  soulseekPreviewStreamUrl: (path: string) => `${API}/soulseek/preview-stream?path=${encodeURIComponent(path)}`,
+  soulseekDeleteLocal: (path: string) =>
+    json<{ ok: boolean }>(`${API}/soulseek/local-file/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }),
   soulseekImport: () =>
     json<{ ok: boolean; moved: string[]; organized?: boolean; organize_error?: string }>(`${API}/soulseek/import`, { method: "POST" }, 120000),
   soulseekAutoStatus: () =>

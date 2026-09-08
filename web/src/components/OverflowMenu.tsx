@@ -60,7 +60,7 @@ export default function OverflowMenu({
       </button>
       {open && (
         <div
-          className={`absolute z-50 mt-1 ${align === "right" ? "right-0" : "left-0"} w-64 max-h-[70vh] overflow-y-auto glass rounded-xl shadow-2xl bg-zinc-950/90 p-1.5`}
+          className={`absolute z-50 mt-1 ${align === "right" ? "right-0" : "left-0"} w-64 max-h-[70vh] overflow-y-auto rounded-xl shadow-2xl bg-zinc-950 border border-white/10 p-1.5`}
           onClick={() => setOpen(false)}
         >
           {visible.map((s, si) => (

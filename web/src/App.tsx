@@ -292,6 +292,18 @@ export default function App() {
               onChange={(e) => onSearch(e.target.value)}
               onFocus={() => setSearchOpen(true)}
               onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+              onKeyDown={(e) => {
+                // Enter hands the query straight to the MusicBrainz browser
+                // (a pasted musicbrainz.org link opens that entity instead)
+                if (e.key !== "Enter" || !query.trim()) return;
+                e.preventDefault();
+                setSearchOpen(false);
+                if (mbLink) {
+                  navigate(`/mb/${mbLink[1] === "release-group" ? "rg" : mbLink[1]}/${mbLink[2]}`);
+                } else {
+                  goMbSearch();
+                }
+              }}
             />
             {searchOpen && query.trim() && (
               <div className="absolute left-0 right-0 top-full mt-1 z-40 rounded-lg border border-border bg-zinc-950/95 backdrop-blur shadow-xl overflow-hidden">

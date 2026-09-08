@@ -26,6 +26,15 @@ const TAG_FAMILIES = ["AUDIT", "LOG_GRADE", "REPLAYGAIN", "DYNAMIC_RANGE", "MEDI
 
 export default function SettingsPage() {
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
+  // open-source credits (vendored tools + packages), rendered at the bottom
+  const { data: credits } = useQuery({
+    queryKey: ["credits"],
+    queryFn: async () => {
+      const r = await fetch("/credits.json");
+      return r.json();
+    },
+    staleTime: Infinity,
+  });
   const qc = useQueryClient();
   const [musicFolder, setMusicFolder] = useState("");
   const [lyricsFormat, setLyricsFormat] = useState("EMBEDDED");
@@ -1197,6 +1206,37 @@ export default function SettingsPage() {
               <Save className="h-4 w-4" /> Save all settings
             </button>
           </div>
+
+          <details className="bg-card rounded-lg border border-border p-4">
+            <summary className="text-sm font-semibold cursor-pointer">Credits & open-source licenses</summary>
+            <p className="text-[11px] text-zinc-500 mt-2">
+              la musica is MIT-licensed (see LICENSE) and stands on the shoulders
+              of these projects — their licenses require this credit, and they
+              deserve it. The full legal text lives in THIRD-PARTY-NOTICES.md.
+            </p>
+            <div className="mt-2 space-y-3">
+              {((credits as { groups?: { title: string; items: { name: string; license: string; url: string }[] }[] } | undefined)?.groups ?? []).map((g) => (
+                <div key={g.title}>
+                  <div className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1">{g.title}</div>
+                  <div className="grid gap-x-4 gap-y-0.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}>
+                    {g.items.map((c: { name: string; license: string; url: string }) => (
+                      <a
+                        key={c.name}
+                        href={c.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-zinc-400 hover:text-accent-soft truncate"
+                        title={`${c.name} — ${c.license}`}
+                      >
+                        <span className="text-zinc-200">{c.name}</span>
+                        <span className="text-zinc-600"> · {c.license}</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
 
           <details className="bg-card rounded-lg border border-border p-4">
             <summary className="text-sm font-semibold cursor-pointer">Raw config (advanced)</summary>

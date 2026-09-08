@@ -34,3 +34,27 @@ export default function CoverImg({
     </div>
   );
 }
+
+/** Track-row cover: per-track sidecar art when the track has its own,
+ * otherwise the album cover as fallback. In album views pass
+ * `albumFallback={null}` to show ONLY track-specific covers (an empty
+ * cell keeps the column aligned when the track has none). */
+export function TrackCover({
+  albumPath,
+  trackCover,
+  albumCover,
+  albumFallback = true,
+  wrapperClass = "h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0",
+}: {
+  albumPath: string;
+  trackCover?: string | null;
+  albumCover?: string | null;
+  albumFallback?: boolean;
+  wrapperClass?: string;
+}) {
+  const file = trackCover ?? (albumFallback ? albumCover ?? undefined : undefined);
+  if (!trackCover && !albumFallback) {
+    return <div className={wrapperClass} aria-hidden style={{ visibility: "hidden" }} />;
+  }
+  return <CoverImg albumPath={albumPath} coverFile={file} wrapperClass={wrapperClass} />;
+}

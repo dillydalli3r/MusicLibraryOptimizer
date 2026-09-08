@@ -30,6 +30,7 @@ export default function ArtistPage() {
       path: t.path, file: t.file, albumPath: a.path,
       artist: a.album_artist || data.display_name || data.name,
       album: a.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
+      coverFile: t.cover_file ?? null, albumCover: a.cover_file ?? null,
     }))
   );
   // Identity links for this artist: MBID from any album's album-artist tag,
@@ -104,8 +105,9 @@ export default function ArtistPage() {
               <Link to={albumRef(al)} className="font-semibold hover:text-accent-soft">
                 {al.meta?.ALBUM ?? al.path.split("/").pop()}
               </Link>
-              <div className="text-xs text-zinc-500 mt-0.5">
+              <div className="text-xs text-zinc-500 mt-0.5 break-words">
                 {al.meta?.DATE ?? "—"} · {al.media} · {al.track_count} tracks
+                {al.meta?.["ALBUM DYNAMIC RANGE"] ? ` · DR${al.meta["ALBUM DYNAMIC RANGE"]}` : ""}
               </div>
             </div>
             <GradeBadge pass={!!al.pass && !auditFails(al.audit_summary)} score={al.grade_pct} audit={al.audit_summary} />

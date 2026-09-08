@@ -68,6 +68,48 @@ input[type="range"]::-moz-range-track {
   background: #27272a;
 }
 
+/* Fat seek/volume sliders (player bar + fullscreen): a tall invisible hit
+   area around a slim visible track, with a big thumb — easy to grab and
+   drag without changing the bar's layout. The INPUT height is the draggable
+   strip; the visible track stays 5px. */
+input[type="range"].seek-fat {
+  height: 28px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].seek-fat::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 3px;
+  background: #3a3a42;
+}
+input[type="range"].seek-fat::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -6.5px;
+  border-radius: 9999px;
+  background: rgb(var(--accent));
+  border: none;
+  box-shadow: 0 0 0 4px rgb(var(--accent) / 0.15);
+}
+input[type="range"].seek-fat:hover::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+input[type="range"].seek-fat::-moz-range-track {
+  height: 5px;
+  border-radius: 3px;
+  background: #3a3a42;
+}
+input[type="range"].seek-fat::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: rgb(var(--accent));
+  border: none;
+  box-shadow: 0 0 0 4px rgb(var(--accent) / 0.15);
+}
+
 /* Keyboard focus is always visible, everywhere. */
 :focus-visible {
   outline: 2px solid rgb(var(--accent) / 0.55);
@@ -145,26 +187,70 @@ body {
     @apply px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-zinc-500 select-none;
   }
   .td {
-    @apply px-3 py-1.5 text-sm text-zinc-300;
+    @apply px-3 py-2.5 text-sm text-zinc-300;
   }
 }
 
+/* Back-and-forth marquee for overflowing titles (player bar): drifts to the
+   end, rests so it stays readable, drifts back. --title-shift carries the
+   overflow distance; the element is only animated when it actually clips. */
+@keyframes title-marquee {
+  0%, 15% { transform: translateX(0); }
+  45%, 55% { transform: translateX(var(--title-shift, 0px)); }
+  85%, 100% { transform: translateX(0); }
+}
+
 /* Borderless data rows: tables blend into the page — the only line is the
-   hairline under the column headers. Hovering lightens the row visibly. */
+   hairline under the column headers. Hovering lightens the row visibly.
+   Rows are roomy by default and NEVER change size on hover: no translate,
+   no scale, no show/hide that reflows — hover-only affordances use opacity
+   on reserved space. */
 .table-row {
   @apply hover:bg-white/[0.06] transition-colors cursor-pointer;
 }
+.table-row > td {
+  vertical-align: middle;
+}
+/* Hover actions must not reflow the row: reserve their space always. */
+.row-hover {
+  opacity: 0;
+}
+.group:hover .row-hover {
+  opacity: 1;
+}
+@media (hover: none) {
+  .row-hover {
+    opacity: 1;
+  }
+}
 
-/* Tables auto-resize with the window: a fixed layout compresses columns
-   instead of pushing the page wide, and clipped content ellipsizes. */
+/* Tables compress with the window but never clip content: text wraps onto
+   extra lines (the row grows) and images/thumb cells keep overflow visible
+   so nothing is cut off. Single-line ellipsis is opt-in per cell via
+   .cell-ellipsis, never the default. */
 table {
   table-layout: fixed;
 }
 table th,
 table td {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  white-space: normal;
+  word-break: break-word;
+}
+.cell-ellipsis {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
+}
+.cell-nowrap {
+  white-space: nowrap !important;
+  word-break: normal !important;
+}
+.cell-cover {
+  overflow: visible !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
 }
 
 /* ------------------------------------------------------------------ */

@@ -205,8 +205,10 @@ def wordsync_lrc(lrc_text):
 # --------------------------------------------------------------------------- #
 import hashlib
 
-_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
-                          "lyrics_ai_cache")
+def _cache_dir():
+    """The lyrics-AI cache lives in <music folder>/.data too."""
+    from mlo.paths import app_data_dir
+    return os.path.join(app_data_dir(), "lyrics_ai_cache")
 
 # Script 15 runs in a worker thread while the fullscreen player may be
 # transforming the same track — serialize cache reads/writes so two writers
@@ -232,7 +234,7 @@ TRANSLATE_SYSTEM = (
 
 def _cache_path(mode, lang, lines):
     h = hashlib.sha1(("|".join([mode, lang] + lines)).encode("utf-8")).hexdigest()
-    return os.path.join(_CACHE_DIR, f"{mode}-{lang}-{h[:20]}.json")
+    return os.path.join(_cache_dir(), f"{mode}-{lang}-{h[:20]}.json")
 
 
 def transform_lines(config, lines, mode, lang=""):
@@ -283,7 +285,7 @@ def transform_lines(config, lines, mode, lang=""):
 
     with _CACHE_LOCK:
         try:
-            os.makedirs(_CACHE_DIR, exist_ok=True)
+            os.makedirs(_cache_dir(), exist_ok=True)
             import json
             with open(_cache_path(mode, lang, lines), "w", encoding="utf-8") as fh:
                 json.dump(out, fh, ensure_ascii=False)

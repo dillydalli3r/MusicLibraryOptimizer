@@ -72,6 +72,32 @@ export function AdvisoryBadge({ value }: { value: string | null | undefined }) {
   return null;
 }
 
+/** iTunes-style advisory mark: a tiny boxed letter shown beside track and
+ * album titles ("square text symbol"). Drawn in CSS so it renders exactly
+ * the same everywhere — emoji squared-letter glyphs vary by platform. */
+export function AdvisoryMark({ value, size = "sm" }: { value: string | null | undefined; size?: "sm" | "md" }) {
+  const box = size === "sm" ? "h-3.5 w-3.5 text-[8px] rounded-[3px]" : "h-4 w-4 text-[9px] rounded-[4px]";
+  if (value === "1")
+    return (
+      <span
+        className={`inline-flex items-center justify-center shrink-0 font-bold leading-none bg-red-600/85 text-white ${box}`}
+        title="Explicit"
+      >
+        E
+      </span>
+    );
+  if (value === "2")
+    return (
+      <span
+        className={`inline-flex items-center justify-center shrink-0 font-bold leading-none border border-emerald-700/70 bg-emerald-900/40 text-emerald-300 ${box}`}
+        title="Clean"
+      >
+        C
+      </span>
+    );
+  return null;
+}
+
 export function InstrumentalBadge({ value }: { value: string | null | undefined }) {
   if (value === "1")
     return <span className="chip bg-zinc-800 text-zinc-400 border border-border">INSTRUMENTAL</span>;

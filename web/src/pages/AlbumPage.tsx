@@ -1,24 +1,29 @@
-﻿import { Fragment, useRef, useState } from "react";
+﻿import { Fragment, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ChevronDown, ChevronRight, CircleAlert, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, ImageUp, Image as ImageIcon, FileVideo, Disc3, CloudDownload, Sparkles, ListPlus, ListStart, ShieldCheck, FileMusic, ListChecks } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, Play, Wand2, Trash2, FolderSync, FolderOpen, BarChart3, ImageUp, Image as ImageIcon, FileVideo, Disc3, CloudDownload, Sparkles, ListPlus, ListStart, ShieldCheck, FileMusic, ListChecks, Info as InfoIcon, X } from "lucide-react";
 import { api } from "../api";
 import { LinkChips, LinkEditorButton } from "../components/Links";
 import { SubtitledVideo } from "../components/SubtitledVideo";
-import { EmptyState, MediaChip } from "../components/Badges";
-import CoverImg from "../components/CoverImg";
+import { EmptyState, MediaChip, AdvisoryMark, GradeBadge } from "../components/Badges";
+import CoverImg, { TrackCover } from "../components/CoverImg";
 import CoverSearchModal from "../components/CoverSearchModal";
 import FavHeart from "../components/FavHeart";
 import { trackRef } from "../lib/refs";
 import { auditFails } from "../lib/status";
+import { isVideoFile } from "../lib/fmt";
 import OverflowMenu from "../components/OverflowMenu";
 import StatsPanel from "../components/StatsPanel";
 import TrackDetails from "../components/TrackDetails";
 import { SortHeader, sortRows, toggleSort, groupByDisc, type SortState } from "../lib/sort.tsx";
+import { ColumnsMenu, ColumnResizer, useColumnPrefs, useColumnWidths, ALBUM_TRACK_COLS, ALBUM_TRACK_COL_W } from "../lib/columns";
 import { toast, useStore } from "../store";
 import { fmtTech, albumTech } from "../lib/fmt";
 import { fmtDuration } from "./LibraryPage";
 import type { Track } from "../types";
+
+/** Whether a track file is a music video container (playable with <video>). */
+export { isVideoFile };
 
 export default function AlbumPage() {
   const { path = "" } = useParams();
@@ -44,8 +49,13 @@ export default function AlbumPage() {
   const [lyricsBusy, setLyricsBusy] = useState(false);
   const [aiSyncBusy, setAiSyncBusy] = useState(false);
   const [issuesOpen, setIssuesOpen] = useState(false);
+  const [coverInfoOpen, setCoverInfoOpen] = useState(false);
   // track checkboxes (and the selection toolbar) only exist in select mode
   const [selectMode, setSelectMode] = useState(false);
+  // tracklist columns: visible set + drag-resized widths, persisted under the
+  // SAME key the library's expanded album rows use — one tracklist, one prefs
+  const [trackCols, toggleTrackCol] = useColumnPrefs("album-tracks", ALBUM_TRACK_COLS);
+  const [trackW, setTrackW, resetTrackW] = useColumnWidths("album-tracks");
   const coverInput = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
 
@@ -125,6 +135,7 @@ export default function AlbumPage() {
     path: t.path, file: t.file, albumPath: data.path,
     artist: data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? undefined,
     album: data.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
+    coverFile: t.cover_file ?? null, albumCover: data.cover_file ?? null,
   }));
 
   /** Append the album to the queue; an empty queue just starts playing. */
@@ -144,6 +155,7 @@ export default function AlbumPage() {
         path: t.path, file: t.file, albumPath: data.path,
         artist: data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? undefined,
         album: data.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
+        coverFile: t.cover_file ?? null, albumCover: data.cover_file ?? null,
       }))
     );
   };
@@ -334,14 +346,17 @@ export default function AlbumPage() {
               className="hidden"
               onChange={(e) => e.target.files?.[0] && uploadCover(e.target.files[0])}
             />
-            {/* small square menu over the cover: upload / find online */}
+            {/* small square menu over the cover: upload / find online / info.
+                The button and panel keep an opaque backdrop so they stay
+                readable on any cover. */}
             <div className="absolute top-1.5 right-1.5 opacity-0 group-hover/cover:opacity-100 transition-opacity">
               <OverflowMenu
-                buttonClass="!p-1.5 bg-black/60 hover:bg-black/80 border border-white/10 text-zinc-200"
+                buttonClass="!p-1.5 bg-black/80 hover:bg-black border border-white/20 text-zinc-100"
                 buttonTitle="Cover art actions"
                 sections={[
                   {
                     items: [
+                      { label: "Cover info", icon: InfoIcon, onClick: () => setCoverInfoOpen(true) },
                       { label: "Upload cover…", icon: ImageUp, onClick: () => coverInput.current?.click() },
                       { label: "Find cover online", icon: ImageIcon, onClick: () => setCoverSearchOpen(true) },
                     ],
@@ -351,14 +366,9 @@ export default function AlbumPage() {
             </div>
           </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-zinc-500 uppercase tracking-wider">
-            {/* original release date + the release date, when they differ */}
-            {data.meta?.ORIGINALDATE && data.meta?.ORIGINALDATE !== data.meta?.DATE
-              ? `Original ${data.meta?.ORIGINALDATE} · Released ${data.meta?.DATE ?? "—"}`
-              : data.meta?.DATE ?? "—"}
-          </div>
           <div className="flex items-center gap-2.5 min-w-0">
             <h1 className="text-3xl font-bold tracking-tight truncate">{data.meta?.ALBUM ?? data.path.split("/").pop()}</h1>
+            <AdvisoryMark value={data.meta?.ITUNESADVISORY ?? data.meta?.ALBUMITUNESADVISORY} size="md" />
             {/* verdict sits right of the title — click for the problems */}
             <button
               className={`h-2 w-2 rounded-full shrink-0 transition-opacity ${verdictPass ? "bg-emerald-500/70" : "bg-red-500/80"}`}
@@ -384,6 +394,18 @@ export default function AlbumPage() {
           >
             {data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? "—"}
           </Link>
+          {/* release dates under the title: original and release shown
+              separately whenever they differ */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 mt-1.5 text-xs">
+            <span className="text-zinc-500" title={data.meta?.ORIGINALDATE ?? undefined}>
+              <span className="text-zinc-600 uppercase tracking-wider text-[10px] mr-1.5">Original</span>
+              {data.meta?.ORIGINALDATE ?? "—"}
+            </span>
+            <span className="text-zinc-500" title={data.meta?.DATE ?? undefined}>
+              <span className="text-zinc-600 uppercase tracking-wider text-[10px] mr-1.5">Released</span>
+              {data.meta?.DATE ?? "—"}
+            </span>
+          </div>
           {(data.meta?.LABEL || data.meta?.CATALOGNUMBER) && (
             <div className="text-xs text-zinc-500 mt-0.5 truncate">
               {[data.meta?.LABEL, data.meta?.CATALOGNUMBER].filter(Boolean).join(" · ")}
@@ -398,6 +420,17 @@ export default function AlbumPage() {
                 title="Codec · bitrate · bit depth/sample rate across this album's tracks"
               >
                 {albumTech(data.tracks)}
+              </span>
+            )}
+            {/* album-level dynamic range, labeled ADR (vs the per-track
+                DR column) — read from the ALBUM DYNAMIC RANGE tag the
+                DR script writes on every track of the album */}
+            {data.meta?.["ALBUM DYNAMIC RANGE"] && (
+              <span
+                className="chip bg-zinc-800/70 text-zinc-300 border border-border font-mono"
+                title="Album dynamic range (DR meter)"
+              >
+                ADR{data.meta["ALBUM DYNAMIC RANGE"]}
               </span>
             )}
             {/* disc count lives in the header too, so multi-disc albums
@@ -554,6 +587,14 @@ export default function AlbumPage() {
         </div>
       )}
 
+      {coverInfoOpen && (
+        <CoverInfoModal
+          albumPath={data.path}
+          coverFile={data.cover_file}
+          onClose={() => setCoverInfoOpen(false)}
+        />
+      )}
+
       {selectedHere.length > 0 && (
         <div className="flex items-center gap-2 bg-accent/15 border border-accent/40 rounded-lg px-3 py-2 flex-wrap">
           <span className="text-xs font-medium text-accent-soft">
@@ -578,12 +619,34 @@ export default function AlbumPage() {
           <thead className="border-b border-border">
             <tr>
               {selectMode && <th className="th w-10"></th>}
-              <SortHeader label="#" sort={sort} sortKey="tracknumber" onSort={(k) => setSort(toggleSort(sort, k))} className="w-14" />
-              <th className="th w-10"></th>
-              <SortHeader label="Title" sort={sort} sortKey="tags.TITLE" onSort={(k) => setSort(toggleSort(sort, k))} />
-              <SortHeader label="Genre" sort={sort} sortKey="tags.GENRE" onSort={(k) => setSort(toggleSort(sort, k))} className="w-[16%]" />
-              <SortHeader label="Dur" sort={sort} sortKey="tech.length" onSort={(k) => setSort(toggleSort(sort, k))} className="w-16" />
-              <SortHeader label="Bitrate" sort={sort} sortKey="tech.bitrate" onSort={(k) => setSort(toggleSort(sort, k))} className="w-[22%]" />
+              {ALBUM_TRACK_COLS.filter((c) => trackCols.includes(c.id)).map((c) =>
+                c.id === "cover" ? (
+                  <th key={c.id} className={`th relative ${ALBUM_TRACK_COL_W[c.id] ?? ""}`} title="Cover art">
+                    <span className="sr-only">Cover</span>
+                  </th>
+                ) : (
+                  <SortHeader key={c.id} label={c.label} sort={sort} sortKey={c.sortKey} onSort={(k) => setSort(toggleSort(sort, k))}
+                    className={`relative ${ALBUM_TRACK_COL_W[c.id] ?? ""}${c.id === "num" ? " cell-nowrap" : ""}`}
+                    style={trackW[c.id] ? { width: trackW[c.id] } : undefined}>
+                    <ColumnResizer width={trackW[c.id]} onDrag={(w) => setTrackW(c.id, w)} onReset={resetTrackW} />
+                  </SortHeader>
+                )
+              )}
+              {/* corner: the small columns chooser, docked in the grid's
+                  top-right so it costs no row of its own */}
+              <th className="th relative w-10 px-1">
+                <div className="flex justify-end">
+                  <ColumnsMenu
+                    iconOnly
+                    cols={ALBUM_TRACK_COLS}
+                    visible={trackCols}
+                    onToggle={toggleTrackCol}
+                    title="Tracklist columns"
+                    onResetWidths={resetTrackW}
+                    hasCustomWidths={Object.keys(trackW).length > 0}
+                  />
+                </div>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -603,22 +666,12 @@ export default function AlbumPage() {
                       path: t.path, file: t.file, albumPath: data.path,
                       artist: data.meta?.ALBUMARTIST ?? data.meta?.ARTIST ?? undefined,
                       album: data.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
+                      coverFile: t.cover_file ?? null, albumCover: data.cover_file ?? null,
                     })),
                     data.tracks.findIndex((t) => t.path === tr.path)
                   )
                 }
               >
-                {tr.file.toLowerCase().endsWith(".mp4") && (
-                  <td className="td" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      className="btn-ghost !px-2 !py-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                      title="Watch music video"
-                      onClick={() => setVideoOpen(tr.path)}
-                    >
-                      <FileVideo className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                )}
                 {selectMode && (
                   <td className="td pr-0" onClick={(e) => e.stopPropagation()}>
                     <input
@@ -628,60 +681,82 @@ export default function AlbumPage() {
                     />
                   </td>
                 )}
-                <td className="td text-zinc-500">
-                  <div className="flex items-center gap-1.5">
+                {trackCols.includes("num") && (
+                  <td className="td text-zinc-500 cell-nowrap">
                     {/* multi-disc albums number tracks D-TT (2-1, 2-2, …) */}
                     <span className="tabular-nums">
                       {multiDisc ? `${g.disc}-${tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "?"}` : tr.tracknumber ?? tr.tags.TRACKNUMBER ?? "—"}
                     </span>
-                    {/* verdict mark — click for grading & audit details */}
-                    <button
-                      className={`h-1.5 w-1.5 rounded-full shrink-0 ${verdictTrack(tr) ? "bg-emerald-500/60" : "bg-red-500/80"}`}
-                      title={verdictTrack(tr) ? "Pass" : "Fail — grading & audit details"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDetailTrack(tr);
-                      }}
-                    />
-                    {!!tr.issues?.length && (
-                      <span className="text-[9px] text-red-400/70 shrink-0" title={tr.issues.join("\n")}>
-                        {tr.issues.length}✗
-                      </span>
-                    )}
-                  </div>
-                </td>
-                <td className="td pr-0">
-                  {tr.cover_file && (
-                    <CoverImg
+                  </td>
+                )}
+                {trackCols.includes("cover") && (
+                  <td className="td cell-cover pr-0">
+                    <TrackCover
                       albumPath={data.path}
-                      coverFile={tr.cover_file}
-                      wrapperClass="h-7 w-7 rounded bg-raise border border-border overflow-hidden shrink-0"
+                      trackCover={tr.cover_file}
+                      albumFallback={false}
+                      wrapperClass="h-8 w-8 rounded bg-raise border border-border overflow-hidden shrink-0"
                     />
-                  )}
-                </td>
-                <td className="td">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <Link
-                      to={trackRef(tr)}
-                      className="hover:text-accent-soft truncate inline-block max-w-full"
-                      title="Click to play · Ctrl-click to open track page"
-                      onClick={(e) => {
-                        if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
-                        else e.preventDefault();
-                      }}
-                    >
-                      {tr.tags.TITLE ?? tr.file}
-                    </Link>
-                    <span className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-                      <FavHeart kind="track" id={tr.path} mbid={tr.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" title={undefined} />
-                    </span>
-                  </div>
-                </td>
-                <td className="td text-zinc-500 max-w-[180px] truncate">{tr.tags.GENRE ?? "—"}</td>
-                <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>
-                <td className="td text-zinc-500">
-                  {tr.tech.bitrate || tr.tech.bits_per_sample ? fmtTech(tr.tech) : "—"}
-                </td>
+                  </td>
+                )}
+                {trackCols.includes("title") && (
+                  <td className="td">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Link
+                        to={trackRef(tr)}
+                        className="hover:text-accent-soft break-words flex-1 min-w-0"
+                        title="Click to play · Ctrl-click to open track page"
+                        onClick={(e) => {
+                          if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
+                          else e.preventDefault();
+                        }}
+                      >
+                        {tr.tags.TITLE ?? tr.file}
+                      </Link>
+                      {!!tr.issues?.length && (
+                        <button
+                          className="text-[9px] text-red-400/70 shrink-0 hover:text-red-300"
+                          title={`${tr.issues.join("\n")}\nClick for details`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDetailTrack(tr);
+                          }}
+                        >
+                          {tr.issues.length}✗
+                        </button>
+                      )}
+                      <GradeBadge pass={verdictTrack(tr)} audit={tr.audit} size="sm" />
+                      <AdvisoryMark value={tr.tags.ITUNESADVISORY} />
+                      {(tr.is_video || isVideoFile(tr.file)) && (
+                        <button
+                          className="text-zinc-500 hover:text-white shrink-0"
+                          title="Watch music video"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setVideoOpen(tr.path);
+                          }}
+                        >
+                          <FileVideo className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      <span className="row-hover shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <FavHeart kind="track" id={tr.path} mbid={tr.tags.MUSICBRAINZ_TRACKID} iconClass="h-3.5 w-3.5" title={undefined} />
+                      </span>
+                    </div>
+                  </td>
+                )}
+                {trackCols.includes("genre") && <td className="td text-zinc-500 break-words">{tr.tags.GENRE ?? "—"}</td>}
+                {trackCols.includes("dur") && <td className="td text-zinc-500">{fmtDuration(tr.tech.length)}</td>}
+                {trackCols.includes("bitrate") && (
+                  <td className="td text-zinc-500">
+                    {tr.tech.bitrate || tr.tech.bits_per_sample ? fmtTech(tr.tech) : "—"}
+                  </td>
+                )}
+                {trackCols.includes("dr") && (
+                  <td className="td text-zinc-500 tabular-nums" title={`Dynamic range${tr.tags["ALBUM DYNAMIC RANGE"] ? ` · album ${tr.tags["ALBUM DYNAMIC RANGE"]}` : ""}`}>
+                    {tr.tags["DYNAMIC RANGE"] ?? "—"}
+                  </td>
+                )}
               </tr>
                   ))}
                 </Fragment>
@@ -706,5 +781,69 @@ export default function AlbumPage() {
       )}
       </div>
     </>
+  );
+}
+/** Cover info dialog: resolution, aspect ratio, format and byte size of the
+ * album's cover art (the "Cover info" item in the cover's … menu). */
+function CoverInfoModal({ albumPath, coverFile, onClose }: {
+  albumPath: string;
+  coverFile: string | null;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["coverInfo", albumPath, coverFile],
+    queryFn: () => api.coverInfo(albumPath, coverFile),
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const rows: [string, string | null | undefined][] = data
+    ? [
+      ["File", data.file],
+      ["Resolution", data.width && data.height ? `${data.width} × ${data.height} px` : null],
+      ["Aspect ratio", data.aspect ? `${data.aspect}${data.aspect_label && data.aspect_label !== data.aspect ? ` (${data.aspect_label})` : ""}` : null],
+      ["Megapixels", data.megapixels ? `${data.megapixels} MP` : null],
+      ["Format", data.format],
+      ["File size", `${(data.bytes / 1024).toFixed(0)} kB (${(data.bytes / 1024 / 1024).toFixed(2)} MB)`],
+    ]
+    : [];
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-6" onClick={onClose}>
+      <div
+        className="bg-card border border-border rounded-xl p-5 w-[380px] shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <div className="text-sm font-semibold">Cover info</div>
+            <div className="text-[11px] text-zinc-500 mt-0.5">Image details for this album's artwork</div>
+          </div>
+          <button className="p-1.5 rounded-lg hover:bg-raise text-zinc-400 hover:text-white" onClick={onClose} title="Close (Esc)">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="rounded-lg overflow-hidden border border-border mb-3">
+          <CoverImg albumPath={albumPath} coverFile={coverFile} wrapperClass="aspect-square w-full bg-raise" />
+        </div>
+        {isLoading ? (
+          <div className="text-xs text-zinc-500 py-3 text-center">Reading image…</div>
+        ) : !data ? (
+          <div className="text-xs text-zinc-500 py-3 text-center">Cover details unavailable.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {rows.map(([k, v]) =>
+              v != null && v !== "" ? (
+                <div key={k} className="flex items-baseline gap-3 text-xs">
+                  <span className="text-zinc-500 uppercase tracking-wider text-[10px] w-24 shrink-0">{k}</span>
+                  <span className="text-zinc-200 font-mono truncate" title={String(v)}>{v}</span>
+                </div>
+              ) : null
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CloudDownload, Play, Square, Plus, Trash2, Undo2, Sparkles, Keyboard, Wand2, Eraser } from "lucide-react";
+import { CloudDownload, Play, Square, Plus, Trash2, Undo2, Sparkles, Keyboard, Wand2, Eraser, Upload } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
+import LrclibPublishPanel from "./LrclibPublish";
 import {
   loadLyricsKeys, saveLyricsKeys, resetLyricsKeys,
   keyLabel, matchKey, LYRICS_ACTIONS, LYRICS_KEY_DEFAULTS,
@@ -140,6 +141,7 @@ export default function LyricsViewer({
   const [aiBusy, setAiBusy] = useState<string | null>(null);
   const [aiMenu, setAiMenu] = useState(false);
   const [keysMenu, setKeysMenu] = useState(false);
+  const [pubOpen, setPubOpen] = useState(false);
   const [capturing, setCapturing] = useState<LyricsAction | null>(null);
   const [keys, setKeys] = useState(() => loadLyricsKeys());
   // Where the host page's Save writes: embedded tag, .lrc sidecar, or both.
@@ -556,6 +558,13 @@ export default function LyricsViewer({
           <button className="btn-ghost !py-1 text-xs" onClick={importFromLrclib} disabled={loading}>
             <CloudDownload className="h-3.5 w-3.5" /> LRCLIB
           </button>
+          <button
+            className={`btn-ghost !py-1 text-xs ${(rawMode ? raw : serializeLrc(lines, dec)).trim() ? "" : "opacity-40"} ${pubOpen ? "!text-accent" : ""}`}
+            onClick={() => setPubOpen(!pubOpen)}
+            title="Submit these lyrics to the LRCLIB community database"
+          >
+            <Upload className="h-3.5 w-3.5" /> Publish
+          </button>
           {onSave && (
             <select
               className="input !py-1 !px-1.5 text-xs w-auto"
@@ -665,6 +674,20 @@ export default function LyricsViewer({
         onEnded={() => setPlaying(false)}
         className="hidden"
       />
+
+      {pubOpen && (
+        <div className="rounded-md border border-border bg-panel p-3 mb-2 space-y-2">
+          <div className="text-[11px] text-zinc-400 font-medium">Publish to LRCLIB</div>
+          <LrclibPublishPanel
+            artist={artist ?? ""}
+            track={track ?? ""}
+            album={album}
+            duration={Math.round(dur || duration || 0)}
+            text={rawMode ? raw : serializeLrc(lines, dec)}
+            onDone={() => setPubOpen(false)}
+          />
+        </div>
+      )}
 
       {searchHits && (
         <div className="rounded-md border border-border bg-panel p-3 mb-2">

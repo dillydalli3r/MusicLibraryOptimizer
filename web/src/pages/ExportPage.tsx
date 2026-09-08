@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { HardDriveDownload, Search } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
-import CoverImg from "../components/CoverImg";
+import CoverImg, { TrackCover } from "../components/CoverImg";
 
 /** Quality choices per export codec — the backend interprets the string. */
 const QUALITY: Record<string, { v: string; label: string }[]> = {
@@ -97,6 +97,23 @@ export default function ExportPage() {
     return out;
   }, [sourceKind, playlistDetail, albums, albumPaths]);
 
+  // Track metadata for the preview list (cover + title + artist).
+  const trackLookup = useMemo(() => {
+    const map = new Map<string, { title: string; artist?: string; albumPath: string; coverFile?: string | null; albumCover?: string | null; num?: number | null }>();
+    for (const a of lib?.artists ?? [])
+      for (const al of a.albums)
+        for (const t of al.tracks)
+          map.set(t.path, {
+            title: t.tags.TITLE ?? t.file,
+            artist: al.album_artist || a.name,
+            albumPath: al.path,
+            coverFile: t.cover_file ?? null,
+            albumCover: al.cover_file ?? null,
+            num: t.tracknumber ?? null,
+          });
+    return map;
+  }, [lib]);
+
   const run = async () => {
     if (!paths.length) return toast("Select something to export first");
     const destRoot = drivesData?.drives.find((d) => d.root === drive)?.root;
@@ -189,8 +206,8 @@ export default function ExportPage() {
                       }
                     />
                     <CoverImg albumPath={a.path} coverFile={a.cover_file} wrapperClass="h-6 w-6 rounded bg-raise border border-border overflow-hidden shrink-0" />
-                    <span className="truncate flex-1">{a.meta?.ALBUM ?? a.path}</span>
-                    <span className="text-zinc-600 shrink-0">{a.artist}</span>
+                    <span className="break-words flex-1 min-w-0">{a.meta?.ALBUM ?? a.path}</span>
+                    <span className="text-zinc-600 shrink-0 break-words">{a.artist}</span>
                   </label>
                 ))}
                 {!filteredAlbums.length && (
@@ -202,6 +219,29 @@ export default function ExportPage() {
           <div className="text-[11px] text-zinc-500 mt-2">
             {paths.length} track{paths.length === 1 ? "" : "s"} selected
           </div>
+          {paths.length > 0 && (
+            <div className="mt-2 max-h-56 overflow-y-auto border border-border rounded-md divide-y divide-border/60">
+              {paths.slice(0, 100).map((p, i) => {
+                const m = trackLookup.get(p);
+                return (
+                  <div key={`${p}-${i}`} className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-300">
+                    <span className="text-zinc-600 w-6 shrink-0 tabular-nums">{m?.num ?? i + 1}</span>
+                    <TrackCover
+                      albumPath={m?.albumPath ?? p.split("/").slice(0, -1).join("/")}
+                      trackCover={m?.coverFile}
+                      albumCover={m?.albumCover}
+                      wrapperClass="h-8 w-8 rounded bg-raise border border-border overflow-hidden shrink-0"
+                    />
+                    <span className="flex-1 break-words min-w-0">{m?.title ?? p.split("/").pop()}</span>
+                    {m?.artist && <span className="text-zinc-500 break-words hidden sm:inline">{m.artist}</span>}
+                  </div>
+                );
+              })}
+              {paths.length > 100 && (
+                <div className="px-2 py-1.5 text-[11px] text-zinc-600">+{paths.length - 100} more…</div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ---- destination + options ---------------------------------- */}

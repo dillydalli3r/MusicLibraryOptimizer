@@ -24,14 +24,18 @@ import httpx
 
 from mlo.config import load_config
 from mlo.fetchdeps import installed_path
-from server.beetscfg import DATA_DIR, REPO_ROOT
-
-CONFIG_PATH = os.path.join(DATA_DIR, "slskd.yaml")
+from server.beetscfg import REPO_ROOT
 
 _proc_lock = threading.RLock()  # reentrant: start() holds it while calling is_running()
 _proc = {"proc": None, "api_key": None, "started_at": 0.0}
 
 CREATE_NO_WINDOW = 0x08000000
+
+
+def config_path():
+    """slskd.yaml lives in <music folder>/.data with the rest of the state."""
+    from mlo.paths import app_data_dir
+    return os.path.join(app_data_dir(), "slskd.yaml")
 
 
 # --------------------------------------------------------------------------- #
@@ -71,7 +75,8 @@ def download_dir(cfg=None):
     music = str(cfg.get("music_folder") or "").strip()
     if music:
         return os.path.join(music, ".mlo_downloads")
-    return os.path.join(DATA_DIR, "downloads")
+    from mlo.paths import app_data_dir
+    return os.path.join(app_data_dir(), "downloads")
 
 
 def generate_yaml(cfg=None):
@@ -126,6 +131,7 @@ def generate_yaml(cfg=None):
             "  filters:",
             "    - '\\.mlo_trash'",
             "    - '\\.mlo_downloads'",
+            "    - '\\.data'",
         ]
     text = "\n".join(lines) + "\n"
     return text, api_key
@@ -133,11 +139,12 @@ def generate_yaml(cfg=None):
 
 def write_config(cfg=None):
     text, api_key = generate_yaml(cfg)
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = CONFIG_PATH + ".tmp"
+    path = config_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
-    os.replace(tmp, CONFIG_PATH)
+    os.replace(tmp, path)
     return api_key
 
 
@@ -158,7 +165,7 @@ def is_running():
 def web_up(cfg=None):
     """True when something answers on the slskd web port (any process)."""
     try:
-        with httpx.Client(base_url=_base_url(cfg), timeout=2.0) as client:
+        with httpx.Client(base_url=_base_url(cfg), timeout=0.6) as client:
             r = client.get("/application", headers={"Accept": "application/json"})
             return r.status_code == 200
     except Exception:
@@ -186,7 +193,7 @@ def start(cfg=None):
         api_key = write_config(cfg)
         # Adopt an already-listening slskd (auth is disabled on localhost).
         try:
-            with httpx.Client(base_url=_base_url(cfg), timeout=2.0) as client:
+            with httpx.Client(base_url=_base_url(cfg), timeout=0.6) as client:
                 r = client.get("/application", headers={"Accept": "application/json"})
                 if r.status_code == 200:
                     _proc["api_key"] = None
@@ -198,7 +205,7 @@ def start(cfg=None):
         if os.name == "nt":
             kwargs["creationflags"] = CREATE_NO_WINDOW
         proc = subprocess.Popen(
-            [exe, "--config", CONFIG_PATH, "--no-logo"],
+            [exe, "--config", config_path(), "--no-logo"],
             cwd=os.path.dirname(exe),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -210,21 +217,62 @@ def start(cfg=None):
         return True, "started"
 
 
-def stop():
+def _kill_port_listener(port):
+    """Hard-kill whatever process listens on the slskd web port.
+
+    Needed for ADOPTED slskd instances (spawned by a previous backend run):
+    no child handle exists, so a plain terminate is impossible and the
+    process would otherwise keep running after the user presses Stop."""
+    try:
+        if os.name == "nt":
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+            pids = set()
+            for ln in out.splitlines():
+                parts = ln.split()
+                if len(parts) >= 5 and parts[3].upper() == "LISTENING" and f":{port} " in ln:
+                    pids.add(parts[-1])
+            killed = False
+            for pid in pids:
+                if pid.isdigit() and pid != "0":
+                    subprocess.run(["taskkill", "/F", "/PID", pid],
+                                   capture_output=True, timeout=10)
+                    killed = True
+            return killed
+        r = subprocess.run(["fuser", "-k", f"{port}/tcp"],
+                           capture_output=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def stop(cfg=None):
+    cfg = cfg or load_config()
+    port = int(cfg.get("soulseek_web_port") or 5030)
     with _proc_lock:
         proc = _proc["proc"]
         _proc["proc"] = None
         if proc is None or proc.poll() is not None:
+            # untracked (adopted) slskd — the only way down is via the port
+            if web_up(cfg):
+                return _kill_port_listener(port)
             return False
         try:
             proc.terminate()
             try:
-                proc.wait(timeout=10)
+                proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.wait(timeout=3)
         except OSError:
             pass
-        return True
+    # a straggler or adopted sibling can still hold the web port
+    time.sleep(0.3)
+    if web_up(cfg):
+        _kill_port_listener(port)
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -263,22 +311,37 @@ def wait_until_ready(timeout=25.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            _request("GET", "/application", timeout=3.0)
+            _request("GET", "/application", timeout=2.0)
             return True
         except Exception:
-            time.sleep(0.7)
+            time.sleep(0.25)
     return False
 
 
 # --------------------------------------------------------------------------- #
 # High-level operations
 # --------------------------------------------------------------------------- #
-def search(query, cfg=None):
-    """Start a search; returns the search id for polling."""
-    search_id = uuid.uuid4().hex[:20]
+def search(query, cfg=None, timeout_ms=None):
+    """Start a search; returns the search id for polling.
+
+    slskd validates a client-supplied id as a GUID — older builds ignored
+    it, current ones answer 400 to anything else (which broke every search).
+    A real GUID is sent; if still refused, retry without one and use
+    whatever id slskd assigned. timeout_ms extends the search duration per
+    request (slskd's own default is short, which starves slow networks)."""
+    search_id = str(uuid.uuid4())
     body = {"id": search_id, "searchText": query}
-    _request("POST", "/searches", json_body=body, timeout=30.0)
-    return search_id
+    if timeout_ms:
+        body["timeout"] = int(timeout_ms)
+    try:
+        resp = _request("POST", "/searches", json_body=body, timeout=30.0)
+    except httpx.HTTPStatusError as e:
+        if e.response is None or e.response.status_code != 400:
+            raise
+        body.pop("id", None)
+        resp = _request("POST", "/searches", json_body=body, timeout=30.0)
+    remote = str((resp or {}).get("id") or "").strip()
+    return remote or search_id
 
 
 def search_results(search_id, cfg=None):

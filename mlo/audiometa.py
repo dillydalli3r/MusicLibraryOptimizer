@@ -3,10 +3,12 @@
 For every track it decodes audio with librosa (vendored into
 .dependencies via pip, see fetchdeps.PIP_PACKAGES) and writes:
 
-  * BPM        - from librosa's beat tracking (rounded to a whole number),
-  * INITIALKEY - from the average chroma vector correlated against the
-                 Krumhansl-Schmuckler major/minor profiles, rendered in
-                 musical ('A min'), Camelot ('8A') or Open Key ('1m').
+  * BPM        - from dual estimators (tempogram + median beat interval),
+                 folded into the 70-180 range and rounded to a whole number,
+  * INITIALKEY - from the harmonic chroma correlated against an ensemble of
+                 Krumhansl-Schmuckler, Temperley and Albrecht-Shanahan
+                 profiles, rendered in musical notation with FLAT spellings
+                 ('B♭ min'), Camelot ('8A') or Open Key ('1m').
 
 Skips tracks that already carry both tags unless overwrite/force is set,
 and respects the per-filetype audio_tag_writes gates (BPM / INITIALKEY).
@@ -29,7 +31,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Krumhansl-Schmuckler key profiles (major, minor), indexed from C.
 _KS_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 _KS_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
-_PITCHES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+# Temperley / Kostka-Payne profiles (from music-cognition corpus studies).
+_TEMPERLEY_MAJOR = [0.748, 0.060, 0.488, 0.082, 0.670, 0.460, 0.096, 0.715, 0.104, 0.366, 0.057, 0.400]
+_TEMPERLEY_MINOR = [0.712, 0.084, 0.474, 0.618, 0.049, 0.460, 0.105, 0.747, 0.404, 0.067, 0.133, 0.330]
+# Albrecht & Shanahan (2013) profiles — the newest of the three.
+_ALBRECHT_MAJOR = [0.900, 0.091, 0.211, 0.137, 0.344, 0.382, 0.130, 0.800, 0.099, 0.207, 0.094, 0.306]
+_ALBRECHT_MINOR = [0.938, 0.110, 0.268, 0.513, 0.188, 0.418, 0.086, 0.868, 0.450, 0.108, 0.065, 0.317]
+# The ensemble: correlating all three against the chroma and averaging the
+# scores per (tonic, mode) is markedly more accurate than any single profile.
+_KEY_PROFILES = (
+    (_KS_MAJOR, _KS_MINOR),
+    (_TEMPERLEY_MAJOR, _TEMPERLEY_MINOR),
+    (_ALBRECHT_MAJOR, _ALBRECHT_MINOR),
+)
+# Musical notation uses FLAT spellings (B♭, E♭, A♭…) — the user-facing
+# convention. A detected G# is written "A♭".
+_PITCHES_FLAT = ["C", "D♭", "D", "E♭", "E", "F", "G♭", "G", "A♭", "A", "B♭", "B"]
 # Camelot wheel: each position n covers nB (major) + its relative nA (minor).
 # C major = 8B, A minor = 8A, stepping by fifths. Indexed by tonic from C.
 _CAMELOT_MAJOR = ["8B", "3B", "10B", "5B", "12B", "7B", "2B", "9B", "4B", "11B", "6B", "1B"]
@@ -57,7 +74,7 @@ def _ensure_librosa():
 
 def _key_notation(tonic_idx, minor, notation):
     """Render a detected key in the configured notation."""
-    tonic = _PITCHES[tonic_idx % 12]
+    tonic = _PITCHES_FLAT[tonic_idx % 12]
     if notation == "camelot":
         return _CAMELOT_MINOR[tonic_idx] if minor else _CAMELOT_MAJOR[tonic_idx]
     if notation == "openkey":
@@ -65,13 +82,112 @@ def _key_notation(tonic_idx, minor, notation):
     return f"{tonic} {'min' if minor else 'maj'}"
 
 
+def _fold_bpm(v):
+    """Fold an octave error (half/double time) into the 70-180 DJ range."""
+    while v < 70:
+        v *= 2
+    while v > 180:
+        v /= 2
+    return v
+
+
+def _detect_bpm(y, sr):
+    """BPM from two independent estimators, preferring their agreement.
+
+    1. the autocorrelation tempogram estimate (librosa tempo),
+    2. the median of the ACTUAL beat intervals from beat tracking seeded
+       with that estimate.
+
+    When they agree within 8% they are averaged (two weak measurements in
+    agreement are stronger than either alone); on disagreement the
+    beat-interval median wins — it is measured, not interpolated. Both are
+    folded into the 70-180 range before combining. Returns None on failure.
+    """
+    import numpy as np
+    import librosa
+
+    hop = 512
+    onset = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+    tempo_fn = getattr(librosa.feature, "tempo", None) or getattr(librosa.beat, "tempo", None)
+    t_est = None
+    if tempo_fn is not None:
+        est = tempo_fn(onset_envelope=onset, sr=sr, hop_length=hop, aggregate=np.median)
+        est = float(np.atleast_1d(est)[0])
+        if np.isfinite(est) and est > 0:
+            t_est = est
+    t_med = None
+    try:
+        _, beats = librosa.beat.beat_track(
+            onset_envelope=onset, sr=sr, hop_length=hop,
+            start_bpm=t_est or 120.0, trim=True)
+        if len(beats) >= 4:
+            iv = np.diff(beats) * (hop / float(sr))
+            med = float(np.median(iv))
+            if np.isfinite(med) and med > 0:
+                t_med = 60.0 / med
+    except Exception:
+        t_med = None
+    cands = [v for v in (t_est, t_med) if v and np.isfinite(v) and v > 0]
+    if not cands:
+        return None
+    folded = [_fold_bpm(v) for v in cands]
+    if len(folded) == 2 and abs(folded[0] - folded[1]) / max(folded) <= 0.08:
+        return int(round((folded[0] + folded[1]) / 2))
+    return int(round(folded[-1]))
+
+
+def _detect_key(y, sr):
+    """Musical key from the harmonic part of the signal.
+
+    Accuracy comes from four choices:
+      * the harmonic component (percussion removed) feeds the chroma,
+      * lead-in/lead-out silence is trimmed so quiet noise can't skew it,
+      * the chroma is summarized with BOTH the median (robust against
+        repeated choruses dominating) and the mean (sensitivity), pooled,
+      * three published key profiles (Krumhansl-Schmuckler, Temperley,
+        Albrecht-Shanahan) are correlated and their scores averaged.
+    Returns (tonic, minor) or None.
+    """
+    import numpy as np
+    import librosa
+
+    try:
+        y_h = librosa.effects.harmonic(y, margin=3.0)
+    except Exception:
+        y_h = y
+    chroma = librosa.feature.chroma_cqt(y=y_h, sr=sr, hop_length=2048)
+    chroma = np.asarray(chroma)
+    if chroma.size == 0:
+        return None
+    mean_chroma = chroma.mean(axis=1)
+    med_chroma = np.median(chroma, axis=1)
+    vec = mean_chroma + med_chroma
+    if not np.isfinite(vec).all() or vec.sum() <= 0:
+        return None
+    vec = vec / vec.sum()
+
+    def _corr(a, b):
+        r = float(np.corrcoef(a, b)[0, 1])
+        return r if math.isfinite(r) else 0.0
+
+    best = (-2.0, 0, False)
+    for idx in range(12):
+        rotated = np.roll(vec, -idx)
+        for minor in (False, True):
+            scores = [_corr(rotated, prof[1 if minor else 0]) for prof in _KEY_PROFILES]
+            avg = sum(scores) / len(scores)
+            if avg > best[0]:
+                best = (avg, idx, minor)
+    return best[1], best[2]
+
+
 def detect_key_bpm(path, min_seconds=10):
     """Analyze one audio file. Returns (bpm:int|None, key:(tonic,minor)|None).
 
-    BPM from librosa beat tracking (folded into the 70-180 range DJs
-    expect); key from the mean chroma correlated against
-    Krumhansl-Schmuckler profiles. Returns (None, None) for tracks shorter
-    than *min_seconds* (too short for stable estimates).
+    BPM from dual estimators (tempogram + median beat interval), key from
+    the harmonic chroma against an ensemble of published key profiles.
+    Returns (None, None) for tracks shorter than *min_seconds* (too short
+    for stable estimates).
     """
     import numpy as np
     import librosa
@@ -80,36 +196,21 @@ def detect_key_bpm(path, min_seconds=10):
     y, _ = librosa.load(path, sr=sr, mono=True)
     if y.size < sr * max(1, min_seconds):
         return None, None
-
-    bpm = None
+    # Trim lead-in/lead-out silence — near-silent padding corrupts both the
+    # onset envelope and the chroma statistics.
     try:
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-        tempo = float(np.atleast_1d(tempo)[0])
-        if np.isfinite(tempo) and tempo > 0:
-            bpm = tempo
-            # Fold octave errors (half/double time) into a musical range.
-            while bpm < 70:
-                bpm *= 2
-            while bpm > 180:
-                bpm /= 2
-            bpm = int(round(bpm))
+        y, _ = librosa.effects.trim(y, top_db=35)
+    except Exception:
+        pass
+    if y.size < sr * max(1, min_seconds):
+        return None, None
+
+    try:
+        bpm = _detect_bpm(y, sr)
     except Exception:
         bpm = None
-
-    key = None
     try:
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=4096)
-        mean_chroma = np.asarray(chroma).mean(axis=1)
-        if np.isfinite(mean_chroma).all() and mean_chroma.sum() > 0:
-            best = (-2.0, 0, False)
-            for idx in range(12):
-                rotated = np.roll(mean_chroma, -idx)
-                for minor, profile in ((False, _KS_MAJOR), (True, _KS_MINOR)):
-                    r = float(np.corrcoef(rotated, profile)[0, 1])
-                    if math.isfinite(r) and r > best[0]:
-                        best = (r, idx, minor)
-            _, tonic, minor = best
-            key = (tonic, minor)
+        key = _detect_key(y, sr)
     except Exception:
         key = None
 
