@@ -32,14 +32,29 @@ function ScrollingTitle({ text, advisory, tech }: {
     const wrap = wrapRef.current;
     const el = lineRef.current;
     if (!wrap || !el) return;
+    let raf = 0;
     const measure = () => {
+      // sub-pixel rounding on scaled displays can report a 1-2px phantom
+      // overflow — only scroll for a real shortfall (8px+)
       const over = Math.ceil(el.scrollWidth - wrap.clientWidth);
-      setShift(over > 2 ? over + 6 : 0); // 6px breathing room past the edge
+      setShift(over > 8 ? over + 6 : 0); // +6 = visible padding at the end
+    };
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
     };
     measure();
-    const ro = new ResizeObserver(measure);
+    // re-measure whenever the available space changes AND when the line's
+    // own content changes (badges / tech readout arriving late)
+    const ro = new ResizeObserver(schedule);
     ro.observe(wrap);
-    return () => ro.disconnect();
+    ro.observe(el);
+    // web-font swap (fallback → Inter) changes text width after first paint
+    document.fonts?.ready.then(schedule).catch(() => {});
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, [text, tech]);
 
   const dur = Math.max(5, Math.min(24, shift / 12));
@@ -513,18 +528,21 @@ export default function PlayerBar() {
   // something is playing; idle just disables the transport and shows a hint.
   return (
     <div className="shrink-0 px-3 pb-3 pt-1 relative z-10">
-      <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 flex items-center gap-3 pr-4">
+      <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 grid grid-cols-[1fr_auto_1fr] items-center gap-3 [container-type:inline-size]">
         {/* crossOrigin keeps the streams CORS-clean so the WebAudio visualizer
             can read them; attaching happens on the play gesture */}
-        <audio ref={aRef} crossOrigin="anonymous" onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded}
+        <audio ref={aRef} hidden crossOrigin="anonymous" onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded}
           onPlay={(e) => { resumeAnalyser(); attachAnalyser(e.currentTarget); applyReplayGain(e.currentTarget, rgDb.current); }} />
-        <audio ref={bRef} crossOrigin="anonymous" onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded}
+        <audio ref={bRef} hidden crossOrigin="anonymous" onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded}
           onPlay={(e) => { resumeAnalyser(); attachAnalyser(e.currentTarget); applyReplayGain(e.currentTarget, rgDb.current); }} />
 
-        {/* left: cover art, flush with the bar's left edge (full bar height,
-            square; the bar's own margin keeps it off the screen edge) */}
+        {/* left flank of the grid: cover + title block — its 1fr track
+            balances the right cluster so the seek bar sits dead center.
+            The cover is absolutely positioned so its image's INTRINSIC
+            size never inflates the grid row height. */}
+        <div className="relative flex items-center gap-3 min-w-0 self-stretch">
         <button
-          className={`relative self-stretch aspect-square rounded-l-[5px] overflow-hidden bg-raise shrink-0 flex items-center justify-center ${
+          className={`absolute inset-y-0 left-0 aspect-square rounded-l-[5px] overflow-hidden bg-raise shrink-0 flex items-center justify-center ${
             idle ? "cursor-default" : "group/cover"
           }`}
           onClick={() => !idle && setFullscreen(true)}
@@ -543,7 +561,7 @@ export default function PlayerBar() {
           )}
         </button>
 
-        <div className="min-w-0 w-56 shrink-0" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
+        <div className="min-w-0 w-56 ml-[76px]" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
           {current ? (
             <>
               <ScrollingTitle
@@ -563,10 +581,12 @@ export default function PlayerBar() {
             </>
           )}
         </div>
+        </div>
 
-        {/* center: seek bar above the transport controls */}
-        <div className="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5">
-          <div className="flex items-center gap-2 w-full max-w-2xl text-[10px] text-zinc-500 tabular-nums">
+        {/* center of the grid: seek bar above the transport controls — the
+            1fr tracks on both sides keep it dead center of the bar */}
+        <div className="min-w-0 flex flex-col items-center justify-center gap-0.5 w-[min(38cqw,44rem)]">
+          <div className="flex items-center gap-2 w-full max-w-2xl mx-auto text-[10px] text-zinc-500 tabular-nums">
             <span className="w-10 text-right shrink-0">{fmtDuration(time)}</span>
             <input
               type="range"
@@ -631,10 +651,9 @@ export default function PlayerBar() {
           </div>
         </div>
 
-        {/* right cluster, two layers: the actions row with the volume bar
-            beneath it, then the lyrics / fullscreen buttons stacked on the
-            very right (lyrics on top of fullscreen) */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* right flank of the grid: actions row + volume, then lyrics /
+            fullscreen stacked on the far right */}
+        <div className="flex items-center gap-2 shrink-0 justify-self-end w-full min-w-0 justify-end pr-4">
           <div className="flex flex-col items-center gap-0.5 min-w-0">
             <div className="flex items-center gap-0.5">
               {/* queue position — the fraction lives here, left of the playlist
