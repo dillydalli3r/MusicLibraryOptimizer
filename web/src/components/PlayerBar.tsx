@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type SyntheticEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Timer, Volume2, X } from "lucide-react";
@@ -14,55 +14,52 @@ import LyricsSidebar from "./LyricsSidebar";
 import TrackDownloadExport from "./TrackDownloadExport";
 import useSubtitleTracks from "./SubtitledVideo";
 
-/** Title line that auto-scrolls horizontally when it doesn't fit — long
- * titles squeezed by the advisory badge / tech readout get a slow
- * back-and-forth marquee instead of a hard ellipsis cut. The tech readout
- * rides AT THE END of the title (it scrolls with it) rather than being
- * pinned to the edge. Nothing animates while the whole line fits. */
-function ScrollingTitle({ text, advisory, tech }: {
+/** One line of text (the song name) that auto-scrolls back and forth ONLY
+ * when it genuinely overflows the space it's given. Everything else — the
+ * advisory badge, the codec readout — sits outside this window and never
+ * moves. */
+function ScrollingText({ text, className }: {
   text: string;
-  advisory?: ReactNode;
-  tech?: string;
+  className?: string;
 }) {
   const wrapRef = useRef<HTMLSpanElement>(null);
-  const lineRef = useRef<HTMLSpanElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
   const [shift, setShift] = useState(0);
 
   useEffect(() => {
     const wrap = wrapRef.current;
-    const el = lineRef.current;
+    const el = textRef.current;
     if (!wrap || !el) return;
     let raf = 0;
     const measure = () => {
       // sub-pixel rounding on scaled displays can report a 1-2px phantom
-      // overflow — only scroll for a real shortfall (8px+)
+      // overflow — only scroll for a real shortfall (2px+)
       const over = Math.ceil(el.scrollWidth - wrap.clientWidth);
-      setShift(over > 8 ? over + 6 : 0); // +6 = visible padding at the end
+      setShift(over > 2 ? over + 6 : 0); // +6 = visible padding at the end
     };
     const schedule = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(measure);
     };
     measure();
-    // re-measure whenever the available space changes AND when the line's
-    // own content changes (badges / tech readout arriving late)
+    // re-measure whenever the available space changes AND when the text's
+    // own width changes (web-font swap, async badge rendering)
     const ro = new ResizeObserver(schedule);
     ro.observe(wrap);
     ro.observe(el);
-    // web-font swap (fallback → Inter) changes text width after first paint
     document.fonts?.ready.then(schedule).catch(() => {});
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [text, tech]);
+  }, [text]);
 
   const dur = Math.max(5, Math.min(24, shift / 12));
   return (
-    <span ref={wrapRef} className="block overflow-hidden min-w-0 flex-1">
+    <span ref={wrapRef} className={`block overflow-hidden min-w-0 ${className ?? ""}`}>
       <span
-        ref={lineRef}
-        className={`inline-flex items-baseline gap-2 whitespace-nowrap ${shift > 0 ? "will-change-transform" : ""}`}
+        ref={textRef}
+        className={`block whitespace-nowrap ${shift > 0 ? "will-change-transform" : ""}`}
         style={
           shift > 0
             ? ({
@@ -72,13 +69,7 @@ function ScrollingTitle({ text, advisory, tech }: {
             : undefined
         }
       >
-        <span className="text-sm font-semibold">{text}</span>
-        {advisory}
-        {tech ? (
-          <span className="text-[10px] font-mono text-zinc-500 shrink-0" title="Codec · bitrate · bit depth/sample rate">
-            {tech}
-          </span>
-        ) : null}
+        {text}
       </span>
     </span>
   );
@@ -561,14 +552,18 @@ export default function PlayerBar() {
           )}
         </button>
 
-        <div className="min-w-0 w-56 ml-[76px]" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
+        <div className="min-w-0 flex-1 ml-[76px]" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
           {current ? (
             <>
-              <ScrollingTitle
-                text={displayTitle}
-                advisory={<AdvisoryMark value={currentTags?.tags?.ITUNESADVISORY} />}
-                tech={techStr}
-              />
+              <div className="flex items-baseline gap-2 min-w-0">
+                <ScrollingText text={displayTitle} className="flex-1" />
+                <AdvisoryMark value={currentTags?.tags?.ITUNESADVISORY} />
+                {techStr && (
+                  <span className="text-[10px] font-mono text-zinc-500 shrink-0" title="Codec · bitrate · bit depth/sample rate">
+                    {techStr}
+                  </span>
+                )}
+              </div>
               <div className="text-[11px] text-zinc-500 truncate">{current.album ?? "—"}</div>
               <div className="text-[11px] text-zinc-500 truncate">{current.artist ?? current.albumPath.split("/").pop()}</div>
             </>
