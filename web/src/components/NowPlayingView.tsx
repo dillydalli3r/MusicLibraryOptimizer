@@ -892,15 +892,19 @@ export default function NowPlayingView(p: Props) {
               <div className="h-8 flex items-center justify-center gap-2" title={title}>
                 <div className="text-2xl font-bold text-white truncate">{title}</div>
                 <AdvisoryMark value={freshTags?.ITUNESADVISORY} />
+                {/* bit depth/sample rate rides beside the title, same as the
+                    player bar; tooltip carries the full codec/bitrate detail */}
+                {techStr && (
+                  <span className="text-[11px] font-mono text-zinc-500 shrink-0" title={techTip || undefined}>
+                    {techStr}
+                  </span>
+                )}
               </div>
               <div className="h-6 mt-1 flex items-center justify-center" title={albumArtist}>
                 <div className="text-zinc-300 truncate">{albumArtist}</div>
               </div>
               <div className="h-4 mt-0.5 flex items-center justify-center" title={albumName}>
                 <div className="text-xs text-zinc-500 truncate">{albumName}</div>
-              </div>
-              <div className="h-4 mt-1 flex items-center justify-center" title={techTip || undefined}>
-                <div className="text-[11px] text-zinc-500 font-mono truncate">{techStr}</div>
               </div>
               <div className="h-4 mt-2.5 flex items-center justify-center gap-1.5 min-w-0" title={upNextLabel}>
                 {upNextLabel ? (
