@@ -7,6 +7,7 @@ import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
 import { fmtTech, isVideoFile } from "../lib/fmt";
 import { AdvisoryMark } from "./Badges";
+import VolumePct from "./VolumePct";
 import { applyReplayGain, attachAnalyser, resumeAnalyser } from "../lib/analyser";
 import NowPlayingView from "./NowPlayingView";
 import LyricsSidebar from "./LyricsSidebar";
@@ -833,9 +834,10 @@ export default function PlayerBar() {
                 step={0.05}
                 value={vol}
                 onChange={(e) => setVol(Number(e.target.value))}
-                className="w-full min-w-0 seek-fat"
+                className="flex-1 min-w-0 seek-fat"
                 title="Volume — shared by the whole app"
               />
+              <VolumePct value={vol} onChange={setVol} />
             </div>
           </div>
 

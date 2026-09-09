@@ -5,6 +5,7 @@ import {
   SkipBack, SkipForward, Volume1, Volume2, VolumeX, X,
 } from "lucide-react";
 import { api } from "../api";
+import VolumePct from "./VolumePct";
 import { toast, useStore } from "../store";
 import { fmtTech, isVideoFile } from "../lib/fmt";
 import CoverImg from "./CoverImg";
@@ -988,9 +989,10 @@ export default function NowPlayingView(p: Props) {
                   step={0.05}
                   value={vol}
                   onChange={(e) => setVol(Number(e.target.value))}
-                  className="w-20 seek-fat"
+                  className="w-24 seek-fat"
                   title="Volume"
                 />
+                <VolumePct value={vol} onChange={setVol} />
               </div>
             </div>
 
