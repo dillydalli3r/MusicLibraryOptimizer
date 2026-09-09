@@ -37,7 +37,7 @@ export default function AlbumPage() {
     queryFn: () => api.coverColor(decoded),
     retry: false,
   });
-  const { playNow, queue, queueAdd, selection, toggleTrack, clearSelection } = useStore();
+  const { playNow, queue, queueAdd, selection, setSelection, toggleTrack, clearSelection } = useStore();
   const navigate = useNavigate();
   const [sort, setSort] = useState<SortState | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
@@ -130,6 +130,19 @@ export default function AlbumPage() {
 
   // Tracks of THIS album that are ticked in the global selection.
   const selectedHere = data.tracks.filter((t) => selection.tracks.includes(t.path));
+
+  // Quick-select (select mode): everything on the album, or one disc's
+  // tracks at a time. Selection is global, so merge / subtract by path.
+  const discGroups = groupByDisc(tracks);
+  const selectAllHere = () =>
+    setSelection({ tracks: [...new Set([...selection.tracks, ...data.tracks.map((t) => t.path)])] });
+  const selectDiscHere = (disc: number | null) => {
+    const g = discGroups.find((x) => (x.disc ?? null) === (disc ?? null));
+    if (!g) return;
+    setSelection({ tracks: [...new Set([...selection.tracks, ...g.tracks.map((t) => t.path)])] });
+  };
+  const selectNoneHere = () =>
+    setSelection({ tracks: selection.tracks.filter((p) => !data.tracks.some((t) => t.path === p)) });
 
   const queueTracks = data.tracks.map((t) => ({
     path: t.path, file: t.file, albumPath: data.path,
@@ -495,21 +508,6 @@ export default function AlbumPage() {
               className="!p-2 !rounded-md border border-border bg-panel/60 hover:!bg-raise"
               iconClass="h-4 w-4"
             />
-            <button
-              className={`p-2 rounded-md border bg-panel/60 transition-colors ${
-                selectMode ? "text-accent border-accent/50" : "border-border text-zinc-400 hover:text-white hover:bg-raise"
-              }`}
-              onClick={() =>
-                setSelectMode((v) => {
-                  if (v) clearSelection();
-                  return !v;
-                })
-              }
-              title="Select tracks — show checkboxes for batch actions"
-              aria-label="Select tracks"
-            >
-              <ListChecks className="h-4 w-4" />
-            </button>
             <OverflowMenu
               buttonClass={iconBtn}
               buttonTitle="All album actions"              sections={[
@@ -595,19 +593,37 @@ export default function AlbumPage() {
         />
       )}
 
-      {selectedHere.length > 0 && (
+      {(selectMode || selectedHere.length > 0) && (
         <div className="flex items-center gap-2 bg-accent/15 border border-accent/40 rounded-lg px-3 py-2 flex-wrap">
+          {selectMode && (
+            <>
+              <span className="text-xs text-zinc-400">Select:</span>
+              <button className="btn-ghost !py-0.5 text-xs" onClick={selectAllHere}>
+                All
+              </button>
+              {discGroups.length > 1 &&
+                discGroups.map((g) => (
+                  <button key={g.disc ?? 0} className="btn-ghost !py-0.5 text-xs" onClick={() => selectDiscHere(g.disc ?? null)}>
+                    {g.disc === null ? "Unnumbered" : `Disc ${g.disc}`}
+                  </button>
+                ))}
+              <button className="btn-ghost !py-0.5 text-xs" onClick={selectNoneHere}>
+                None
+              </button>
+              <span className="w-px h-4 bg-border mx-0.5" />
+            </>
+          )}
           <span className="text-xs font-medium text-accent-soft">
             {selectedHere.length} track{selectedHere.length === 1 ? "" : "s"} selected
           </span>
           <div className="ml-auto flex gap-1.5 flex-wrap">
-            <button className="btn-primary !py-1 text-xs" onClick={playSelection}>
+            <button className="btn-primary !py-1 text-xs" onClick={playSelection} disabled={selectedHere.length === 0}>
               <Play className="h-3.5 w-3.5" /> Play selection
             </button>
-            <button className="btn-ghost !py-1 text-xs" onClick={addSelectionToPlaylist}>
+            <button className="btn-ghost !py-1 text-xs" onClick={addSelectionToPlaylist} disabled={selectedHere.length === 0}>
               Playlist
             </button>
-            <button className="btn-ghost !py-1 text-xs" onClick={() => clearSelection()}>
+            <button className="btn-ghost !py-1 text-xs" onClick={() => clearSelection()} disabled={selectedHere.length === 0}>
               Clear
             </button>
           </div>
@@ -632,10 +648,25 @@ export default function AlbumPage() {
                   </SortHeader>
                 )
               )}
-              {/* corner: the small columns chooser, docked in the grid's
-                  top-right so it costs no row of its own */}
-              <th className="th relative w-10 px-1">
-                <div className="flex justify-end">
+              {/* corner: select-mode toggle + the columns chooser, docked in
+                  the grid's top-right so they cost no row of their own */}
+              <th className="th relative px-1 w-[4.75rem]">
+                <div className="flex items-center justify-end gap-0.5">
+                  <button
+                    className={`p-1.5 rounded-md transition-colors ${
+                      selectMode ? "text-accent bg-raise" : "text-zinc-500 hover:text-white hover:bg-raise"
+                    }`}
+                    onClick={() =>
+                      setSelectMode((v) => {
+                        if (v) clearSelection();
+                        return !v;
+                      })
+                    }
+                    title="Select tracks — show checkboxes for batch actions"
+                    aria-label="Select tracks"
+                  >
+                    <ListChecks className="h-4 w-4" />
+                  </button>
                   <ColumnsMenu
                     iconOnly
                     cols={ALBUM_TRACK_COLS}

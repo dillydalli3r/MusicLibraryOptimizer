@@ -317,6 +317,9 @@ export default function NowPlayingView(p: Props) {
   // While the next track's payload loads, the PREVIOUS track's lyrics stay
   // rendered (dimmed, no highlight): resetting to empty first is what made
   // the cover jump sizes / flash to the middle on next / previous.
+  // lyricsVersion is bumped after an AI word-sync so the fresh timings
+  // reload into the pane.
+  const [lyricsVersion, setLyricsVersion] = useState(0);
   useEffect(() => {
     let dead = false;
     setSmoothTime(0);
@@ -352,7 +355,7 @@ export default function NowPlayingView(p: Props) {
       dead = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.current.path]);
+  }, [p.current.path, lyricsVersion]);
 
   const instrumental = (tags?.INSTRUMENTAL ?? "").toString().trim() === "1";
   // The lyrics on screen belong to `lyricsFor`; until the new track's
@@ -502,6 +505,30 @@ export default function NowPlayingView(p: Props) {
     }
   };
 
+  // ---- AI word-sync (one click): LRCLIB align + ELRC word timings --------
+  // Unsynced lyrics get timestamps; line-synced ones are upgraded to word
+  // level; existing word timings are re-aligned. Written per lyrics_format
+  // and reloaded into the pane when it finishes.
+  const [lrcSyncing, setLrcSyncing] = useState(false);
+  const aiWordSync = async () => {
+    if (lrcSyncing) return;
+    setLrcSyncing(true);
+    setOptions(false);
+    try {
+      const cfg = await api.config();
+      const fmt = String((cfg as Record<string, unknown>).lyrics_format ?? "EMBEDDED").toUpperCase();
+      const res = await api.lyricsAiSync(p.current.path);
+      if (fmt === "LRC" || fmt === "BOTH") await api.lyricsWrite(p.current.path, res.lrc);
+      if (fmt === "EMBEDDED" || fmt === "BOTH") await api.lyricsEmbed(p.current.path, res.lrc);
+      toast(`Lyrics word-synced (${res.source})`);
+      setLyricsVersion((v) => v + 1); // reload the pane with the new timings
+    } catch (e) {
+      toast(`Word-sync failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setLrcSyncing(false);
+    }
+  };
+
   // ---- add to playlist -----------------------------------------------------
   const { data: playlists } = useQuery({
     queryKey: ["playlists"],
@@ -603,7 +630,7 @@ export default function NowPlayingView(p: Props) {
                   w.time <= dispTime + 0.04 &&
                   (wi === l.words!.length - 1 || l.words![wi + 1].time > dispTime + 0.04);
                 return (
-                  <span key={wi} className={on ? "text-accent" : "text-white/85"}>
+                  <span key={wi} className={on ? "text-accent" : "text-white/45"}>
                     {w.text}
                   </span>
                 );
@@ -752,6 +779,15 @@ export default function NowPlayingView(p: Props) {
                   <div className="fixed inset-0 z-40" onClick={() => setOptions(false)} />
                   <div className="absolute right-0 top-full mt-1 z-50 rounded-xl shadow-2xl p-2 w-72 max-w-[calc(100vw-1.5rem)] bg-zinc-950 border border-white/10">
                   <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1">Lyrics</div>
+                  <button
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 text-xs text-accent-soft disabled:opacity-40 text-left"
+                    onClick={aiWordSync}
+                    disabled={lrcSyncing}
+                    title="Fetch/align from LRCLIB and upgrade to word-level (ELRC) timings — unsynced lyrics get timestamps, synced ones gain word timing"
+                  >
+                    {lrcSyncing && <span className="h-3 w-3 rounded-full border border-zinc-600 border-t-transparent animate-spin inline-block shrink-0" />}
+                    {lrcSyncing ? "Word-syncing…" : "AI word-sync lyrics"}
+                  </button>
                   {[
                     { id: "xlit" as const, label: "Transliteration (romanized)", on: showXlit, act: () => toggleOpt("xlit") },
                     { id: "trans" as const, label: "Translation", on: showTrans, act: () => toggleOpt("trans") },
