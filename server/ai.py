@@ -26,13 +26,6 @@ import httpx
 
 from server.integrations import USER_AGENT
 
-_WORD_SPLIT_RE = re.compile(r"\s+")
-# A line slot should never stretch past the next line by more than this,
-# so instrumental gaps don't get crawled by slowly-appearing words.
-_MAX_LINE_SPREAD_S = 6.0
-_MIN_WORD_SPAN_S = 0.18
-
-
 _GEMINI_HOST = "generativelanguage.googleapis.com"
 
 
@@ -150,52 +143,12 @@ def _fmt_ts(t, decimals=2):
 def wordsync_lrc(lrc_text):
     """Turn line-synced LRC into word-synced ELRC (deterministic).
 
-    Each line's time slot runs from its own timestamp to the next line's
-    timestamp (capped at _MAX_LINE_SPREAD_S). Word start times are spread
-    across the slot proportionally to word length. Lines that already carry
-    <mm:ss.xx> word tags are left untouched. Empty/instrumental lines
-    (no text) pass through unchanged.
+    Delegates to mlo.lyrics.elrc_word_sync — the shared builder also powers
+    the transliterate/translate script, so transformed lyrics carry the
+    same word-level timings. CJK text (Japanese etc.) sweeps per character.
     """
-    rows = []
-    for raw in (lrc_text or "").splitlines():
-        m = _ALL_TIMES_RE.findall(raw)
-        body = _ALL_TIMES_RE.sub("", raw).strip()
-        if not m:
-            rows.append((None, raw.strip()))
-            continue
-        t = _ts_to_s(m[-1][0], m[-1][1], m[-1][2])
-        rows.append((t, body))
-
-    out = []
-    n = len(rows)
-    for i, (t, body) in enumerate(rows):
-        if t is None:
-            out.append(body)
-            continue
-        if not body or _WORD_TAG_RE.search(body):
-            # empty (instrumental) line or already word-synced: keep as-is
-            out.append(f"{_fmt_ts(t)} {body}".rstrip())
-            continue
-        # resolve the line's end: next timed line, capped spread
-        end = None
-        for j in range(i + 1, n):
-            if rows[j][0] is not None and rows[j][0] > t:
-                end = min(rows[j][0], t + _MAX_LINE_SPREAD_S)
-                break
-        if end is None:
-            end = t + min(_MAX_LINE_SPREAD_S, max(1.5, 0.32 * len(body.split())))
-        words = _WORD_SPLIT_RE.split(body.strip())
-        weights = [max(len(w), 1) for w in words]
-        total = sum(weights)
-        span = max(end - t, _MIN_WORD_SPAN_S * len(words))
-        cursor = t
-        pieces = []
-        for w, wt in zip(words, weights):
-            share = span * (wt / total)
-            pieces.append(f"<{_fmt_ts(cursor)[1:-1]}>{w}")
-            cursor += share
-        out.append(f"{_fmt_ts(t)} " + " ".join(pieces))
-    return "\n".join(out)
+    from mlo.lyrics import elrc_word_sync
+    return elrc_word_sync(lrc_text)
 
 
 # --------------------------------------------------------------------------- #
@@ -446,16 +399,54 @@ def _build_timed_lrc(existing, matched, duration=None):
     return "\n".join(f"{_fmt_ts(t)} {txt}" for t, txt in out)
 
 
+# Transcription of last resort: the model writes the lyrics it knows for a
+# song that has no local text and no usable LRCLIB candidate. Any language
+# the model knows works — the answer comes back in the song's own script.
+_TRANSCRIBE_SYSTEM = (
+    "You are a lyrics database. You are given an artist and a song title "
+    "(and maybe an album). Write out that song's complete official lyrics "
+    "in the original language and script, one line per line, preserving "
+    "verse/chorus repetition exactly as sung. Do NOT add section labels "
+    "like [Verse] or [Chorus], do not translate, do not add commentary. "
+    "If you do not actually know this song's lyrics, respond with exactly "
+    "the single word UNKNOWN."
+)
+
+
+def lyrics_transcribe(config, artist="", track="", album="", duration=None):
+    """LLM transcription fallback. Returns the lyrics as plain text, or ''
+    when the model doesn't know the song."""
+    user = f"Artist: {artist}\nTrack: {track}"
+    if album:
+        user += f"\nAlbum: {album}"
+    if duration:
+        user += f"\nDuration: {int(duration)} seconds"
+    text = ai_chat(config, _TRANSCRIBE_SYSTEM, user, timeout=120.0)
+    text = (text or "").strip()
+    if not text or text.upper().startswith("UNKNOWN") or text.upper() == "UNKNOWN.":
+        return ""
+    # strip a stray code fence if the model wrapped the output
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-z]*\n?|\n?```$", "", text, flags=re.IGNORECASE).strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 3:
+        return ""  # too short to be real lyrics — model likely refused
+    return "\n".join(lines)
+
+
 def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
                        existing_text="", candidates=None):
     """One-stop lyrics detection & syncing for a track.
 
     Returns (lrc_text, source) where source is one of:
-      * "candidate"  - track had no lyrics; matched candidate inserted
-      * "ai-sync"    - existing wording aligned via the LLM
-      * "aligned"    - existing wording aligned via fuzzy matching
-      * "wordsync"   - input was already line-synced; upgraded to ELRC
-      * "unchanged"  - only unsynced lyrics available and nothing to do
+      * "candidate"      - track had no lyrics; matched candidate inserted
+      * "ai-sync"        - existing wording aligned via the LLM
+      * "aligned"        - existing wording aligned via fuzzy matching
+      * "wordsync"       - input was already line-synced; upgraded to ELRC
+      * "ai-transcribe"  - nothing local or on LRCLIB; the LLM wrote the
+                           lyrics from its own knowledge of the song
+                           (plain text — no trustworthy timestamps exist)
+      * "unchanged"      - only unsynced lyrics available and nothing to do
     """
     rows = _candidate_rows(candidates)
     existing = [ln.strip() for ln in (existing_text or "").splitlines() if ln.strip()]
@@ -487,4 +478,17 @@ def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
             return wordsync_lrc(lrc), "candidate"
         if best["plain"].strip():
             return best["plain"].strip(), "candidate"
+
+    # Last resort: nothing stored and LRCLIB has nothing usable — ask the
+    # AI to transcribe the lyrics from its own knowledge of the song.
+    # Works for any language the model knows; the result is plain text
+    # (fabricating timestamps without a reference would be guesswork) and
+    # a later run upgrades it once a synced reference exists.
+    if ai_configured(config):
+        try:
+            text = lyrics_transcribe(config, artist, track, album, duration)
+        except Exception:
+            text = ""
+        if text:
+            return text, "ai-transcribe"
     return "", "unchanged"

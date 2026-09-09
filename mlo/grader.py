@@ -1433,6 +1433,12 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         fmt_ok = False
                     if lrc_text and not _lyrics_word_timestamps_valid(lrc_text, cfg):
                         fmt_ok = False
+                    # Word-sync REQUIREMENT: line-synced without word tags
+                    # is not word-level karaoke.
+                    if lyr_text and TIMESTAMP_RE_GRADE.search(lyr_text) and "<" not in lyr_text:
+                        fmt_ok = False
+                    if lrc_text and TIMESTAMP_RE_GRADE.search(lrc_text) and "<" not in lrc_text:
+                        fmt_ok = False
                 # Unsynced lyrics must fail — plain text without any [mm:ss.xx] is not synced
                 if lyr_text and not TIMESTAMP_RE_GRADE.search(lyr_text):
                     fmt_ok = False
@@ -1470,24 +1476,54 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 and cfg.get("lyrics_xlit_enabled", True) \
                 and needs_transliteration(_xlit_src, cfg):
             total_checks += 1
-            has_xlit = bool(str(af.get_lyrics_transform("TRANSLITERATION") or "").strip()) \
-                or os.path.isfile(os.path.splitext(ap)[0] + XLIT_SIDECAR)
-            if not has_xlit:
+            xlit_text = str(af.get_lyrics_transform("TRANSLITERATION") or "").strip()
+            if not xlit_text:
+                _xlit_side = os.path.splitext(ap)[0] + XLIT_SIDECAR
+                if os.path.isfile(_xlit_side):
+                    try:
+                        with open(_xlit_side, "r", encoding="utf-8", errors="replace") as _f:
+                            xlit_text = _f.read().strip()
+                    except OSError:
+                        xlit_text = ""
+            if not xlit_text:
                 failed_checks += 1
                 add_issue("No transliteration for non-Latin lyrics "
                           "(run Lyrics Translate script)", basename)
+                track["issues"].append("LYRICS")
+            elif cfg.get("lrc_enhanced_enabled", True) \
+                    and cfg.get("lrc_enhanced_word_sync", True) \
+                    and "<" in _xlit_src and "<" not in xlit_text:
+                # the source lyrics are word-synced — the romanization must
+                # be too, or karaoke dies at the translation line
+                failed_checks += 1
+                add_issue("Transliteration not word-synced "
+                          "(force re-run Lyrics Translate script)", basename)
                 track["issues"].append("LYRICS")
         if _xlit_src and cfg.get("grade_check_trans", True) \
                 and cfg.get("lyrics_translate_enabled", True) \
                 and needs_translation(_xlit_src, cfg):
             lang = primary_translation_lang(cfg)
             total_checks += 1
-            has_trans = bool(str(af.get_lyrics_transform("TRANSLATION", lang) or "").strip()) \
-                or os.path.isfile(os.path.splitext(ap)[0] + f".{lang}.lrc")
-            if not has_trans:
+            trans_text = str(af.get_lyrics_transform("TRANSLATION", lang) or "").strip()
+            if not trans_text:
+                _trans_side = os.path.splitext(ap)[0] + f".{lang}.lrc"
+                if os.path.isfile(_trans_side):
+                    try:
+                        with open(_trans_side, "r", encoding="utf-8", errors="replace") as _f:
+                            trans_text = _f.read().strip()
+                    except OSError:
+                        trans_text = ""
+            if not trans_text:
                 failed_checks += 1
                 add_issue(f"No {lang} translation (run Lyrics Translate script)",
                           basename)
+                track["issues"].append("LYRICS")
+            elif cfg.get("lrc_enhanced_enabled", True) \
+                    and cfg.get("lrc_enhanced_word_sync", True) \
+                    and "<" in _xlit_src and "<" not in trans_text:
+                failed_checks += 1
+                add_issue(f"{lang} translation not word-synced "
+                          "(force re-run Lyrics Translate script)", basename)
                 track["issues"].append("LYRICS")
 
         # Transform tags must carry their language — TRANSLATION-EN,

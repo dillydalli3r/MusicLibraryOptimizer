@@ -1,6 +1,7 @@
 """Lyrics formatting, LRC/embedded conversion and MEDIA/SOURCE normalization."""
 import os
 import re
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .audio import AudioFile
@@ -935,4 +936,111 @@ def run_format_lyrics(config):
     _normalize_media_source_library(config, stats)
 
     return stats
+
+
+# ---------------------------------------------------------------------------- #
+# Enhanced LRC (ELRC) word-level sync. Shared by the player-bar AI sync
+# (server/ai.py) and the transliterate/translate script (mlo/lyrics_xlit.py)
+# so every lyric variant — original, romanized, translated — carries the
+# same kind of word-level timings.
+# ---------------------------------------------------------------------------- #
+
+# CJK ranges: hiragana, katakana, CJK punctuation, ideographs, compat
+# ideographs, hangul. Japanese/Chinese/Korean text has no spaces, so
+# word-level sync sweeps the line per character instead.
+_CJK_CHAR_RE = re.compile(
+    r"[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]"
+)
+
+
+def _elrc_split_words(body):
+    """Tokenize one line for word-level timing. Space-delimited words for
+    Latin text; CJK runs sweep per character (latin/digit runs inside a
+    CJK piece stay glued together, e.g. "カラオケKEIKO" -> カ ラ オ ケ KEIKO)."""
+    words = []
+    for piece in body.split():
+        if not _CJK_CHAR_RE.search(piece):
+            words.append(piece)
+            continue
+        buf = ""
+        for ch in piece:
+            if _CJK_CHAR_RE.match(ch):
+                if buf:
+                    words.append(buf)
+                    buf = ""
+                words.append(ch)
+            else:
+                buf += ch
+        if buf:
+            words.append(buf)
+    return words or [body]
+
+
+def elrc_word_sync(lrc_text, max_line_spread_s=6.0, min_word_span_s=0.18):
+    """Turn line-synced LRC into word-synced ELRC (deterministic).
+
+    Each line's time slot runs from its own timestamp to the next line's
+    timestamp (capped at max_line_spread_s). Word start times are spread
+    across the slot proportionally to word length. Lines that already carry
+    <mm:ss.xx> word tags are left untouched. Empty/instrumental lines
+    (no text) pass through unchanged. CJK text sweeps per character.
+    """
+    line_re = re.compile(r"^(?:\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\])+(.*)$")
+    all_times_re = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
+    word_tag_re = re.compile(r"<\d{1,2}:\d{1,2}(?:[.:]\d{1,3})?>")
+
+    def ts_to_s(mm, ss, frac="0"):
+        return int(mm) * 60 + int(ss) + int((frac or "0").ljust(2, "0")[:2]) / 100.0
+
+    def fmt_ts(t):
+        mm = int(t // 60)
+        ss = int(t % 60)
+        frac = round((t - math.floor(t)) * 100)
+        if frac >= 100:
+            frac = 99
+        return f"[{mm:02d}:{ss:02d}.{frac:02d}]"
+
+    rows = []
+    for raw in (lrc_text or "").splitlines():
+        stamps = all_times_re.findall(raw)
+        body = all_times_re.sub("", raw).strip()
+        if not stamps:
+            rows.append((None, raw.strip()))
+            continue
+        t = ts_to_s(stamps[-1][0], stamps[-1][1], stamps[-1][2])
+        rows.append((t, body))
+
+    out = []
+    n = len(rows)
+    for i, (t, body) in enumerate(rows):
+        if t is None:
+            out.append(body)
+            continue
+        if not body or word_tag_re.search(body):
+            # empty (instrumental) line or already word-synced: keep as-is
+            # (canonical form: no space between the line stamp and body)
+            out.append(f"{fmt_ts(t)}{body}".rstrip())
+            continue
+        # resolve the line's end: next timed line, capped spread
+        end = None
+        for j in range(i + 1, n):
+            if rows[j][0] is not None and rows[j][0] > t:
+                end = min(rows[j][0], t + max_line_spread_s)
+                break
+        if end is None:
+            end = t + min(max_line_spread_s, max(1.5, 0.32 * len(body.split())))
+        words = _elrc_split_words(body)
+        weights = [max(len(w), 1) for w in words]
+        total = sum(weights)
+        span = max(end - t, min_word_span_s * len(words))
+        cursor = t
+        pieces = []
+        for w, wt in zip(words, weights):
+            share = span * (wt / total)
+            pieces.append(f"<{fmt_ts(cursor)[1:-1]}>{w}")
+            cursor += share
+        # canonical spacing: no space after the line stamp; single spaces
+        # between word tags (the trailing word keeps its punctuation)
+        out.append(fmt_ts(t) + " ".join(pieces))
+    return "\n".join(out)
 

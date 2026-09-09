@@ -24,9 +24,11 @@ and stores the results in two places:
 
 Line and timestamp structure of the original lyrics is preserved exactly:
 for synced (LRC/ELRC) lyrics every output line keeps its original
-``[mm:ss.xx]`` prefix (word-level tags are not re-generated for translated
-text), and blank lines pass through untouched, so the stored transforms
-stay line-aligned with the original and can be rendered without re-alignment.
+``[mm:ss.xx]`` prefix and its word-level ``<mm:ss.xx>`` tags are
+re-distributed across the transformed words (per character for CJK), so
+romanized and translated lyrics stay word-synced karaoke — and blank lines
+pass through untouched, so the stored transforms stay line-aligned with the
+original and can be rendered without re-alignment.
 
 The AI itself comes from the shared OpenAI-compatible client in
 ``server/ai`` (imported lazily so the plain CLI still works); results are
@@ -38,7 +40,7 @@ import re
 import unicodedata
 
 from .audio import AudioFile
-from .lyrics import _atomic_write_text, _lrc_for
+from .lyrics import _atomic_write_text, _lrc_for, elrc_word_sync
 from .paths import AUDIO_EXTS
 from .stats import (
     is_audio_file, new_stats, _collect_targets, _find_albums,
@@ -293,6 +295,12 @@ def _apply(config, text, mode, lang=""):
     mapping = _transform_unique(config, bodies, mode, lang)
     new_bodies = [mapping.get(b, b) for b in bodies]
     new_text = _merge_lines(lines, index_map, new_bodies)
+    # Word-level sync for the transformed lyrics: the original is word-synced,
+    # so the romanization / translation must be too (karaoke sweeps the
+    # transformed line; CJK sweeps per character).
+    if config.get("lrc_enhanced_word_sync", True) and \
+            any(_LINE_TS_RE.match(l) for l in lines):
+        new_text = elrc_word_sync(new_text)
     return new_text, new_text != text
 
 
