@@ -976,18 +976,188 @@ def _elrc_split_words(body):
     return words or [body]
 
 
-def elrc_word_sync(lrc_text, max_line_spread_s=6.0, min_word_span_s=0.18):
-    """Turn line-synced LRC into word-synced ELRC (deterministic).
+def _syllabify_token(word):
+    """Split one word token into syllables (rule-based).
+
+    CJK text: every character is its own syllable (one kana = one mora).
+    Latin text: maximal vowel runs are syllable nuclei; the consonant
+    cluster between two nuclei splits before a single consonant (to-xic),
+    between a pair (af-ter), before a digraph (ma-chine) and after the
+    first consonant of a longer cluster (mon-ster). "y" is a vowel except
+    word-initially, and a mid-run y starts a new nucleus (be-yond, ka-yak)
+    unless it ends the run (boy, play). Punctuation never splits. Returns
+    [word] unchanged when no split is found — an imperfect fallback, the
+    AI audio alignment is what produces real syllable timings.
+    """
+    if not word:
+        return [word]
+    if _CJK_CHAR_RE.search(word):
+        return list(word)
+    m = re.match(r"^(\W*)(.*?)(\W*)$", word, re.UNICODE)
+    lead, core, trail = m.group(1), m.group(2), m.group(3)
+    if len(core) <= 3:
+        return [word]
+    low = core.lower()
+    vowels = set("aeiouyàáâãäåæèéêëìíîïòóôõöøùúûüýÿ")
+    # vowel runs: index/one-past-end pairs into `core`
+    runs = []
+    start = None
+    for i, ch in enumerate(low):
+        is_v = ch in vowels and not (ch == "y" and i == 0)
+        if is_v and start is None:
+            start = i
+        elif not is_v and start is not None:
+            runs.append((start, i))
+            start = None
+    if start is not None:
+        runs.append((start, len(low)))
+    # a mid-run y starts (prev char is a vowel: be-yond, ka-yak) or closes
+    # (prev char is a consonant: try-ing) its own nucleus
+    split_runs = []
+    for a, b in runs:
+        a0 = a
+        if low[a0] == "y" and b - a0 > 1 and low[a0 + 1] in vowels:
+            split_runs.append((a0, a0 + 1))
+            a0 += 1
+        i = a0
+        prev_vowel = False
+        while i < b:
+            if low[i] == "y" and i > a0 and i < b - 1:
+                if prev_vowel:
+                    split_runs.append((a0, i))
+                    a0 = i
+                else:
+                    split_runs.append((a0, i + 1))
+                    a0 = i + 1
+            prev_vowel = low[i] in vowels
+            i += 1
+        split_runs.append((a0, b))
+    runs = split_runs
+    if len(runs) <= 1:
+        return [word]
+    digraphs = ("ch", "sh", "th", "ph", "wh", "ck", "ng", "gh", "qu")
+    cuts = []
+    for (a1, _b1), (_a2, _b2) in zip(runs, runs[1:]):
+        # cluster between the end of this run and the start of the next
+        c_start = _b1
+        c_end = _a2
+        n = c_end - c_start
+        if n <= 0:
+            cut = c_start
+        elif n == 1:
+            cut = c_start  # open syllable: to-xic
+        elif n == 2:
+            frag = low[c_start:c_end]
+            cut = c_start if frag in digraphs else c_start + 1  # ma-chine / af-ter
+        else:
+            cut = c_start + 1  # keep the first consonant with the left nucleus
+        cuts.append(cut)
+    syls = []
+    prev = 0
+    for cut in cuts:
+        syls.append(core[prev:cut])
+        prev = cut
+    syls.append(core[prev:])
+    parts = ([lead] if lead else []) + syls + ([trail] if trail else [])
+    # glue punctuation onto their neighbours so it never stands alone
+    merged = [parts[0]]
+    for piece in parts[1:]:
+        if not re.search(r"\w", piece) and len(piece) <= 2 and len(merged) > 1:
+            merged[-1] += piece
+        else:
+            merged.append(piece)
+    return merged if any(p.strip() for p in merged) else [word]
+
+
+# Syllable-level evidence in ELRC: two word tags glued together with no
+# whitespace between them ("<00:10.69>try<00:11.10>ing") — word-level
+# canonical form always separates word tags with a single space.
+
+
+def _body_has_glued_tags(body):
+    """True when the line carries syllable-level (glued) word tags."""
+    ms = list(WORD_TS_RE.finditer(body))
+    for a, b in zip(ms, ms[1:]):
+        seg = body[a.end():b.start()]
+        if seg == "" or (seg == seg.strip() and bool(seg)):
+            return True
+    return False
+
+
+def _cjk_tag_coverage(body):
+    """Fraction of CJK characters that sit directly behind a word tag.
+    For CJK, one tag per character IS syllable (mora) level — kana carry
+    exactly one mora each — so full per-character coverage satisfies the
+    syllable requirement even though the tags are space-separated."""
+    tag_ends = {m.end() for m in WORD_TS_RE.finditer(body)}
+    total = covered = 0
+    for i, ch in enumerate(body):
+        if _CJK_CHAR_RE.match(ch):
+            total += 1
+            if i in tag_ends:
+                covered += 1
+    return covered / total if total else 0.0
+
+
+def sync_level_of(text):
+    """Sync granularity carried by a lyrics text: 'plain', 'line', 'word'
+    or 'syllable'. Glued word tags anywhere mean syllable level; CJK text
+    whose characters are all tagged counts as syllable too (one kana = one
+    mora), everything else word-tagged is 'word'."""
+    raw = str(text or "")
+    if not raw.strip():
+        return "plain"
+    has_word = WORD_TS_RE.search(raw)
+    if not has_word:
+        return "line" if TIMESTAMP_RE.search(raw) else "plain"
+    if _body_has_glued_tags(raw):
+        return "syllable"
+    # CJK: full per-character tag coverage on the CJK-bearing lines
+    cjk_total = cjk_covered = 0
+    for line in raw.splitlines():
+        if not WORD_TS_RE.search(line):
+            continue
+        bare = WORD_TS_RE.sub("", line)
+        for i, ch in enumerate(bare):
+            if _CJK_CHAR_RE.match(ch):
+                cjk_total += 1
+                if i in {m.end() for m in WORD_TS_RE.finditer(line)}:
+                    cjk_covered += 1
+    if cjk_total and cjk_covered / cjk_total >= 0.9:
+        return "syllable"
+    return "word"
+
+
+def text_meets_sync_level(text, level):
+    """True when `text` carries at least the required sync granularity
+    (lrc_sync_level: SYLLABLE / WORD / LINE)."""
+    level = str(level or "SYLLABLE").upper()
+    lv = sync_level_of(text)
+    if level == "WORD":
+        return lv in ("word", "syllable")
+    if level == "SYLLABLE":
+        return lv == "syllable"
+    return lv in ("line", "word", "syllable")
+
+
+def elrc_word_sync(lrc_text, max_line_spread_s=6.0, min_word_span_s=0.18,
+                   level="word"):
+    """Turn line-synced LRC into word- or syllable-synced ELRC.
 
     Each line's time slot runs from its own timestamp to the next line's
     timestamp (capped at max_line_spread_s). Word start times are spread
-    across the slot proportionally to word length. Lines that already carry
-    <mm:ss.xx> word tags are left untouched. Empty/instrumental lines
-    (no text) pass through unchanged. CJK text sweeps per character.
+    across the slot proportionally to word length; with level="syllable"
+    each word's span is further divided across its syllables and the
+    syllable tags are glued together inside the word (the canonical
+    syllable-ELRC form). Word-tagged input is upgraded to syllable level;
+    already-syllable lines pass through untouched. Empty/instrumental
+    lines pass through unchanged. CJK text sweeps per character (a kana
+    character is one syllable, so CJK output is the same at both levels).
     """
     line_re = re.compile(r"^(?:\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\])+(.*)$")
     all_times_re = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
-    word_tag_re = re.compile(r"<\d{1,2}:\d{1,2}(?:[.:]\d{1,3})?>")
+    word_tag_re = re.compile(r"<(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?>")
+    syllables = str(level or "word").lower() == "syllable"
 
     def ts_to_s(mm, ss, frac="0"):
         return int(mm) * 60 + int(ss) + int((frac or "0").ljust(2, "0")[:2]) / 100.0
@@ -999,6 +1169,20 @@ def elrc_word_sync(lrc_text, max_line_spread_s=6.0, min_word_span_s=0.18):
         if frac >= 100:
             frac = 99
         return f"[{mm:02d}:{ss:02d}.{frac:02d}]"
+
+    def word_span_syllables(start, end, word_text):
+        """Glued <t>syl<t>syl pieces covering [start, end)."""
+        syls = _syllabify_token(word_text)
+        weights = [max(len(s), 1) for s in syls]
+        total = sum(weights)
+        span = max(end - start, 0.05)
+        cursor = start
+        pieces = []
+        for s, wt in zip(syls, weights):
+            share = span * (wt / total)
+            pieces.append(f"<{fmt_ts(cursor)[1:-1]}>{s}")
+            cursor += share
+        return "".join(pieces)
 
     rows = []
     for raw in (lrc_text or "").splitlines():
@@ -1016,10 +1200,41 @@ def elrc_word_sync(lrc_text, max_line_spread_s=6.0, min_word_span_s=0.18):
         if t is None:
             out.append(body)
             continue
-        if not body or word_tag_re.search(body):
-            # empty (instrumental) line or already word-synced: keep as-is
-            # (canonical form: no space between the line stamp and body)
-            out.append(f"{fmt_ts(t)}{body}".rstrip())
+        if not body:
+            # empty (instrumental) line: canonical form, no trailing space
+            out.append(f"{fmt_ts(t)}".rstrip())
+            continue
+        if word_tag_re.search(body):
+            if not syllables or _body_has_glued_tags(body):
+                # already word-synced (or already syllable-synced):
+                # keep as-is
+                out.append(f"{fmt_ts(t)}{body}".rstrip())
+                continue
+            # word-level input + syllable target: upgrade in place. Merge
+            # the tagged pieces back into words (a piece NOT ending in
+            # whitespace continues the previous word — glued syllables),
+            # then re-split each word's own time span into glued syllables.
+            ms = list(word_tag_re.finditer(body))
+            words = []  # [start_of_first_tag, text]
+            for m, nxt in zip(ms, ms[1:] + [None]):
+                seg = body[m.end():nxt.start() if nxt else len(body)]
+                prev_open = words and words[-1][1] and not words[-1][1][-1].isspace()
+                if prev_open:
+                    words[-1][1] += seg
+                else:
+                    words.append([ts_to_s(m.group(1), m.group(2), m.group(3)), seg])
+            rebuilt = []
+            for j, (w_start, seg) in enumerate(words):
+                stripped = seg.rstrip()
+                if not stripped:
+                    continue
+                if j + 1 < len(words):
+                    w_end = words[j + 1][0]
+                else:
+                    w_end = w_start + max(0.4, 0.16 * len(stripped))
+                rebuilt.append((w_start, w_end, stripped))
+            pieces = [word_span_syllables(a, b, w) for a, b, w in rebuilt]
+            out.append(fmt_ts(t) + " ".join(pieces))
             continue
         # resolve the line's end: next timed line, capped spread
         end = None
@@ -1037,10 +1252,14 @@ def elrc_word_sync(lrc_text, max_line_spread_s=6.0, min_word_span_s=0.18):
         pieces = []
         for w, wt in zip(words, weights):
             share = span * (wt / total)
-            pieces.append(f"<{fmt_ts(cursor)[1:-1]}>{w}")
+            if syllables:
+                pieces.append(word_span_syllables(cursor, cursor + share, w))
+            else:
+                pieces.append(f"<{fmt_ts(cursor)[1:-1]}>{w}")
             cursor += share
         # canonical spacing: no space after the line stamp; single spaces
-        # between word tags (the trailing word keeps its punctuation)
+        # between word tags (the trailing word keeps its punctuation);
+        # syllable tags inside a word are glued together with no space
         out.append(fmt_ts(t) + " ".join(pieces))
     return "\n".join(out)
 

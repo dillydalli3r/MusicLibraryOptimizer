@@ -24,11 +24,12 @@ and stores the results in two places:
 
 Line and timestamp structure of the original lyrics is preserved exactly:
 for synced (LRC/ELRC) lyrics every output line keeps its original
-``[mm:ss.xx]`` prefix and its word-level ``<mm:ss.xx>`` tags are
-re-distributed across the transformed words (per character for CJK), so
-romanized and translated lyrics stay word-synced karaoke — and blank lines
-pass through untouched, so the stored transforms stay line-aligned with the
-original and can be rendered without re-alignment.
+``[mm:ss.xx]`` prefix and its ``<mm:ss.xx>`` tags are re-distributed across
+the transformed words at the configured ``lrc_sync_level`` (per character
+for CJK), so romanized and translated lyrics stay syllable/word-synced
+karaoke — and blank lines pass through untouched, so the stored transforms
+stay line-aligned with the original and can be rendered without
+re-alignment.
 
 The AI itself comes from the shared OpenAI-compatible client in
 ``server/ai`` (imported lazily so the plain CLI still works); results are
@@ -295,12 +296,14 @@ def _apply(config, text, mode, lang=""):
     mapping = _transform_unique(config, bodies, mode, lang)
     new_bodies = [mapping.get(b, b) for b in bodies]
     new_text = _merge_lines(lines, index_map, new_bodies)
-    # Word-level sync for the transformed lyrics: the original is word-synced,
-    # so the romanization / translation must be too (karaoke sweeps the
-    # transformed line; CJK sweeps per character).
+    # Word/syllable-level sync for the transformed lyrics: the original is
+    # synced, so the romanization / translation must be too, at the
+    # configured level (karaoke sweeps the transformed line; CJK sweeps
+    # per character, and a kana character is one syllable).
     if config.get("lrc_enhanced_word_sync", True) and \
             any(_LINE_TS_RE.match(l) for l in lines):
-        new_text = elrc_word_sync(new_text)
+        new_text = elrc_word_sync(
+            new_text, level=str(config.get("lrc_sync_level") or "SYLLABLE").lower())
     return new_text, new_text != text
 
 

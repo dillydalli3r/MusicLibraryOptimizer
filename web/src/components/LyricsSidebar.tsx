@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, X } from "lucide-react";
 import { api } from "../api";
-import { parsePlayerLrc, type LrcLine } from "./LyricsViewer";
+import { parsePlayerLrc, activeLineRange, type LrcLine } from "./LyricsViewer";
 import { createLyricsGlider, type LyricsGlider } from "../lib/lyrScroll";
 import Visualizer from "./Visualizer";
 
@@ -108,13 +108,11 @@ export default function LyricsSidebar({
   }, [playing, getAudioTime]);
   const dispTime = playing && smoothTime > 0 ? smoothTime : time;
 
-  const activeLine = useMemo(() => {
-    let idx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].time <= dispTime + 0.02) idx = i;
-      else break;
-    }
-    return idx;
+  // A RANGE, not a single line: same-time lines (duets / backing vocals)
+  // highlight together. activeStart is the scroll anchor.
+  const { activeStart, activeEnd } = useMemo(() => {
+    const [s, e] = activeLineRange(lines, dispTime);
+    return { activeStart: s, activeEnd: e };
   }, [lines, dispTime]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -140,19 +138,17 @@ export default function LyricsSidebar({
     if (prev >= 0 && Math.abs(dispTime - prev) > 1.2) seekMarkRef.current = Date.now();
   }, [dispTime]);
 
-  // While the pointer rests on the pane the reader owns it: auto-centering
-  // pauses and resumes at the next natural line change after the cursor
-  // leaves (leaving itself never scrolls). Clicking a line always centers
-  // it — hover or not — so jump-by-click is never swallowed.
-  const hoverPauseRef = useRef(false);
+  // Auto-follow owns the pane — only an explicit wheel / touch takes over,
+  // and following resumes at the next line change.
   useEffect(() => {
-    if (activeLine < 0 || hoverPauseRef.current) return;
-    const el = primaryRefs.current[activeLine] ?? lineRefs.current[activeLine];
+    if (activeStart < 0) return;
+    const el = primaryRefs.current[activeStart] ?? lineRefs.current[activeStart];
     if (!el) return;
     const now = Date.now();
     const animate = now - glideMarkRef.current < 1500 || now - seekMarkRef.current > 600;
     gliderRef.current?.center(el, !animate);
-  }, [activeLine]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStart]);
 
   useEffect(() => {
     const c = scrollRef.current;
@@ -188,19 +184,12 @@ export default function LyricsSidebar({
       <div
         ref={scrollRef}
         className="relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 no-scrollbar"
-        onMouseEnter={() => {
-          hoverPauseRef.current = true;
-          gliderRef.current?.stop();
-        }}
-        onMouseLeave={() => {
-          hoverPauseRef.current = false;
-        }}
         onWheel={() => gliderRef.current?.stop()}
         onTouchStart={() => gliderRef.current?.stop()}
       >
         {displayLines.length > 0 ? (
           displayLines.map((l, i) => {
-            const isActive = synced && i === activeLine;
+            const isActive = synced && activeEnd >= activeStart && i >= activeStart && i <= activeEnd;
             const trans = payload?.trans?.[i];
             const xlit = payload?.xlit?.[i];
             return (

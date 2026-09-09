@@ -248,6 +248,25 @@ export const api = {
       body: JSON.stringify({ path, text }),
     }, 180000),
 
+  // Acoustic syllable alignment: the track audio is sent to an
+  // audio-capable model, which timestamps every line and syllable.
+  lyricsAlign: (path: string, text: string) =>
+    json<{ lrc: string; aligned: number; total: number }>(`${API}/lyrics/align`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, text }),
+    }, 360000),
+
+  // Transliterate one track and store it like the Lyrics Translate script
+  // (TRANSLITERATION-<lang>-LATN tag + sidecar per settings). The LYRICS
+  // field keeps the original language.
+  lyricsXlitStore: (path: string) =>
+    json<{ ok?: boolean; skipped?: string; xlit: string }>(`${API}/lyrics/xlit/store`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }, 300000),
+
   rymValidate: (url: string) => json<{ valid: boolean }>(`${API}/rym/validate?url=${encodeURIComponent(url)}`),
 
   coverUrl: (albumPath: string, coverFile?: string | null) =>
@@ -455,7 +474,7 @@ export const api = {
       body: JSON.stringify({ kind, key, mbid: mbid ?? null }),
     }),
   lyricsAiLines: (mode: "translate" | "transliterate", lines: string[]) =>
-    json<{ mode: string; lines: string[] }>(`${API}/lyrics/ai/lines`, {
+    json<{ mode: string; lines: string[]; skipped?: string }>(`${API}/lyrics/ai/lines`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode, lines }),

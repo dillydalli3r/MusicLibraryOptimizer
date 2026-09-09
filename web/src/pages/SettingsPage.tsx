@@ -122,6 +122,10 @@ export default function SettingsPage() {
         { k: "lrc_collapse_blank_lines", label: "Collapse blank lines", type: "bool" },
         { k: "lrc_enhanced_enabled", label: "Enhanced LRC (word timestamps)", type: "bool" },
         { k: "lrc_enhanced_word_sync", label: "Enhanced LRC word sync", type: "bool" },
+        {
+          k: "lrc_sync_level", label: "Required lyrics sync level", type: "select",
+          options: [["SYLLABLE", "Syllable (default)"], ["WORD", "Word"], ["LINE", "Line timestamps only"]],
+        },
         { k: "lrc_extended_enabled", label: "Extended LRC (E-LRC)", type: "bool" },
         { k: "lrc_add_zero_timestamp", label: "Add [00:00.00] opening line", type: "bool" },
         { k: "lrc_zero_timestamp_blank", label: "Zero timestamp is blank line", type: "bool" },
@@ -263,6 +267,7 @@ export default function SettingsPage() {
         { k: "ai_base_url", label: "Base URL", type: "text" },
         { k: "ai_api_key", label: "API key", type: "text" },
         { k: "ai_model", label: "Model (e.g. gemini-3.5-flash-lite)", type: "text" },
+        { k: "ai_align_model", label: "Syllable-alignment model (audio-capable; blank = Model)", type: "text" },
         { k: "lyrics_xlit_enabled", label: "Transliteration enabled (script 15)", type: "bool" },
         { k: "lyrics_translate_enabled", label: "Translation enabled (script 15)", type: "bool" },
         { k: "lyrics_translation_langs", label: "Translation languages (comma separated, e.g. en,de)", type: "text" },

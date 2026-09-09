@@ -1142,7 +1142,8 @@ async def lyrics_ai(req: LyricsAiRequest):
         if not text.strip():
             raise HTTPException(400, "no lyrics text provided")
         from server.ai import wordsync_lrc
-        return {"mode": "wordsync", "result": wordsync_lrc(text)}
+        level = str(cfg.get("lrc_sync_level") or "SYLLABLE").lower()
+        return {"mode": "wordsync", "result": wordsync_lrc(text, level=level)}
 
     from server import ai as ai_mod
     if not ai_mod.ai_configured(cfg):
@@ -1219,12 +1220,101 @@ async def lyrics_ai_sync(req: LyricsAiSyncRequest):
         lrc, source = await asyncio.to_thread(
             ai_mod.lyrics_detect_sync, load_config(),
             artist=artist, track=title, album=album, duration=duration,
-            existing_text=existing, candidates=candidates)
+            existing_text=existing, candidates=candidates, audio_path=p)
     except Exception as e:
         raise HTTPException(502, f"lyrics sync failed: {e}")
     if not lrc:
         raise HTTPException(404, "no lyrics found for this track")
     return {"lrc": lrc, "source": source}
+
+
+class LyricsAlignRequest(BaseModel):
+    path: str
+    text: str = ""
+
+
+@app.post("/api/lyrics/align")
+async def lyrics_align(req: LyricsAlignRequest):
+    """Acoustic syllable alignment of the given lyrics against the track's
+    own audio: the recording is sent to an audio-capable model, which
+    returns a real start time and per-syllable timestamps for every line.
+    The wording is never changed — only the times. This is what makes the
+    karaoke syllable-sweep genuinely follow the singer instead of
+    interpolating."""
+    from server import ai as ai_mod
+    p = os.path.normpath(req.path)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(400, "no lyrics text provided")
+    cfg = load_config()
+    from server.ai import ai_configured
+    if not ai_configured(cfg):
+        raise HTTPException(400, "AI is not configured — set base URL and model in Settings → AI")
+    try:
+        lrc, info = await asyncio.to_thread(
+            ai_mod.lyrics_align_audio, cfg, text, p)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"alignment failed: {e}")
+    return {"lrc": lrc, "aligned": info.get("aligned", 0),
+            "total": info.get("total", 0)}
+
+
+class TrackPathRequest(BaseModel):
+    path: str
+
+
+@app.post("/api/lyrics/xlit/store")
+def lyrics_xlit_store(req: TrackPathRequest):
+    """Transliterate one track's lyrics and STORE them the way script 15
+    does — TRANSLITERATION-<lang>-LATN tag (+ .romaji.lrc sidecar when the
+    lyrics format keeps sidecars). The LYRICS field keeps the original
+    language/script; this only adds the romanized reading."""
+    from mlo.audio import AudioFile
+    from mlo.lyrics_xlit import (
+        XLIT_SIDECAR, _apply, needs_transliteration, xlit_tag_suffix,
+    )
+    p = os.path.normpath(mbresolve.resolve_track(req.path) or req.path)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
+    cfg = load_config()
+    af = AudioFile(p)
+    if af.audio is None:
+        raise HTTPException(500, af.error or "unreadable")
+    text = (af.get_lyrics() or "").strip()
+    if not text:
+        lrc_path = os.path.splitext(p)[0] + ".lrc"
+        if os.path.isfile(lrc_path):
+            try:
+                with open(lrc_path, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read().strip()
+            except Exception:
+                text = ""
+    if not text:
+        raise HTTPException(400, "track has no lyrics to transliterate")
+    if not needs_transliteration(text, cfg):
+        return {"skipped": "script", "xlit": ""}
+    xlit, ok = _apply(cfg, text, "transliterate")
+    if not ok or not xlit.strip():
+        return {"skipped": "identity", "xlit": ""}
+    sidecars = (bool(cfg.get("lyrics_xlit_sidecars", True))
+                and str(cfg.get("lyrics_format", "EMBEDDED")).upper() in ("LRC", "BOTH"))
+    if str(cfg.get("lyrics_format", "EMBEDDED")).upper() in ("EMBEDDED", "BOTH"):
+        af.set_tag(f"TRANSLITERATION-{xlit_tag_suffix(cfg, text, af)}".upper(), xlit)
+        if str(af.get_tag("TRANSLITERATION") or "").strip():
+            af.delete_tag("TRANSLITERATION")
+    if sidecars:
+        from mlo.lyrics import _atomic_write_text
+        _atomic_write_text(os.path.splitext(p)[0] + XLIT_SIDECAR, xlit)
+    tagcache.invalidate_path(p)
+    return {"ok": True, "xlit": xlit}
 
 
 # --------------------------------------------------------------------------- #

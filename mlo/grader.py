@@ -6,7 +6,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .audio import AudioFile
 from .config import should_write_audio_tag
-from .lyrics import _lrc_for, _canonical_lyrics, format_lyrics_text
+from .lyrics import (
+    _lrc_for, _canonical_lyrics, format_lyrics_text,
+    sync_level_of, text_meets_sync_level,
+)
 from .lyrics_xlit import (
     XLIT_SIDECAR, ai_ready, needs_translation, needs_transliteration,
     primary_translation_lang,
@@ -1433,11 +1436,15 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         fmt_ok = False
                     if lrc_text and not _lyrics_word_timestamps_valid(lrc_text, cfg):
                         fmt_ok = False
-                    # Word-sync REQUIREMENT: line-synced without word tags
-                    # is not word-level karaoke.
-                    if lyr_text and TIMESTAMP_RE_GRADE.search(lyr_text) and "<" not in lyr_text:
+                    # Sync-level REQUIREMENT: synced lyrics must carry at
+                    # least the configured granularity (SYLLABLE default —
+                    # glued per-syllable tags; WORD — per-word tags).
+                    _level = cfg.get("lrc_sync_level", "SYLLABLE")
+                    if lyr_text and TIMESTAMP_RE_GRADE.search(lyr_text) \
+                            and not text_meets_sync_level(lyr_text, _level):
                         fmt_ok = False
-                    if lrc_text and TIMESTAMP_RE_GRADE.search(lrc_text) and "<" not in lrc_text:
+                    if lrc_text and TIMESTAMP_RE_GRADE.search(lrc_text) \
+                            and not text_meets_sync_level(lrc_text, _level):
                         fmt_ok = False
                 # Unsynced lyrics must fail — plain text without any [mm:ss.xx] is not synced
                 if lyr_text and not TIMESTAMP_RE_GRADE.search(lyr_text):
@@ -1492,11 +1499,13 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 track["issues"].append("LYRICS")
             elif cfg.get("lrc_enhanced_enabled", True) \
                     and cfg.get("lrc_enhanced_word_sync", True) \
-                    and "<" in _xlit_src and "<" not in xlit_text:
-                # the source lyrics are word-synced — the romanization must
-                # be too, or karaoke dies at the translation line
+                    and (sync_level_of(xlit_text) < sync_level_of(_xlit_src)
+                         or not text_meets_sync_level(xlit_text, cfg.get("lrc_sync_level", "SYLLABLE"))):
+                # the source lyrics are syllable/word-synced — the
+                # romanization must be too, at least as fine-grained, or
+                # karaoke dies at the romanized line
                 failed_checks += 1
-                add_issue("Transliteration not word-synced "
+                add_issue("Transliteration not syllable-synced "
                           "(force re-run Lyrics Translate script)", basename)
                 track["issues"].append("LYRICS")
         if _xlit_src and cfg.get("grade_check_trans", True) \
@@ -1520,9 +1529,10 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 track["issues"].append("LYRICS")
             elif cfg.get("lrc_enhanced_enabled", True) \
                     and cfg.get("lrc_enhanced_word_sync", True) \
-                    and "<" in _xlit_src and "<" not in trans_text:
+                    and (sync_level_of(trans_text) < sync_level_of(_xlit_src)
+                         or not text_meets_sync_level(trans_text, cfg.get("lrc_sync_level", "SYLLABLE"))):
                 failed_checks += 1
-                add_issue(f"{lang} translation not word-synced "
+                add_issue(f"{lang} translation not syllable-synced "
                           "(force re-run Lyrics Translate script)", basename)
                 track["issues"].append("LYRICS")
 

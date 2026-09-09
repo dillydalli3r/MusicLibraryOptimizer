@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { CloudDownload, Loader2, Search, Sparkles, X, ChevronDown, ChevronUp, ClipboardPaste, Upload } from "lucide-react";
+import { CloudDownload, Loader2, PenLine, Search, Sparkles, X, ChevronDown, ChevronUp, ClipboardPaste, Upload } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 import LrclibPublishPanel from "./LrclibPublish";
+import LyricsEditorModal from "./LyricsEditorModal";
 
 interface Candidate {
   id: number;
@@ -76,6 +77,7 @@ export default function LyricsManagerModal({
   const [manual, setManual] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
   const [pubOpen, setPubOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
 
   const search = useMemo(
     () => () => {
@@ -195,6 +197,13 @@ export default function LyricsManagerModal({
           <button className="btn-ghost !py-1.5 text-xs" onClick={() => setManualOpen(!manualOpen)}>
             <ClipboardPaste className="h-3.5 w-3.5" /> Paste manually
           </button>
+          <button
+            className={`btn-ghost !py-1.5 text-xs ${editorOpen ? "!text-accent" : ""}`}
+            onClick={() => setEditorOpen(true)}
+            title="Full-screen lyrics editor: tap line/word/syllable times along the vocals, AI acoustic syllable sync, romanization, speed control"
+          >
+            <PenLine className="h-3.5 w-3.5" /> Enhanced editor
+          </button>
           {currentText?.trim() && (
             <button
               className={`btn-ghost !py-1.5 text-xs ${pubOpen ? "!text-accent" : ""}`}
@@ -301,6 +310,18 @@ export default function LyricsManagerModal({
           Applying hands the lyrics to the editor / player — saving still follows your lyrics format &amp; save-target settings.
         </div>
       </div>
+
+      {editorOpen && (
+        <LyricsEditorModal
+          path={path}
+          artist={artist}
+          track={track}
+          album={album}
+          duration={duration}
+          initialLyrics={currentText ?? ""}
+          onClose={() => setEditorOpen(false)}
+        />
+      )}
     </div>
   );
 }

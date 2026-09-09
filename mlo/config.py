@@ -185,6 +185,9 @@ DEFAULT_CONFIG = {
     "lrc_collapse_blank_lines": True,
     "lrc_enhanced_enabled": True,
     "lrc_enhanced_word_sync": True,
+    # Required (and AI-targeted) sync granularity of synced lyrics.
+    # SYLLABLE is the default: per-syllable glued ELRC tags, real karaoke.
+    "lrc_sync_level": "SYLLABLE",
     "lrc_extended_enabled": True,
     "lrc_add_zero_timestamp": False,
     "lrc_zero_timestamp_blank": False,
@@ -415,6 +418,9 @@ DEFAULT_CONFIG = {
     # AI-assisted lyrics (any OpenAI-compatible /chat/completions endpoint).
     "ai_base_url": "",
     "ai_api_key": "",
+    # Optional override model for acoustic syllable alignment (needs audio
+    # input; blank = ai_model). Audio-capable models align best.
+    "ai_align_model": "",
     "ai_model": "",
     "ai_translate_lang": "en",
 
@@ -523,6 +529,10 @@ _INT_RANGES = {
 _CHOICES = {
     "lyrics_format": {"EMBEDDED", "LRC", "BOTH"},
     "lrc_zero_timestamp_target": {"EMBEDDED", "LRC", "BOTH"},
+    # Sync granularity required of (and targeted for) synced lyrics:
+    # SYLLABLE = glued per-syllable ELRC tags, WORD = per-word ELRC tags,
+    # LINE = plain [mm:ss.xx] line timestamps only.
+    "lrc_sync_level": {"SYLLABLE", "WORD", "LINE"},
     "cue_file_type": {"WAVE", "MP3"},
     "audiometa_key_notation": {"musical", "camelot", "openkey"},
     "video_preset": {"ultrafast", "superfast", "veryfast", "faster", "fast",

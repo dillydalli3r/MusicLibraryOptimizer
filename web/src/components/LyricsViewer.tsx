@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CloudDownload, Play, Square, Plus, Trash2, Undo2, Sparkles, Keyboard, Wand2, Eraser, Upload } from "lucide-react";
+import { CloudDownload, PenLine, Play, Square, Plus, Trash2, Undo2, Sparkles, Keyboard, Wand2, Eraser, Upload } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 import LrclibPublishPanel from "./LrclibPublish";
@@ -18,7 +18,10 @@ export interface LrcLine {
   ts: string; // [mm:ss.xx]
   time: number; // seconds
   text: string;
-  words?: LrcWord[]; // ELRC inline word-level timestamps <mm:ss.xx>
+  words?: LrcWord[]; // ELRC inline word/syllable timestamps <mm:ss.xx>
+  /** Syllable level: some word tags are glued together with no whitespace
+   * ("<t>try<t>ing") — one tag per syllable instead of per word. */
+  syl?: boolean;
 }
 
 const META_RE = /\[(?:ar|ti|al|by|re|ve|length|offset):[^\]]*\]/gi;
@@ -62,12 +65,17 @@ export function parseLrc(lrc: string): LrcLine[] {
       ? words.map((w) => w.text).join("").replace(/\s+/g, " ").trim()
       : body.trim();
     if (!text && !words.length) continue;
+    // Syllable level: a piece that does NOT end in whitespace continues the
+    // previous word (glued syllable tags); canonical word-level tags always
+    // end their piece with a space (except the final one of the line).
+    const syl = words.some((_w, k) => k > 0 && !/\s$/.test(words[k - 1].text));
     for (const m of times) {
       const time = tsToTime(m[1], m[2], m[3]) + offsetMs / 1000;
       lines.push({
         ts: fmtTs(time, 2),
         time,
         text,
+        syl: syl || undefined,
         words: words.length ? words.map((w) => ({ ...w, time: w.time + offsetMs / 1000 })) : undefined,
       });
     }
@@ -96,13 +104,33 @@ export function parsePlayerLrc(text: string): LrcLine[] {
   return parsed;
 }
 
+/** The active line range, background vocals included: lines stamped at the
+ * SAME moment (duets, backing vocals — within 50 ms) form one cluster and
+ * are sung simultaneously, so they all highlight together. Returns
+ * [first, last] indexes of the current cluster, [-1, -1] before the first
+ * line. */
+export function activeLineRange(lines: LrcLine[], t: number): [number, number] {
+  let end = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].time <= t + 0.02) end = i;
+    else break;
+  }
+  if (end < 0) return [-1, -1];
+  let start = end;
+  while (start > 0 && lines[start - 1].time >= lines[end].time - 0.05) start--;
+  return [start, end];
+}
+
 export function serializeLrc(lines: LrcLine[], decimals = 2): string {
   return lines
     .map((l) => {
       const ts = fmtTs(l.time, decimals);
       if (l.words?.length) {
+        // pieces carry their own spacing (word-final pieces end with a
+        // space, glued syllables don't) — concatenating reproduces the
+        // line text exactly. No space after the line stamp (canonical).
         const body = l.words.map((w) => `<${fmtTs(w.time, decimals)}>${w.text}`).join("");
-        return `${ts} ${body}`;
+        return `${ts}${body}`;
       }
       return `${ts}${l.text}`;
     })
@@ -119,6 +147,7 @@ export default function LyricsViewer({
   album,
   duration,
   decimals = 2,
+  onEnhancedEditor,
 }: {
   path: string;
   initialLyrics: string;
@@ -129,6 +158,9 @@ export default function LyricsViewer({
   album?: string;
   duration?: number;
   decimals?: number;
+  /** Opens the full-screen enhanced editor (syllable tap-sync, AI acoustic
+   * alignment, romanization) when provided. */
+  onEnhancedEditor?: () => void;
 }) {
   const [lines, setLines] = useState<LrcLine[]>(() => parseLrc(initialLyrics));
   const [rawMode, setRawMode] = useState(false);
@@ -558,6 +590,15 @@ export default function LyricsViewer({
           <button className="btn-ghost !py-1 text-xs" onClick={importFromLrclib} disabled={loading}>
             <CloudDownload className="h-3.5 w-3.5" /> LRCLIB
           </button>
+          {onEnhancedEditor && (
+            <button
+              className="btn-ghost !py-1 text-xs"
+              onClick={onEnhancedEditor}
+              title="Full-screen enhanced editor — syllable tap-sync along the vocals, AI acoustic alignment, romanization, playback speed"
+            >
+              <PenLine className="h-3.5 w-3.5" /> Enhanced
+            </button>
+          )}
           <button
             className={`btn-ghost !py-1 text-xs ${(rawMode ? raw : serializeLrc(lines, dec)).trim() ? "" : "opacity-40"} ${pubOpen ? "!text-accent" : ""}`}
             onClick={() => setPubOpen(!pubOpen)}
@@ -792,8 +833,15 @@ export default function LyricsViewer({
                     onChange={(e) => updateLine(i, { text: e.target.value })}
                   />
                   {l.words?.length ? (
-                    <span className="chip text-[9px] bg-accent/10 border border-accent/25 text-accent-soft shrink-0" title="Word-synced (ELRC)">
-                      {l.words.length}w
+                    <span
+                      className={`chip text-[9px] shrink-0 border ${
+                        l.syl
+                          ? "bg-accent/10 border-accent/25 text-accent-soft"
+                          : "bg-white/5 border-white/15 text-zinc-400"
+                      }`}
+                      title={l.syl ? "Syllable-synced (glued ELRC tags)" : "Word-synced (ELRC)"}
+                    >
+                      {l.words.length}{l.syl ? "s" : "w"}
                     </span>
                   ) : null}
                 </div>

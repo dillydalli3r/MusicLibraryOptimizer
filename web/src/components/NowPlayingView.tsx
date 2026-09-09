@@ -13,7 +13,7 @@ import CoverImg from "./CoverImg";
 import { activeAnalyser } from "../lib/analyser";
 import { SubtitledVideo } from "./SubtitledVideo";
 import Visualizer from "./Visualizer";
-import { parsePlayerLrc, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
+import { parsePlayerLrc, activeLineRange, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
 import { createLyricsGlider, type LyricsGlider } from "../lib/lyrScroll";
 import { nextSpeed, fmtSpeed } from "../lib/playback";
 
@@ -415,15 +415,15 @@ export default function NowPlayingView(p: Props) {
   }, [aiReady, showXlit, showTrans, hasLyrics, plainLines, p.current.path]);
 
   // ---- active line ---------------------------------------------------------
-  const activeLine = useMemo(() => {
-    if (staleLyrics) return -1; // old lyrics against the new song's clock
-    let idx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].time <= dispTime + 0.02) idx = i;
-      else break;
-    }
-    return idx;
+  // A RANGE, not a single line: lines stamped at the same moment (duets,
+  // backing vocals) form one cluster and highlight together. aStart is the
+  // scroll target (first line of the cluster).
+  const { aStart, aEnd } = useMemo(() => {
+    if (staleLyrics) return { aStart: -1, aEnd: -1 }; // old lyrics vs new clock
+    const [s, e] = activeLineRange(lines, dispTime);
+    return { aStart: s, aEnd: e };
   }, [lines, dispTime, staleLyrics]);
+  const activeLine = aStart;
 
   // Glider owns the lyrics pane's scrolling (zoom-safe, retargetable) —
   // recreated whenever the pane mounts/unmounts (layout follows lyric
@@ -439,12 +439,11 @@ export default function NowPlayingView(p: Props) {
     };
   }, [layoutHasLyrics, videoPath]);
 
-  // While the pointer rests on the lyrics the reader owns the pane: the
-  // auto-center pauses and does NOT resume on leave — moving the cursor
-  // away never shifts the text. Following picks back up at the next
-  // natural line change, gliding from wherever the pane is. A ref, not
-  // state: entering/leaving must neither re-render nor scroll.
-  const hoverPauseRef = useRef(false);
+  // Auto-follow owns the pane. Nothing pauses it implicitly — not even the
+  // pointer resting on the lyrics (that hover-pause read as "auto-scroll
+  // stopped working" whenever the cursor was parked over the pane). Only
+  // an explicit wheel / touch takes over, and following picks back up at
+  // the next line change, gliding from wherever the pane is.
 
   // Seek vs glide: a real jump of the song clock (>1.2s between frames)
   // marks a SEEK — the pane snaps to the new position. Everything else
@@ -464,14 +463,15 @@ export default function NowPlayingView(p: Props) {
   }, [dispTime]);
 
   useEffect(() => {
-    if (activeLine < 0 || hoverPauseRef.current) return;
+    if (activeLine < 0) return;
     const el = primaryRefs.current[activeLine] ?? lineRefs.current[activeLine];
     if (!el) return;
     const now = Date.now();
     const animate = now - glideMarkRef.current < 1500 || now - seekMarkRef.current > 600;
     gliderRef.current?.center(el, !animate);
-    // hoverPause intentionally excluded (a ref): leaving hover must not
-    // scroll — following resumes at the next natural line change.
+    // Deps: activeLine only — the effect intentionally ignores dispTime so
+    // the pane moves one step per line change, not per frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLine]);
 
   // New track → rewind the lyrics pane to the top.
@@ -505,10 +505,12 @@ export default function NowPlayingView(p: Props) {
     }
   };
 
-  // ---- AI word-sync (one click): LRCLIB align + ELRC word timings --------
-  // Unsynced lyrics get timestamps; line-synced ones are upgraded to word
-  // level; existing word timings are re-aligned. Written per lyrics_format
-  // and reloaded into the pane when it finishes.
+  // ---- AI syllable sync (one click) ---------------------------------------
+  // Real acoustic alignment against the track's own audio: every line gets
+  // a start time and per-syllable timestamps from an audio-capable model.
+  // Unsynced lyrics get timestamps (LRCLIB match / AI transcription
+  // first); synced ones are re-aligned to the singing. Written per
+  // lyrics_format and reloaded into the pane when it finishes.
   const [lrcSyncing, setLrcSyncing] = useState(false);
   const aiWordSync = async () => {
     if (lrcSyncing) return;
@@ -520,7 +522,7 @@ export default function NowPlayingView(p: Props) {
       const res = await api.lyricsAiSync(p.current.path);
       if (fmt === "LRC" || fmt === "BOTH") await api.lyricsWrite(p.current.path, res.lrc);
       if (fmt === "EMBEDDED" || fmt === "BOTH") await api.lyricsEmbed(p.current.path, res.lrc);
-      toast(`Lyrics word-synced (${res.source})`);
+      toast(`Lyrics syllable-synced (${res.source})`);
       setLyricsVersion((v) => v + 1); // reload the pane with the new timings
     } catch (e) {
       toast(`Word-sync failed: ${e instanceof Error ? e.message : e}`);
@@ -565,7 +567,9 @@ export default function NowPlayingView(p: Props) {
     !!aiReady && hasLyrics && ((showXlit && !transforms.transliterate) || (showTrans && !transforms.translate));
 
   const renderLine = (l: LrcLine, i: number) => {
-    const isActive = synced && i === activeLine;
+    // Every line of the current same-time cluster (duets / backing vocals)
+    // reads as active; the anchor is the cluster's first line.
+    const isActive = synced && aEnd >= aStart && i >= aStart && i <= aEnd;
     const xlit = showXlit ? transforms.transliterate?.[i] : undefined;
     const trans = showTrans ? transforms.translate?.[i] : undefined;
     // When transliteration is on, the romanized text IS the primary line —
@@ -626,11 +630,13 @@ export default function NowPlayingView(p: Props) {
         >
           {!replaced && isActive && karaoke && l.words?.length
             ? l.words.map((w, wi) => {
-                const on =
-                  w.time <= dispTime + 0.04 &&
-                  (wi === l.words!.length - 1 || l.words![wi + 1].time > dispTime + 0.04);
+                // Syllable/word sweep: the piece being sung is accented,
+                // everything already sung stays lit, upcoming pieces dim.
+                const sung = w.time <= dispTime + 0.04;
+                const nextT = wi === l.words!.length - 1 ? Infinity : l.words![wi + 1].time;
+                const current = sung && nextT > dispTime + 0.04;
                 return (
-                  <span key={wi} className={on ? "text-accent" : "text-white/45"}>
+                  <span key={wi} className={current ? "text-accent" : sung ? "text-white" : "text-white/45"}>
                     {w.text}
                   </span>
                 );
@@ -783,17 +789,17 @@ export default function NowPlayingView(p: Props) {
                     className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 text-xs text-accent-soft disabled:opacity-40 text-left"
                     onClick={aiWordSync}
                     disabled={lrcSyncing}
-                    title="Fetch/align from LRCLIB and upgrade to word-level (ELRC) timings — unsynced lyrics get timestamps, synced ones gain word timing"
+                    title="Listen to the track and syllable-sync the lyrics — real acoustic alignment against the audio (LRCLIB lookup + offline fallback when AI is off)"
                   >
                     {lrcSyncing && <span className="h-3 w-3 rounded-full border border-zinc-600 border-t-transparent animate-spin inline-block shrink-0" />}
-                    {lrcSyncing ? "Word-syncing…" : "AI word-sync lyrics"}
+                    {lrcSyncing ? "Syllable-syncing…" : "AI syllable-sync lyrics"}
                   </button>
                   {[
                     { id: "xlit" as const, label: "Transliteration (romanized)", on: showXlit, act: () => toggleOpt("xlit") },
                     { id: "trans" as const, label: "Translation", on: showTrans, act: () => toggleOpt("trans") },
                     {
                       id: "karaoke" as const,
-                      label: "Karaoke word highlight",
+                      label: "Karaoke syllable sweep",
                       on: karaoke,
                       act: () => {
                         const v = !karaoke;
@@ -1101,13 +1107,6 @@ export default function NowPlayingView(p: Props) {
                   staleLyrics ? "opacity-50" : "opacity-100"
                 }`}
                 style={{ zoom: lyricZoom }}
-                onMouseEnter={() => {
-                  hoverPauseRef.current = true;
-                  gliderRef.current?.stop();
-                }}
-                onMouseLeave={() => {
-                  hoverPauseRef.current = false;
-                }}
                 onWheel={() => gliderRef.current?.stop()}
                 onTouchStart={() => gliderRef.current?.stop()}
               >

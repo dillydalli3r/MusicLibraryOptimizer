@@ -11,6 +11,7 @@ import { AuditBadge, GradeBadge, IssueList } from "../components/Badges";
 import CoverImg from "../components/CoverImg";
 import LyricsViewer from "../components/LyricsViewer";
 import LyricsManagerModal from "../components/LyricsManagerModal";
+import LyricsEditorModal from "../components/LyricsEditorModal";
 import OverflowMenu from "../components/OverflowMenu";
 
 export default function TrackPage() {
@@ -42,6 +43,7 @@ export default function TrackPage() {
   const [lyrics, setLyrics] = useState("");
   const [dirty, setDirty] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [coverBusy, setCoverBusy] = useState(false);
   const [videoOpen, setVideoOpen] = useState(false);
   const coverInput = useRef<HTMLInputElement>(null);
@@ -93,6 +95,13 @@ export default function TrackPage() {
     setDirty(true);
     setManagerOpen(false);
     toast(`Lyrics loaded — ${source}. Review, then Save.`);
+  };
+
+  /** The enhanced editor saves through the API itself; refresh afterwards. */
+  const refreshAfterEditor = () => {
+    qc.invalidateQueries({ queryKey: ["library"] });
+    qc.invalidateQueries({ queryKey: ["track-tags", decoded] });
+    qc.invalidateQueries({ queryKey: ["album", albumDir] });
   };
 
   const queueTrack = {
@@ -352,6 +361,7 @@ export default function TrackPage() {
             track={tags.TITLE}
             album={tags.ALBUM}
             duration={tech.length ? Math.round(tech.length) : undefined}
+            onEnhancedEditor={() => setEditorOpen(true)}
           />
         </div>
       </div>
@@ -366,6 +376,19 @@ export default function TrackPage() {
           currentText={lyrics}
           onApplied={applyFoundLyrics}
           onClose={() => setManagerOpen(false)}
+        />
+      )}
+
+      {editorOpen && (
+        <LyricsEditorModal
+          path={decoded}
+          artist={tags.ARTIST}
+          track={tags.TITLE}
+          album={tags.ALBUM || undefined}
+          duration={tech.length ? Math.round(tech.length) : undefined}
+          initialLyrics={lyrics}
+          onClose={() => setEditorOpen(false)}
+          onSaved={refreshAfterEditor}
         />
       )}
     </div>

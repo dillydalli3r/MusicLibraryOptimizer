@@ -14,15 +14,20 @@
  * any number of rapid retargets stays one continuous motion. */
 
 export interface LyricsGlider {
-  /** Bring `el`'s vertical middle to the scroller's middle. `snap` jumps
-   * immediately (seeks, track changes); default glides from here. */
+  /** Bring `el` to the pane's lyric anchor line. `snap` jumps immediately
+   * (seeks, track changes); default glides from here. */
   center(el: HTMLElement, snap?: boolean): void;
   /** Stop gliding and adopt the current position as resting (user took
    * over the pane with the wheel / touch). */
   stop(): void;
 }
 
-export function createLyricsGlider(c: HTMLElement): LyricsGlider {
+/** Where the currently-sung line sits vertically, as a fraction of the
+ * pane height: the upper third — ahead of the reader's eye, with the
+ * upcoming lines filling the space below. */
+export const LYRICS_ANCHOR = 0.33;
+
+export function createLyricsGlider(c: HTMLElement, anchor: number = LYRICS_ANCHOR): LyricsGlider {
   let target = c.scrollTop;
   let raf = 0;
   let active = false;
@@ -48,7 +53,9 @@ export function createLyricsGlider(c: HTMLElement): LyricsGlider {
       }
       if (n !== c) return; // el is not inside the scroller — refuse to guess
       const maxTop = Math.max(0, c.scrollHeight - c.clientHeight);
-      target = Math.min(maxTop, Math.max(0, top - (c.clientHeight - el.offsetHeight) / 2));
+      // Anchor: the line's vertical middle lands at `anchor` × height
+      // (the upper third) instead of the pane's exact middle.
+      target = Math.min(maxTop, Math.max(0, top + el.offsetHeight / 2 - c.clientHeight * anchor));
       cancelAnimationFrame(raf);
       if (snap) {
         c.scrollTop = target;
