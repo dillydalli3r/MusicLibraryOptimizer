@@ -1,10 +1,17 @@
 import { X, ShieldCheck, CircleAlert, Info } from "lucide-react";
 import type { Track } from "../types";
+import { isVideoTech } from "../lib/fmt";
 import { AuditBadge, GradeBadge } from "./Badges";
 import TrackDownloadExport from "./TrackDownloadExport";
 
 function fmtTech(tech: Track["tech"]): string {
+  const video = isVideoTech(tech);
   const parts: string[] = [];
+  // Video files: resolution only, plus the audio stream's shape — video
+  // codecs and container bitrates are never shown.
+  if (tech.width && tech.height) parts.push(`${tech.width}×${tech.height}`);
+  else if (tech.width) parts.push(`${tech.width}p`);
+  if (!video && tech.codec) parts.push(`${tech.codec}`);
   const pair =
     tech.bits_per_sample && tech.sample_rate
       ? `${Math.round(tech.bits_per_sample)}/${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`
@@ -13,14 +20,13 @@ function fmtTech(tech: Track["tech"]): string {
         : tech.sample_rate
           ? `${(tech.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`
           : "";
-  if (tech.codec) parts.push(`${tech.codec}${pair ? ` ${pair}` : ""}`);
-  else if (pair) parts.push(pair);
+  if (pair) parts.push(pair);
   if (tech.length) {
     const m = Math.floor(tech.length / 60);
     const s = Math.round(tech.length % 60);
     parts.push(`${m}:${String(s).padStart(2, "0")}`);
   }
-  if (tech.bitrate) parts.push(`${Math.round(tech.bitrate / 1000)} kbps`);
+  if (!video && tech.bitrate) parts.push(`${Math.round(tech.bitrate / 1000)} kbps`);
   if (tech.channels) parts.push(tech.channels === 1 ? "mono" : tech.channels === 2 ? "stereo" : `${tech.channels} ch`);
   return parts.join(" · ");
 }

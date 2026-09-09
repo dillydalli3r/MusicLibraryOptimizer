@@ -17,6 +17,17 @@ const VIDEO_EXTS = new Set([
   ".3gp", ".3g2",
 ]);
 
+const VIDEO_CODEC_RE = /^(h ?264|h ?265|hevc|av1|vp[89]|mpeg|vc-?1|theora|prores|divx|xvid|wmv|flv|rawvideo|png|mjpeg)/i;
+
+/** True when this tech payload describes a VIDEO stream (its bitrate is
+ * the container's total, its codec a video one) — bitrate readouts must
+ * only ever speak about the AUDIO stream, so callers skip these. */
+export function isVideoTech(t?: TechInfo | null): boolean {
+  if (!t) return false;
+  if (t.width && t.height) return true;
+  return !!t.codec && VIDEO_CODEC_RE.test(String(t.codec));
+}
+
 export function isVideoFile(fileOrPath: string | null | undefined): boolean {
   if (!fileOrPath) return false;
   const m = (fileOrPath.match(/\.([a-z0-9]+)$/i) ?? [])[0];
@@ -44,15 +55,16 @@ export function fmtPair(t?: TechInfo | null): string {
 
 export function fmtTech(t?: TechInfo | null): string {
   if (!t) return "";
-  // Video containers: lead with resolution (the thing that tells a video
-  // apart), then codec, then a readable total bitrate.
-  if ((t.width && t.height) || (t.codec && /^(h264|h265|hevc|av1|vp9|mpeg|vc-?1|theora|prores|divx|xvid|mkv|mp4|mov)/i.test(t.codec))) {
+  // Video files: resolution + the AUDIO stream's depth/rate only — video
+  // codec names (MPEG2VIDEO…) are noise and the container's total bitrate
+  // says nothing about the music.
+  if (isVideoTech(t)) {
     const parts: string[] = [];
     if (t.width && t.height) parts.push(`${t.width}×${t.height}`);
-    else if (t.width) parts.push(`${t.width}p`);
-    if (t.codec) parts.push(String(t.codec).toUpperCase());
-    if (t.bitrate) parts.push(fmtBitrate(t.bitrate));
-    if (!parts.length && t.sample_rate) parts.push(`${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
+    if (t.bits_per_sample && t.sample_rate)
+      parts.push(`${Math.round(t.bits_per_sample)}/${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`);
+    else if (t.sample_rate)
+      parts.push(`${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
     return parts.join(" · ");
   }
   const pair =
@@ -80,7 +92,9 @@ export function albumTech(
 ): string {
   const techs = (tracks ?? [])
     .map((t) => t?.tech)
-    .filter((t): t is TechInfo => !!t && !!(t.codec || t.sample_rate));
+    // video streams carry container bitrates and video codecs — the album
+    // format chip speaks ONLY about the audio
+    .filter((t): t is TechInfo => !!t && !isVideoTech(t) && !!(t.codec || t.sample_rate));
   if (!techs.length) return "";
   const codecs = [...new Set(techs.map((t) => String(t.codec).toUpperCase()).filter(Boolean))];
   const pairs = [

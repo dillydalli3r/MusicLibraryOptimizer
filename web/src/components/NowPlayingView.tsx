@@ -619,9 +619,10 @@ export default function NowPlayingView(p: Props) {
   // the queue already knows title/artist/album, so prefer those.
   const freshTags = tagsStale ? undefined : tags;
   const title = p.current.title || freshTags?.TITLE || p.current.file.replace(/\.[^.]+$/, "");
-  const albumArtist =
-    album?.album_artist || freshTags?.ALBUMARTIST || p.current.artist || p.current.albumPath.split("/").pop() || "";
-  const albumName = album?.meta?.ALBUM || p.current.album || freshTags?.ALBUM || "";
+  // Same vertical order and formatting as the player bar's text block:
+  // title, then ALBUM, then ARTIST — the two sub-lines render identically.
+  const albumLine = p.current.album || freshTags?.ALBUM || album?.meta?.ALBUM || "—";
+  const artistLine = p.current.artist || freshTags?.ARTIST || p.current.albumPath.split("/").pop() || "";
   const upNext = queue[index + 1] as
     | { title?: string; artist?: string; file: string }
     | undefined;
@@ -900,11 +901,11 @@ export default function NowPlayingView(p: Props) {
                   </span>
                 )}
               </div>
-              <div className="h-6 mt-1 flex items-center justify-center" title={albumArtist}>
-                <div className="text-zinc-300 truncate">{albumArtist}</div>
+              <div className="h-5 mt-1 flex items-center justify-center" title={albumLine}>
+                <div className="text-sm text-zinc-400 truncate">{albumLine}</div>
               </div>
-              <div className="h-4 mt-0.5 flex items-center justify-center" title={albumName}>
-                <div className="text-xs text-zinc-500 truncate">{albumName}</div>
+              <div className="h-5 mt-0.5 flex items-center justify-center" title={artistLine}>
+                <div className="text-sm text-zinc-400 truncate">{artistLine}</div>
               </div>
               <div className="h-4 mt-2.5 flex items-center justify-center gap-1.5 min-w-0" title={upNextLabel}>
                 {upNextLabel ? (
