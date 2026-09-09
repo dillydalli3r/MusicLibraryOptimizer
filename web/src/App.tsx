@@ -3,7 +3,7 @@ import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "reac
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowDownUp, ChevronLeft, ChevronRight, ClipboardCheck, Gauge, HardDriveDownload, Heart, Import,
-  Library, ListMusic, Music4, PanelLeftClose, Search,
+  Library, ListMusic, Menu, Music4, PanelLeftClose, Search, X,
   Settings as SettingsIcon, Wrench,
 } from "lucide-react";
 import { api } from "./api";
@@ -132,6 +132,8 @@ export default function App() {
     setCollapsed(v);
     localStorage.setItem(COLLAPSE_KEY, v ? "1" : "0");
   };
+  // On phones the rail can't fit — it becomes a hamburger + overlay drawer.
+  const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
     applyAccent(localStorage.getItem("mlo.accent"));
@@ -180,7 +182,7 @@ export default function App() {
     // its right.
     <div className="h-screen overflow-hidden bg-bg text-zinc-100 flex">
       <aside
-        className={`${collapsed ? "w-14" : "w-48"} h-full shrink-0 border-r border-border bg-panel p-2 flex flex-col gap-1 overflow-y-auto transition-[width] duration-150 relative z-20`}
+        className={`${collapsed ? "w-14" : "w-48"} hidden md:flex h-full shrink-0 border-r border-border bg-panel p-2 flex-col gap-1 overflow-y-auto transition-[width] duration-150 relative z-20`}
       >
         {/* sidebar header: brand + collapse toggle, split from the nav by a
             hairline. Collapses to a stacked icon rail. */}
@@ -260,11 +262,57 @@ export default function App() {
         )}
       </aside>
 
+      {/* phone nav drawer: the rail's content as a full overlay, opened from
+          the header hamburger; every link closes it */}
+      {navOpen && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setNavOpen(false)} />
+          <aside className="fixed left-0 top-0 bottom-0 z-50 w-52 bg-panel border-r border-border p-2 flex flex-col gap-1 overflow-y-auto md:hidden shadow-2xl">
+            <div className="flex items-center gap-2 border-b border-border pb-2 mb-1 px-1">
+              <img src="/icon.png" alt="la musica" className="h-7 w-7 rounded-md object-cover ring-1 ring-border shadow-sm" />
+              <span className="flex-1 overflow-hidden whitespace-nowrap font-bold tracking-tight text-sm">la musica</span>
+              <button
+                className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-raise transition-colors"
+                onClick={() => setNavOpen(false)}
+                title="Close menu"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {NAV.map(({ to, label, icon: Icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                onClick={() => setNavOpen(false)}
+                className={({ isActive }) =>
+                  `flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm transition-colors border ${
+                    isActive
+                      ? "bg-accent on-accent font-semibold border-transparent shadow-sm"
+                      : "text-zinc-400 hover:text-white hover:bg-raise border-transparent"
+                  }`
+                }
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="whitespace-nowrap">{label}</span>
+              </NavLink>
+            ))}
+          </aside>
+        </>
+      )}
+
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden relative z-10">
         {/* floating top bar: transparent overlay on the content — only the
             controls themselves catch the pointer */}
         <header className="absolute inset-x-0 top-0 h-12 z-30 flex items-center gap-3 px-4 pointer-events-none">
           <div className="flex items-center gap-1.5 shrink-0 pointer-events-auto">
+            <button
+              className="h-9 w-9 rounded-full border border-border bg-panel/60 backdrop-blur flex md:hidden items-center justify-center text-zinc-300 hover:text-white hover:border-accent/50 transition-colors"
+              onClick={() => setNavOpen(true)}
+              title="Menu"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
             <button
               className="h-9 w-9 rounded-full border border-border bg-panel/60 backdrop-blur flex items-center justify-center text-zinc-300 hover:text-white hover:border-accent/50 disabled:opacity-30 disabled:pointer-events-none transition-colors"
               onClick={goBack}
@@ -274,7 +322,7 @@ export default function App() {
               <ChevronLeft className="h-4 w-4" />
             </button>
             <button
-              className="h-9 w-9 rounded-full border border-border bg-panel/60 backdrop-blur flex items-center justify-center text-zinc-300 hover:text-white hover:border-accent/50 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              className="h-9 w-9 rounded-full border border-border bg-panel/60 backdrop-blur hidden sm:flex items-center justify-center text-zinc-300 hover:text-white hover:border-accent/50 disabled:opacity-30 disabled:pointer-events-none transition-colors"
               onClick={goForward}
               disabled={pos >= stackRef.current.length - 1}
               title="Forward"

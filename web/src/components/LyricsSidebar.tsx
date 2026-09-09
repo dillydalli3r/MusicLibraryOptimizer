@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, X } from "lucide-react";
 import { api } from "../api";
 import { parsePlayerLrc, type LrcLine } from "./LyricsViewer";
+import { createLyricsGlider, type LyricsGlider } from "../lib/lyrScroll";
 import Visualizer from "./Visualizer";
 
 // Shared with the fullscreen player: toggling the visualizer from either
@@ -121,7 +122,17 @@ export default function LyricsSidebar({
   // Center the PRIMARY text line, not the block — sub-lines (translation /
   // transliteration) under it must not push the sung line off the middle.
   const primaryRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const gliderRef = useRef<LyricsGlider | null>(null);
+  useEffect(() => {
+    const c = scrollRef.current;
+    if (!c) return;
+    gliderRef.current = createLyricsGlider(c);
+    return () => {
+      gliderRef.current = null;
+    };
+  }, []);
   const seekMarkRef = useRef(0);
+  const glideMarkRef = useRef(0);
   const prevDispRef = useRef(-1);
   useEffect(() => {
     const prev = prevDispRef.current;
@@ -129,29 +140,31 @@ export default function LyricsSidebar({
     if (prev >= 0 && Math.abs(dispTime - prev) > 1.2) seekMarkRef.current = Date.now();
   }, [dispTime]);
 
+  // While the pointer rests on the pane the reader owns it: auto-centering
+  // pauses and resumes at the next natural line change after the cursor
+  // leaves (leaving itself never scrolls). Clicking a line always centers
+  // it — hover or not — so jump-by-click is never swallowed.
+  const hoverPauseRef = useRef(false);
   useEffect(() => {
-    const c = scrollRef.current;
+    if (activeLine < 0 || hoverPauseRef.current) return;
     const el = primaryRefs.current[activeLine] ?? lineRefs.current[activeLine];
-    if (!c || !el || activeLine < 0) return;
-    const animate = Date.now() - seekMarkRef.current > 600;
-    const top =
-      el.getBoundingClientRect().top -
-      c.getBoundingClientRect().top +
-      c.scrollTop -
-      c.clientHeight / 2 +
-      el.clientHeight / 2;
-    c.scrollTo({ top: Math.max(0, top), behavior: animate ? "smooth" : "auto" });
+    if (!el) return;
+    const now = Date.now();
+    const animate = now - glideMarkRef.current < 1500 || now - seekMarkRef.current > 600;
+    gliderRef.current?.center(el, !animate);
   }, [activeLine]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 });
+    const c = scrollRef.current;
+    gliderRef.current?.stop();
+    if (c) c.scrollTop = 0;
   }, [path]);
 
   const title = payload?.title || current?.title || (current ? current.file.replace(/\.[^.]+$/, "") : "Lyrics");
   const album = payload?.album || current?.album || "";
 
   return (
-    <aside className="fixed top-12 bottom-[5.75rem] right-0 w-[380px] z-30 bg-panel/95 backdrop-blur border-l border-border shadow-2xl flex flex-col">
+    <aside className="fixed top-12 bottom-[5.75rem] right-0 w-full sm:w-[380px] z-30 bg-panel/95 backdrop-blur border-l border-border shadow-2xl flex flex-col">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/60">
         <div className="min-w-0 flex-1">
           <div className="text-xs font-semibold truncate">{title}</div>
@@ -172,7 +185,19 @@ export default function LyricsSidebar({
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-5 py-4 no-scrollbar">
+      <div
+        ref={scrollRef}
+        className="relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 no-scrollbar"
+        onMouseEnter={() => {
+          hoverPauseRef.current = true;
+          gliderRef.current?.stop();
+        }}
+        onMouseLeave={() => {
+          hoverPauseRef.current = false;
+        }}
+        onWheel={() => gliderRef.current?.stop()}
+        onTouchStart={() => gliderRef.current?.stop()}
+      >
         {displayLines.length > 0 ? (
           displayLines.map((l, i) => {
             const isActive = synced && i === activeLine;
@@ -185,7 +210,19 @@ export default function LyricsSidebar({
                   lineRefs.current[i] = el;
                 }}
                 className={`py-1.5 ${synced ? "cursor-pointer" : ""} ${isActive ? "opacity-100" : synced ? "opacity-70" : ""}`}
-                onClick={synced ? () => onSeek(l.time) : undefined}
+                onClick={
+                  synced
+                    ? () => {
+                        // Mark as glide (not seek-snap) and center the clicked
+                        // line directly — the activeLine effect alone would
+                        // miss clicks that don't change the active line.
+                        glideMarkRef.current = Date.now();
+                        onSeek(l.time);
+                        const el = primaryRefs.current[i];
+                        if (el) gliderRef.current?.center(el, false);
+                      }
+                    : undefined
+                }
                 title={synced ? "Click to seek" : undefined}
               >
                 <div

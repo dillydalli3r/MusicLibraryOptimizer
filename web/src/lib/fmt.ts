@@ -1,4 +1,4 @@
-/** Shared compact audio-format readout: "FLAC 16/44.1 · 1022k" —
+/** Shared compact audio-format readout: "FLAC 16/44.1 · 1022 kbps" —
  * codec with its bit depth/sample rate first, bitrate last. */
 export interface TechInfo {
   codec?: string;
@@ -23,12 +23,10 @@ export function isVideoFile(fileOrPath: string | null | undefined): boolean {
   return !!m && VIDEO_EXTS.has(m.toLowerCase());
 }
 
-/** Human bitrate: kbps below 10 Mbps, one-decimal Mbps above (video files). */
+/** Human bitrate — always kilobits per second, never Mbps. */
 export function fmtBitrate(bps?: number | null): string {
   if (!bps) return "";
-  if (bps >= 10_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
-  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2).replace(/0$/, "")} Mbps`;
-  return `${Math.round(bps / 1000)}k`;
+  return `${Math.round(bps / 1000)} kbps`;
 }
 
 export function fmtTech(t?: TechInfo | null): string {
@@ -61,7 +59,7 @@ export function fmtTech(t?: TechInfo | null): string {
 
 /** Aggregated album-level readout from the album's tracks — codecs with
  * their depth/rate pair first, bitrate figure last (mean when the tracks
- * are close, min–max range when they drift): "FLAC 16/44.1 · 904–1079k".
+ * are close, min–max range when they drift): "FLAC 16/44.1 · 904–1079 kbps".
  * `short` drops the bitrate (for badges): "FLAC 16/44.1". */
 export function albumTech(
   tracks?: { tech?: TechInfo & { length?: number; channels?: number } }[] | null,
@@ -90,8 +88,8 @@ export function albumTech(
       const max = Math.max(...brs);
       parts.push(
         max - min <= Math.max(0.05 * max, 20000)
-          ? `${Math.round(brs.reduce((a, b) => a + b, 0) / brs.length / 1000)}k`
-          : `${Math.round(min / 1000)}–${Math.round(max / 1000)}k`
+          ? `${Math.round(brs.reduce((a, b) => a + b, 0) / brs.length / 1000)} kbps`
+          : `${Math.round(min / 1000)}–${Math.round(max / 1000)} kbps`
       );
     }
   }

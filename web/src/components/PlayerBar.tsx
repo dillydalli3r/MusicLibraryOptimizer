@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Timer, Volume2, X } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
-import { fmtTech, isVideoFile } from "../lib/fmt";
+import { isVideoFile } from "../lib/fmt";
+import { nextSpeed, fmtSpeed } from "../lib/playback";
 import { AdvisoryMark } from "./Badges";
 import VolumePct from "./VolumePct";
 import { applyReplayGain, attachAnalyser, resumeAnalyser } from "../lib/analyser";
@@ -114,7 +115,10 @@ export default function PlayerBar() {
     queryFn: api.library,
     staleTime: 5 * 60 * 1000,
   });
-  const libCover = (() => {
+  // Only re-scanned when the track or the library payload actually changes —
+  // this runs at 4 Hz with the time updates, and the triple loop is real work
+  // on a big library.
+  const libCover = useMemo(() => {
     if (!current) return null;
     if (current.coverFile || current.albumCover) return null; // queue already knows
     for (const a of libForCover?.artists ?? [])
@@ -123,7 +127,7 @@ export default function PlayerBar() {
           if (t.path === current.path)
             return { track: t.cover_file ?? null, album: al.cover_file ?? null };
     return null;
-  })();
+  }, [current, libForCover]);
   const coverFile = current?.coverFile ?? libCover?.track ?? current?.albumCover ?? libCover?.album ?? null;
   const coverAlbumPath = current?.albumPath ?? "";
 
@@ -139,10 +143,17 @@ export default function PlayerBar() {
   });
   const displayTitle =
     current?.title || currentTags?.tags?.TITLE || (current ? current.file.replace(/\.[^.]+$/, "") : "");
-  // Condensed audio tech readout for beside the title: "FLAC · 1022k · 16/44.1"
-  const techStr = fmtTech(currentTags?.tech as
+  // Compact tech readout for beside the title — codec + kbps only (the
+  // depth/rate pair lives in the fullscreen player and the track page);
+  // keeping it short leaves the song name most of the flank.
+  const techInfo = currentTags?.tech as
     | { codec?: string; bitrate?: number; bits_per_sample?: number; sample_rate?: number }
-    | undefined);
+    | undefined;
+  const techStr = techInfo
+    ? [techInfo.codec, techInfo.bitrate ? `${Math.round(techInfo.bitrate / 1000)} kbps` : ""]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
   const [thumbFailed, setThumbFailed] = useState(false);
   useEffect(() => setThumbFailed(false), [current?.path]);
   const stepRef = useRef<(dir: 1 | -1) => void>(() => {});
@@ -346,14 +357,7 @@ export default function PlayerBar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [playing, current]);
 
-  const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
-  const cycleSpeed = () =>
-    setSpeed((s) => {
-      const i = SPEEDS.indexOf(s);
-      return SPEEDS[(i + 1) % SPEEDS.length];
-    });
-  const fmtSpeed = (s: number) =>
-    s === 1 ? "1×" : `${s.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}×`;
+  const cycleSpeed = () => setSpeed((s) => nextSpeed(s, 1));
 
   const { data: playlists } = useQuery({
     queryKey: ["playlists"],
@@ -519,7 +523,7 @@ export default function PlayerBar() {
   // something is playing; idle just disables the transport and shows a hint.
   return (
     <div className="shrink-0 px-3 pb-3 pt-1 relative z-10">
-      <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40 grid grid-cols-[1fr_auto_1fr] items-center gap-3 [container-type:inline-size]">
+      <div className="h-[4.75rem] rounded-lg border border-border bg-panel shadow-lg shadow-black/40">
         {/* crossOrigin keeps the streams CORS-clean so the WebAudio visualizer
             can read them; attaching happens on the play gesture */}
         <audio ref={aRef} hidden crossOrigin="anonymous" onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded}
@@ -527,6 +531,10 @@ export default function PlayerBar() {
         <audio ref={bRef} hidden crossOrigin="anonymous" onTimeUpdate={onTime} onLoadedMetadata={onMeta} onEnded={handleEnded}
           onPlay={(e) => { resumeAnalyser(); attachAnalyser(e.currentTarget); applyReplayGain(e.currentTarget, rgDb.current); }} />
 
+        {/* full layout from tablet width up: cover+title / centered seek /
+            actions+volume, balanced 1fr-auto-1fr so the seek bar sits dead
+            center */}
+        <div className="hidden md:grid h-full grid-cols-[1fr_auto_1fr] items-center gap-3 [container-type:inline-size]">
         {/* left flank of the grid: cover + title block — its 1fr track
             balances the right cluster so the seek bar sits dead center.
             The cover is absolutely positioned so its image's INTRINSIC
@@ -552,11 +560,14 @@ export default function PlayerBar() {
           )}
         </button>
 
-        <div className="min-w-0 flex-1 ml-[76px]" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
+        <div className="min-w-0 flex-1 ml-[76px] pl-3" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
           {current ? (
             <>
+              {/* badge + tech readout hug the title: the window only takes
+                  the width the text needs, and shrinks (marquee) when the
+                  name is too long — they never get pushed to the edge */}
               <div className="flex items-baseline gap-2 min-w-0">
-                <ScrollingText text={displayTitle} className="flex-1" />
+                <ScrollingText text={displayTitle} />
                 <AdvisoryMark value={currentTags?.tags?.ITUNESADVISORY} />
                 {techStr && (
                   <span className="text-[10px] font-mono text-zinc-500 shrink-0" title="Codec · bitrate · bit depth/sample rate">
@@ -580,7 +591,7 @@ export default function PlayerBar() {
 
         {/* center of the grid: seek bar above the transport controls — the
             1fr tracks on both sides keep it dead center of the bar */}
-        <div className="min-w-0 flex flex-col items-center justify-center gap-0.5 w-[min(38cqw,44rem)]">
+        <div className="min-w-0 flex flex-col items-center justify-center gap-0.5 w-[min(34cqw,40rem)]">
           <div className="flex items-center gap-2 w-full max-w-2xl mx-auto text-[10px] text-zinc-500 tabular-nums">
             <span className="w-10 text-right shrink-0">{fmtDuration(time)}</span>
             <input
@@ -880,6 +891,70 @@ export default function PlayerBar() {
             </button>
           </div>
         </div>
+        </div>
+
+        {/* phone layout: cover · title · like/play/next/fullscreen — the
+            transport that fits a thumb, no seek row (drag in the fullscreen
+            player); cover is a plain flex item here, not absolute */}
+        <div className="flex md:hidden h-full items-center gap-1 pr-2">
+          <button
+            className="self-stretch aspect-square rounded-l-[5px] overflow-hidden bg-raise shrink-0 flex items-center justify-center"
+            onClick={() => !idle && setFullscreen(true)}
+            title={idle ? "Nothing playing" : "Album art — tap for the fullscreen player"}
+            disabled={idle}
+          >
+            {current && !thumbFailed ? (
+              <img src={api.coverUrl(coverAlbumPath, coverFile)} alt="" onError={() => setThumbFailed(true)} className="h-full w-full object-cover" />
+            ) : (
+              <Disc3 className={`h-5 w-5 ${idle ? "text-zinc-700" : "text-zinc-600"}`} />
+            )}
+          </button>
+          <div className="min-w-0 flex-1 pl-2" title={current ? [current.artist, current.album].filter(Boolean).join(" · ") : undefined}>
+            {current ? (
+              <>
+                <div className="flex items-baseline gap-1.5 min-w-0">
+                  <ScrollingText text={displayTitle} />
+                  <AdvisoryMark value={currentTags?.tags?.ITUNESADVISORY} />
+                </div>
+                <div className="text-[11px] text-zinc-500 truncate">
+                  {[current.artist ?? current.albumPath.split("/").pop(), current.album].filter(Boolean).join(" · ") || "—"}
+                </div>
+              </>
+            ) : (
+              <div className="text-sm truncate font-semibold text-zinc-500">Nothing playing</div>
+            )}
+          </div>
+          <button
+            className={`p-2 rounded-lg hover:bg-raise shrink-0 ${liked ? "text-accent" : "text-zinc-500"} ${idle ? "opacity-40 pointer-events-none" : ""}`}
+            onClick={toggleLike}
+            disabled={idle}
+            title={liked ? "Unlike" : "Like this track"}
+          >
+            <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
+          </button>
+          <button className="p-2 rounded-lg hover:bg-raise text-zinc-300 shrink-0" onClick={() => step(-1)} disabled={idle} title="Previous track">
+            <SkipBack className="h-4 w-4" />
+          </button>
+          <button
+            className={`p-2.5 rounded-lg bg-accent on-accent shrink-0 ${idle ? "opacity-40 pointer-events-none" : ""}`}
+            onClick={togglePlay}
+            disabled={idle}
+            title={playing ? "Pause" : "Play"}
+          >
+            {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
+          </button>
+          <button className="p-2 rounded-lg hover:bg-raise text-zinc-300 shrink-0" onClick={() => step(1)} disabled={idle} title="Next track">
+            <SkipForward className="h-4 w-4" />
+          </button>
+          <button
+            className={`p-2 rounded-lg hover:bg-raise text-zinc-400 shrink-0 ${idle ? "opacity-40 pointer-events-none" : ""}`}
+            onClick={() => setFullscreen(true)}
+            disabled={idle}
+            title="Fullscreen player"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
+        </div>
 
         {/* music-video popout: the REAL decoder (with sound) behind every
             video — visible during default playback, kept mounted (hidden)
@@ -948,6 +1023,8 @@ export default function PlayerBar() {
               onToggleLike={toggleLike}
               onClose={() => setFullscreen(false)}
               getAudioTime={() => media()?.currentTime ?? 0}
+              speed={speed}
+              onSpeedChange={setSpeed}
             />,
             document.body
           )}

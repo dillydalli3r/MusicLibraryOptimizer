@@ -13,6 +13,8 @@ import { activeAnalyser } from "../lib/analyser";
 import { SubtitledVideo } from "./SubtitledVideo";
 import Visualizer from "./Visualizer";
 import { parsePlayerLrc, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
+import { createLyricsGlider, type LyricsGlider } from "../lib/lyrScroll";
+import { nextSpeed, fmtSpeed } from "../lib/playback";
 
 const XLIT_KEY = "mlo.np.xlit";
 const TRANS_KEY = "mlo.np.trans";
@@ -40,6 +42,10 @@ interface Props {
   onToggleLike: () => void;
   onClose: () => void;
   getAudioTime?: () => number;
+  /** Shared with the player bar — the bar owns the decoders, the fullscreen
+   * view mirrors and edits the rate through these. */
+  speed: number;
+  onSpeedChange: (s: number) => void;
 }
 
 function hexToRgbTriplet(hex?: string | null): [number, number, number] | null {
@@ -412,18 +418,35 @@ export default function NowPlayingView(p: Props) {
     return idx;
   }, [lines, dispTime, staleLyrics]);
 
+  // Glider owns the lyrics pane's scrolling (zoom-safe, retargetable) —
+  // recreated whenever the pane mounts/unmounts (layout follows lyric
+  // presence, and music videos drop the column entirely).
+  const gliderRef = useRef<LyricsGlider | null>(null);
+  useEffect(() => {
+    const c = lyricsScrollRef.current;
+    if (!c) return;
+    const g = createLyricsGlider(c);
+    gliderRef.current = g;
+    return () => {
+      if (gliderRef.current === g) gliderRef.current = null;
+    };
+  }, [layoutHasLyrics, videoPath]);
+
   // While the pointer rests on the lyrics the reader owns the pane: the
   // auto-center pauses and does NOT resume on leave — moving the cursor
   // away never shifts the text. Following picks back up at the next
-  // natural line change, gliding from wherever the pane is.
-  const [lyricsHover, setLyricsHover] = useState(false);
+  // natural line change, gliding from wherever the pane is. A ref, not
+  // state: entering/leaving must neither re-render nor scroll.
+  const hoverPauseRef = useRef(false);
 
   // Seek vs glide: a real jump of the song clock (>1.2s between frames)
   // marks a SEEK — the pane snaps to the new position. Everything else
   // (normal line steps, clicking a lyric line) glides. Clicking a line
   // also moves the audio clock, so it sets a short glide window that wins
-  // over the seek mark: navigating by lyric line should stay animated
-  // even at song start.
+  // over the seek mark: navigating by lyric line stays animated even at
+  // song start — and the click centers the line directly, so it lands
+  // correctly even when it doesn't change the active line or while the
+  // pointer hovers the pane.
   const seekMarkRef = useRef(0);
   const glideMarkRef = useRef(0);
   const prevDispRef = useRef(-1);
@@ -434,30 +457,21 @@ export default function NowPlayingView(p: Props) {
   }, [dispTime]);
 
   useEffect(() => {
-    if (activeLine < 0 || lyricsHover) return;
-    // Center the active line INSIDE the lyrics scroller only. scrollIntoView
-    // would also scroll the outer overflow-hidden containers (they are
-    // programmatically scrollable), which shifts the whole layout and leaves
-    // the view "stuck" — half filled, impossible to scroll back.
-    const c = lyricsScrollRef.current;
+    if (activeLine < 0 || hoverPauseRef.current) return;
     const el = primaryRefs.current[activeLine] ?? lineRefs.current[activeLine];
-    if (!c || !el) return;
+    if (!el) return;
     const now = Date.now();
     const animate = now - glideMarkRef.current < 1500 || now - seekMarkRef.current > 600;
-    const top =
-      el.getBoundingClientRect().top -
-      c.getBoundingClientRect().top +
-      c.scrollTop -
-      c.clientHeight / 2 +
-      el.clientHeight / 2;
-    c.scrollTo({ top: Math.max(0, top), behavior: animate ? "smooth" : "auto" });
-    // lyricsHover intentionally excluded from deps: leaving hover must not
+    gliderRef.current?.center(el, !animate);
+    // hoverPause intentionally excluded (a ref): leaving hover must not
     // scroll — following resumes at the next natural line change.
   }, [activeLine]);
 
   // New track → rewind the lyrics pane to the top.
   useEffect(() => {
-    lyricsScrollRef.current?.scrollTo({ top: 0 });
+    const c = lyricsScrollRef.current;
+    gliderRef.current?.stop();
+    if (c) c.scrollTop = 0;
   }, [p.current.path]);
 
   useEffect(() => {
@@ -551,6 +565,11 @@ export default function NowPlayingView(p: Props) {
             ? () => {
                 glideMarkRef.current = Date.now();
                 p.onSeek(l.time);
+                // Center the clicked line NOW — the activeLine effect alone
+                // misses clicks within the same line and is suppressed
+                // while the pointer hovers the pane.
+                const el = primaryRefs.current[i];
+                if (el) gliderRef.current?.center(el, false);
               }
             : undefined
         }
@@ -710,7 +729,7 @@ export default function NowPlayingView(p: Props) {
                       lyrics; the panel itself is opaque and layered above
                       everything so it reads cleanly over moving text */}
                   <div className="fixed inset-0 z-40" onClick={() => setOptions(false)} />
-                  <div className="absolute right-0 top-full mt-1 z-50 rounded-xl shadow-2xl p-2 w-72 bg-zinc-950 border border-white/10">
+                  <div className="absolute right-0 top-full mt-1 z-50 rounded-xl shadow-2xl p-2 w-72 max-w-[calc(100vw-1.5rem)] bg-zinc-950 border border-white/10">
                   <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1">Lyrics</div>
                   {[
                     { id: "xlit" as const, label: "Transliteration (romanized)", on: showXlit, act: () => toggleOpt("xlit") },
@@ -818,7 +837,7 @@ export default function NowPlayingView(p: Props) {
 
         {/* main area — music videos get a cinema layout: big 16:9 picture
             centered, no lyrics column, transport underneath */}
-        <div className={`flex-1 min-h-0 flex flex-col lg:flex-row items-center gap-8 px-8 pb-4 overflow-clip ${videoPath ? "justify-center" : layoutHasLyrics ? "" : "lg:justify-center"}`}>
+        <div className={`flex-1 min-h-0 flex flex-col lg:flex-row items-center gap-4 sm:gap-8 px-4 sm:px-8 pb-4 overflow-clip ${videoPath ? "justify-center" : layoutHasLyrics ? "" : "lg:justify-center"}`}>
           {/* left column: cover, track/album/artist, all playback controls —
               centered as a group inside the full column height */}
           <div
@@ -857,7 +876,9 @@ export default function NowPlayingView(p: Props) {
                 <CoverImg
                   albumPath={p.current.albumPath}
                   coverFile={coverFile}
-                  wrapperClass={`relative rounded-2xl shadow-2xl border border-white/10 bg-raise overflow-hidden ${layoutHasLyrics ? "w-64 h-64 lg:w-[min(24rem,42vh)] lg:h-[min(24rem,42vh)]" : "w-72 h-72 lg:w-[min(30rem,52vh)] lg:h-[min(30rem,52vh)]"}`}
+                  // ONE size with or without lyrics — the art must never
+                  // jump when a track's lyrics load or finish.
+                  wrapperClass="relative rounded-2xl shadow-2xl border border-white/10 bg-raise overflow-hidden w-72 h-72 lg:w-[min(28rem,48vh)] lg:h-[min(28rem,48vh)]"
                 />
               </div>
             )}
@@ -888,7 +909,7 @@ export default function NowPlayingView(p: Props) {
             </div>
 
             {/* transport + like + add to playlist — directly under the cover */}
-            <div className="flex items-center justify-center gap-2.5">
+            <div className="flex items-center justify-center gap-2.5 flex-wrap">
               <button className={`p-2 rounded-lg hover:bg-white/10 ${p.shuffle ? "text-accent" : "text-zinc-500"}`} onClick={p.onToggleShuffle} title="Shuffle">
                 <Shuffle className="h-4 w-4" />
               </button>
@@ -907,6 +928,13 @@ export default function NowPlayingView(p: Props) {
               </button>
               <button className={`p-2 rounded-lg hover:bg-white/10 ${p.loop ? "text-accent" : "text-zinc-500"}`} onClick={p.onToggleLoop} title="Repeat one">
                 <Repeat className="h-4 w-4" />
+              </button>
+              <button
+                className="p-2 rounded-lg hover:bg-white/10 text-xs font-mono text-zinc-400 min-w-[46px]"
+                onClick={() => p.onSpeedChange(nextSpeed(p.speed, 1))}
+                title="Playback speed — [ slower · ] faster · 0 reset to 1×"
+              >
+                {fmtSpeed(p.speed)}
               </button>
               <span className="w-px h-6 bg-white/15 mx-1" />
               <button
@@ -980,7 +1008,7 @@ export default function NowPlayingView(p: Props) {
               />
               <span className="w-10 font-mono tabular-nums">{fmtDuration(duration)}</span>
               <span className="w-px h-5 bg-white/15 mx-0.5" />
-              <div className="flex items-center gap-1.5 text-zinc-500 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
+              <div className="hidden md:flex items-center gap-1.5 text-zinc-500 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
                 <VolIcon className="h-4 w-4" />
                 <input
                   type="range"
@@ -1015,12 +1043,19 @@ export default function NowPlayingView(p: Props) {
             <div className="flex-1 min-h-0 w-full lg:h-full flex flex-col max-w-3xl lg:max-w-none lg:flex-none lg:w-[56%] lg:ml-auto">
               <div
                 ref={lyricsScrollRef}
-                className={`flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 no-scrollbar transition-opacity duration-300 ${
+                className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 no-scrollbar transition-opacity duration-300 ${
                   staleLyrics ? "opacity-50" : "opacity-100"
                 }`}
                 style={{ zoom: lyricZoom }}
-                onMouseEnter={() => setLyricsHover(true)}
-                onMouseLeave={() => setLyricsHover(false)}
+                onMouseEnter={() => {
+                  hoverPauseRef.current = true;
+                  gliderRef.current?.stop();
+                }}
+                onMouseLeave={() => {
+                  hoverPauseRef.current = false;
+                }}
+                onWheel={() => gliderRef.current?.stop()}
+                onTouchStart={() => gliderRef.current?.stop()}
               >
                 {displayLines.length > 0 ? (
                   displayLines.map(renderLine)
@@ -1044,7 +1079,7 @@ export default function NowPlayingView(p: Props) {
       {/* up-next queue drawer — starts below the top bar so the queue
           toggle button stays clickable to close it */}
       {queueOpen && (
-        <div className="absolute top-12 right-0 bottom-0 w-80 z-20 glass bg-zinc-950/90 flex flex-col rounded-l-2xl">
+        <div className="absolute top-12 right-0 bottom-0 w-80 max-w-[85vw] z-20 glass bg-zinc-950/90 flex flex-col rounded-l-2xl">
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
             <div className="text-[11px] uppercase tracking-widest text-zinc-400">
               Queue · {queue.length} track{queue.length === 1 ? "" : "s"}
