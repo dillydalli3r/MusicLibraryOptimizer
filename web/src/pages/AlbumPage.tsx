@@ -430,7 +430,7 @@ export default function AlbumPage() {
                 className="chip bg-zinc-800/70 text-zinc-300 border border-border font-mono"
                 title="Album dynamic range (DR meter)"
               >
-                ADR{data.meta["ALBUM DYNAMIC RANGE"]}
+                ADR {data.meta["ALBUM DYNAMIC RANGE"]}
               </span>
             )}
             {/* disc count lives in the header too, so multi-disc albums
