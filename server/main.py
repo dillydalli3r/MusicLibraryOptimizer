@@ -7,6 +7,7 @@ streaming, playlists (manual + smart, .m3u8), MusicBrainz/LRCLIB/RYM
 integrations, and album import.
 """
 import os
+import re
 import sys
 import json
 import asyncio
@@ -3043,10 +3044,16 @@ async def import_upload(
         dest = os.path.join(target, *parts)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         data = await f.read()
-        with open(dest, "wb") as out:
-            out.write(data)
+        # Large albums must not stall the event loop (it would freeze the
+        # progress websocket and every other request mid-upload).
+        await asyncio.to_thread(_write_upload_bytes, dest, data)
         saved.append(dest.replace("\\", "/"))
     return {"ok": True, "saved": saved, "album_path": target.replace("\\", "/")}
+
+
+def _write_upload_bytes(dest: str, data: bytes) -> None:
+    with open(dest, "wb") as out:
+        out.write(data)
 
 
 @app.post("/api/import/scan")

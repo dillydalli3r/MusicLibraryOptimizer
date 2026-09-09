@@ -148,7 +148,6 @@ DEFAULT_CONFIG = {
     "jpegxl_effort": 10,
     "jpegxl_distance": 0.0,
     "images_jpeg_quality": 100,
-    "cover_jpeg_quality": 100,
     "reencode_images": True,
     "reencode_to_jxl": False,
     "convert_jxl_back": True,
