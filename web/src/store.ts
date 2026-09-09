@@ -30,6 +30,10 @@ interface Store {
    * deliberately does not bump queueId. Removing a row before the playing
    * one shifts the index so the same track keeps playing. */
   queueRemoveAt: (i: number) => void;
+  /** Move one queue row onto another position (drag & drop) without
+   * interrupting playback — no queueId bump; the index follows the playing
+   * track when it is the one being moved. */
+  queueMove: (from: number, to: number) => void;
   index: number;
   setIndex: (i: number) => void;
   queueId: number; // bumped on every queue replacement — player reloads even
@@ -97,6 +101,19 @@ export const useStore = create<Store>((set) => ({
       const queue = [...st.queue];
       queue.splice(i, 1);
       const index = i < st.index ? st.index - 1 : st.index;
+      return { queue, index };
+    }),
+  queueMove: (from, to) =>
+    set((st) => {
+      if (from === to) return {};
+      if (from < 0 || to < 0 || from >= st.queue.length || to >= st.queue.length) return {};
+      const queue = [...st.queue];
+      const [moved] = queue.splice(from, 1);
+      queue.splice(to, 0, moved);
+      let index = st.index;
+      if (from === st.index) index = to;
+      else if (from < st.index && to >= st.index) index = st.index - 1;
+      else if (from > st.index && to <= st.index) index = st.index + 1;
       return { queue, index };
     }),
   index: 0,

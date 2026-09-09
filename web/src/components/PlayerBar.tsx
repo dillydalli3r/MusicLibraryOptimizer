@@ -77,7 +77,7 @@ function ScrollingText({ text, className }: {
 }
 
 export default function PlayerBar() {
-  const { queue, index, setIndex, setQueue, queueRemoveAt, playing, setPlaying, queueId, vol, setVol } = useStore();
+  const { queue, index, setIndex, setQueue, queueRemoveAt, queueMove, playing, setPlaying, queueId, vol, setVol } = useStore();
   // Gapless playback: two audio elements. The idle one preloads the next
   // sequential track while the current one plays; at `ended` the elements
   // swap roles, so the next track starts without a load gap.
@@ -87,6 +87,8 @@ export default function PlayerBar() {
   const audio = () => (activeIsA.current ? aRef.current : bRef.current);
   const swapped = useRef(false); // set when the swap already advanced the queue
   const preloaded = useRef(-1); // queue index preloaded into the idle element
+  const preloadedPath = useRef<string | null>(null); // what that preload holds
+  const loadedPath = useRef<string | null>(null); // track the active element plays
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [shuffle, setShuffle] = useState(false);
@@ -95,6 +97,9 @@ export default function PlayerBar() {
   const [fullscreen, setFullscreen] = useState(false);
   const [plOpen, setPlOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  // drag-reorder state for the queue popover (offsets within "up next")
+  const [dragOff, setDragOff] = useState<number | null>(null);
+  const [overOff, setOverOff] = useState<number | null>(null);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   // sleep timer: an epoch-ms deadline, or "pause when this track ends"
   const [sleepOpen, setSleepOpen] = useState(false);
@@ -205,6 +210,10 @@ export default function PlayerBar() {
   useEffect(() => {
     const track = queue[index];
     if (!track) return;
+    // A pure reorder (queueMove / remove around the playing row) resolves
+    // to the SAME track — reloading it would restart the song from zero.
+    if (track.path === loadedPath.current) return;
+    loadedPath.current = track.path;
     const video = isVideoFile(track.file) || isVideoFile(track.path);
     setTime(0);
     setDuration(0);
@@ -213,6 +222,7 @@ export default function PlayerBar() {
         try { a?.pause(); a && (a.src = ""); } catch { /* ignore */ }
       }
       preloaded.current = -1;
+      preloadedPath.current = null;
       swapped.current = false;
       const v = videoRef.current;
       if (v) {
@@ -226,14 +236,20 @@ export default function PlayerBar() {
     if (swapped.current) {
       swapped.current = false;
       preloaded.current = -1;
+      preloadedPath.current = null;
       const el = audio();
       if (el) {
         el.playbackRate = speed;
         el.volume = vol;
+        // The preloaded element fired loadedmetadata while IDLE (ignored by
+        // onMeta) and won't fire again — read its duration here or the seek
+        // bar stays at 0:00 for the whole track.
+        if (el.duration && isFinite(el.duration)) setDuration(el.duration);
       }
       return;
     }
     preloaded.current = -1;
+    preloadedPath.current = null;
     const el = audio();
     if (!el) return;
     el.src = api.streamUrl(track.path);
@@ -249,7 +265,9 @@ export default function PlayerBar() {
     if (shuffle || !current) return;
     const next = index + 1;
     if (next >= queue.length) return;
-    if (preloaded.current === next) return;
+    // A reorder may have changed what "next" is — re-preload when the path
+    // in the idle element no longer matches queue[next].
+    if (preloaded.current === next && preloadedPath.current === queue[next].path) return;
     const nearEnd = duration > 0 && duration - time < 10;
     if (!nearEnd) return;
     const idle = activeIsA.current ? bRef.current : aRef.current;
@@ -257,6 +275,7 @@ export default function PlayerBar() {
     idle.src = api.streamUrl(queue[next].path);
     idle.load();
     preloaded.current = next;
+    preloadedPath.current = queue[next].path;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [time, duration, index, queue, shuffle]);
 
@@ -702,15 +721,17 @@ export default function PlayerBar() {
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setQueueOpen(false)} />
                     <div className="absolute right-0 bottom-full mb-2 z-50 w-80 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5 max-h-80 overflow-auto">
-                      <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1 flex items-center justify-between">
-                        Queue
+                      <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1 flex items-center justify-between gap-2">
+                        <span>
+                          Queue{queue.length > index + 1 ? ` · ${queue.length - index - 1} up next` : ""}
+                        </span>
                         {queue.length > index + 1 && (
                           <button
-                            className="text-[10px] normal-case text-zinc-500 hover:text-white"
+                            className="text-[10px] font-mono tracking-widest text-zinc-500 hover:text-white"
                             onClick={() => setQueue(queue.slice(0, index + 1))}
                             title="Remove upcoming tracks"
                           >
-                            clear upcoming
+                            CLEAR
                           </button>
                         )}
                       </div>
@@ -723,8 +744,39 @@ export default function PlayerBar() {
                       )}
                       {queue.slice(index + 1).map((t, off) => {
                         const i = index + 1 + off;
+                        const isDragging = dragOff === off;
+                        const isOver = overOff === off && dragOff !== null && dragOff !== off;
                         return (
-                          <div key={`${t.path}-${i}`} className="group/qr flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10">
+                          <div
+                            key={`${t.path}-${i}`}
+                            draggable
+                            onDragStart={(e) => {
+                              setDragOff(off);
+                              e.dataTransfer.effectAllowed = "move";
+                              e.dataTransfer.setData("text/plain", String(off));
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = "move";
+                              if (overOff !== off) setOverOff(off);
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const from = dragOff ?? Number(e.dataTransfer.getData("text/plain"));
+                              if (Number.isFinite(from) && overOff !== null && from !== overOff)
+                                queueMove(index + 1 + from, index + 1 + overOff);
+                              setDragOff(null);
+                              setOverOff(null);
+                            }}
+                            onDragEnd={() => {
+                              setDragOff(null);
+                              setOverOff(null);
+                            }}
+                            className={`group/qr flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10 border-t-2 ${
+                              isOver ? "border-accent" : "border-transparent"
+                            } ${isDragging ? "opacity-40" : ""}`}
+                            title="Drag to reorder · click to play now"
+                          >
                             <button
                               className="min-w-0 flex-1 text-left"
                               onClick={() => {

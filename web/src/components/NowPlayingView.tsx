@@ -144,8 +144,11 @@ export default function NowPlayingView(p: Props) {
   }, []);
 
   const { time, duration } = p;
-  const { queue, index, setIndex } = useStore();
+  const { queue, index, setIndex, setQueue, queueRemoveAt, queueMove } = useStore();
   const queueListRef = useRef<HTMLDivElement>(null);
+  // drag-reorder state for the queue drawer (absolute queue indexes)
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [overIdx, setOverIdx] = useState<number | null>(null);
 
   // Keep the playing row visible when the queue drawer opens.
   useEffect(() => {
@@ -1085,42 +1088,94 @@ export default function NowPlayingView(p: Props) {
         </div>
       </div>
 
-      {/* up-next queue drawer — starts below the top bar so the queue
-          toggle button stays clickable to close it */}
+      {/* up-next queue drawer — same features as the player bar's queue
+          popover: CLEAR upcoming, per-track ✕, drag to reorder */}
       {queueOpen && (
         <div className="absolute top-12 right-0 bottom-0 w-80 max-w-[85vw] z-20 glass bg-zinc-950/90 flex flex-col rounded-l-2xl">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-            <div className="text-[11px] uppercase tracking-widest text-zinc-400">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 gap-2">
+            <div className="text-[11px] uppercase tracking-widest text-zinc-400 min-w-0 truncate">
               Queue · {queue.length} track{queue.length === 1 ? "" : "s"}
+              {queue.length > index + 1 ? ` · ${queue.length - index - 1} up next` : ""}
             </div>
-            <button className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white" onClick={() => setQueueOpen(false)} title="Close queue">
-              <X className="h-5 w-5" />
-            </button>
+            <div className="flex items-center shrink-0">
+              {queue.length > index + 1 && (
+                <button
+                  className="px-1.5 py-1 rounded-md text-[10px] font-mono tracking-widest text-zinc-500 hover:text-white hover:bg-white/10"
+                  onClick={() => setQueue(queue.slice(0, index + 1))}
+                  title="Remove upcoming tracks"
+                >
+                  CLEAR
+                </button>
+              )}
+              <button className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white" onClick={() => setQueueOpen(false)} title="Close queue">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto p-2" ref={queueListRef}>
-            {queue.map((t, i) => (
-              <button
-                key={t.path + i}
-                data-queue-index={i}
-                className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-3 transition-colors ${
-                  i === index ? "bg-accent/15" : "hover:bg-white/5"
-                }`}
-                onClick={() => setIndex(i)}
-                title="Play this track now"
-              >
-                <span className={`text-[10px] font-mono w-5 text-right shrink-0 ${i === index ? "text-accent" : "text-zinc-600"}`}>
-                  {i === index && p.playing ? "▶" : i + 1}
-                </span>
-                <span className="flex-1 min-w-0">
-                  <span className={`block text-xs truncate ${i === index ? "text-white font-medium" : "text-zinc-300"}`}>
-                    {t.title || t.file.replace(/\.[^.]+$/, "")}
-                  </span>
-                  <span className="block text-[10px] text-zinc-500 truncate">
-                    {t.artist ?? t.albumPath.split("/").pop()}
-                  </span>
-                </span>
-              </button>
-            ))}
+            {queue.map((t, i) => {
+              const isCurrent = i === index;
+              const isDragging = dragIdx === i;
+              const isOver = overIdx === i && dragIdx !== null && dragIdx !== i;
+              return (
+                <div
+                  key={t.path + i}
+                  data-queue-index={i}
+                  draggable
+                  onDragStart={(e) => {
+                    setDragIdx(i);
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", String(i));
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (overIdx !== i) setOverIdx(i);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const from = dragIdx ?? Number(e.dataTransfer.getData("text/plain"));
+                    if (Number.isFinite(from) && overIdx !== null && from !== overIdx) queueMove(from, overIdx);
+                    setDragIdx(null);
+                    setOverIdx(null);
+                  }}
+                  onDragEnd={() => {
+                    setDragIdx(null);
+                    setOverIdx(null);
+                  }}
+                  className={`group/qr w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-3 transition-colors border-t-2 ${
+                    isCurrent ? "bg-accent/15" : "hover:bg-white/5"
+                  } ${isOver ? "border-accent" : "border-transparent"} ${isDragging ? "opacity-40" : ""}`}
+                  title="Drag to reorder · click to play now"
+                >
+                  <button
+                    className="min-w-0 flex-1 flex items-center gap-3 text-left"
+                    onClick={() => setIndex(i)}
+                    title="Play this track now"
+                  >
+                    <span className={`text-[10px] font-mono w-5 text-right shrink-0 ${isCurrent ? "text-accent" : "text-zinc-600"}`}>
+                      {isCurrent && p.playing ? "▶" : i + 1}
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className={`block text-xs truncate ${isCurrent ? "text-white font-medium" : "text-zinc-300"}`}>
+                        {t.title || t.file.replace(/\.[^.]+$/, "")}
+                      </span>
+                      <span className="block text-[10px] text-zinc-500 truncate">
+                        {t.artist ?? t.albumPath.split("/").pop()}
+                      </span>
+                    </span>
+                    {isCurrent && <span className="text-[10px] text-zinc-500 shrink-0">playing</span>}
+                  </button>
+                  <button
+                    className="p-1 rounded text-zinc-600 hover:text-red-300 hover:bg-white/5 opacity-0 group-hover/qr:opacity-100 transition-opacity shrink-0"
+                    onClick={() => queueRemoveAt(i)}
+                    title="Remove from queue"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
