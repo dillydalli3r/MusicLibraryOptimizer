@@ -704,17 +704,20 @@ export default function NowPlayingView(p: Props) {
                 {p.queuePos}
               </span>
             )}
-            {/* up next — lives beside the queue it describes; click opens it */}
-            {upNextLabel && (
-              <button
-                className="hidden sm:flex max-w-[15rem] min-w-0 items-center gap-1.5 px-1.5 py-1 rounded-md text-[10px] font-mono text-zinc-500 hover:text-white hover:bg-white/10"
-                onClick={() => setQueueOpen(true)}
-                title={`Up next — ${upNextLabel} · click to view the queue`}
-              >
-                <span className="uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
-                <span className="truncate">{upNextLabel}</span>
-              </button>
-            )}
+            {/* up next — lives beside the queue it describes; click opens it.
+                Always on the bar: inert when nothing is queued. */}
+            <button
+              className={`max-w-[15rem] min-w-0 items-center gap-1.5 px-1.5 py-1 rounded-md text-[10px] font-mono hidden sm:flex ${
+                upNextLabel
+                  ? "text-zinc-500 hover:text-white hover:bg-white/10"
+                  : "text-zinc-600 opacity-40 pointer-events-none"
+              }`}
+              onClick={() => setQueueOpen(true)}
+              title={upNextLabel ? `Up next — ${upNextLabel} · click to view the queue` : "Up next — nothing queued"}
+            >
+              <span className="uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
+              <span className="truncate">{upNextLabel || "—"}</span>
+            </button>
             <button
               className={`p-2 rounded-lg hover:bg-white/10 ${queueOpen ? "text-white bg-white/10" : "text-zinc-400 hover:text-white"}`}
               onClick={() => setQueueOpen(!queueOpen)}

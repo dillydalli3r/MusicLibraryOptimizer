@@ -17,12 +17,14 @@ const BITRATES = [96, 128, 160, 192, 256, 320, 448, 500];
 
 /** "Download" keeps the original file as a browser download; "Export"
  * transcodes to the chosen codec/bitrate server-side and saves that. */
-export default function TrackDownloadExport({ path, title, compact, iconOnly }: {
+export default function TrackDownloadExport({ path, title, compact, iconOnly, disabled }: {
   path: string;
   title?: string;
   compact?: boolean;
   /** Icon-only buttons (for the player bar) — labels live in the tooltips. */
   iconOnly?: boolean;
+  /** Nothing loaded — the buttons stay on the bar but inert. */
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [codec, setCodec] = useState("flac");
@@ -59,7 +61,7 @@ export default function TrackDownloadExport({ path, title, compact, iconOnly }: 
   };
 
   const btnCls = iconOnly
-    ? "p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white"
+    ? `p-2 rounded-lg text-zinc-400 ${disabled ? "opacity-40" : "hover:bg-raise hover:text-white"}`
     : "btn-ghost !py-1 text-xs";
 
   return (
@@ -67,6 +69,7 @@ export default function TrackDownloadExport({ path, title, compact, iconOnly }: 
       <button
         className={btnCls}
         onClick={downloadOriginal}
+        disabled={disabled}
         title="Download — save the original, untouched file"
         aria-label="Download"
       >
@@ -77,6 +80,7 @@ export default function TrackDownloadExport({ path, title, compact, iconOnly }: 
         <button
           className={btnCls}
           onClick={() => setOpen(!open)}
+          disabled={disabled}
           title="Export — transcode to FLAC / MP3 / … with a chosen bitrate"
           aria-label="Export"
         >

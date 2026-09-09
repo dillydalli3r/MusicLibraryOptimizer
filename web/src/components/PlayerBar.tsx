@@ -697,30 +697,39 @@ export default function PlayerBar() {
           <div className="flex flex-col items-center gap-0.5 min-w-0">
             <div className="flex items-center gap-0.5">
               {/* up next — mirrors the fullscreen player's top-bar readout;
-                  opens the same queue popover */}
-              {upNextTrack && (
-                <button
-                  className="hidden lg:flex items-center gap-1.5 px-1.5 py-1 rounded-md font-mono text-[10px] tabular-nums text-zinc-500 hover:text-white hover:bg-raise min-w-0 max-w-[13rem] shrink"
-                  onClick={() => setQueueOpen(true)}
-                  title={`Up next — ${upNextTitle}${upNextTrack.artist ? ` — ${upNextTrack.artist}` : ""} · click to view the queue`}
-                >
-                  <span className="uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
-                  <span className="truncate">{upNextTitle}</span>
-                </button>
-              )}
+                  opens the same queue popover. Always on the bar: inert
+                  (like the rest) when there is nothing queued. */}
+              <button
+                className={`hidden lg:flex items-center gap-1.5 px-1.5 py-1 rounded-md font-mono text-[10px] tabular-nums min-w-0 max-w-[13rem] shrink ${
+                  upNextTrack
+                    ? "text-zinc-500 hover:text-white hover:bg-raise"
+                    : "text-zinc-600 opacity-40 pointer-events-none"
+                }`}
+                onClick={() => setQueueOpen(true)}
+                title={
+                  upNextTrack
+                    ? `Up next — ${upNextTitle}${upNextTrack.artist ? ` — ${upNextTrack.artist}` : ""} · click to view the queue`
+                    : "Up next — nothing queued"
+                }
+              >
+                <span className="uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
+                <span className="truncate">{upNextTitle || "—"}</span>
+              </button>
               {/* queue position — the fraction lives here, left of the playlist
                   button; clicking it (or the queue button) opens the queue */}
-              {current && queue.length > 1 && (
-                <button
-                  className={`px-1.5 py-1 rounded-md font-mono text-[10px] tabular-nums shrink-0 transition-colors ${
-                    queueOpen ? "text-accent bg-raise" : "text-zinc-500 hover:text-white hover:bg-raise"
-                  }`}
-                  onClick={() => setQueueOpen(!queueOpen)}
-                  title={`Queue position — ${index + 1} of ${queue.length} · click to view the queue`}
-                >
-                  {index + 1}/{queue.length}
-                </button>
-              )}
+              <button
+                className={`px-1.5 py-1 rounded-md font-mono text-[10px] tabular-nums shrink-0 transition-colors ${
+                  queueOpen ? "text-accent bg-raise" : "text-zinc-500 hover:text-white hover:bg-raise"
+                } ${current && queue.length > 1 ? "" : "opacity-40 pointer-events-none"}`}
+                onClick={() => setQueueOpen(!queueOpen)}
+                title={
+                  current && queue.length > 1
+                    ? `Queue position — ${index + 1} of ${queue.length} · click to view the queue`
+                    : "Queue position — nothing playing"
+                }
+              >
+                {current && queue.length > 1 ? `${index + 1}/${queue.length}` : "–/–"}
+              </button>
 
               {/* queue popover: upcoming tracks, click to jump, ✕ to remove */}
               <div className="relative">
@@ -914,7 +923,7 @@ export default function PlayerBar() {
                 )}
               </div>
 
-              {current && <TrackDownloadExport path={current.path} iconOnly />}
+              <TrackDownloadExport path={current?.path ?? ""} iconOnly disabled={!current} />
             </div>
 
             {/* layer 2: the volume bar beneath the buttons */}
@@ -1071,7 +1080,7 @@ export default function PlayerBar() {
           createPortal(
             <NowPlayingView
               current={current}
-              queuePos={queue.length > 1 ? `${index + 1}/${queue.length}` : ""}
+              queuePos={`${index + 1}/${queue.length}`}
               playing={!!playing}
               time={time}
               duration={duration}
