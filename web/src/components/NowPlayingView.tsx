@@ -7,7 +7,8 @@ import {
 import { api } from "../api";
 import VolumePct from "./VolumePct";
 import { toast, useStore } from "../store";
-import { fmtTech, isVideoFile } from "../lib/fmt";
+import { fmtTech, fmtPair, isVideoFile } from "../lib/fmt";
+import { AdvisoryMark } from "./Badges";
 import CoverImg from "./CoverImg";
 import { activeAnalyser } from "../lib/analyser";
 import { SubtitledVideo } from "./SubtitledVideo";
@@ -627,8 +628,10 @@ export default function NowPlayingView(p: Props) {
   const upNextLabel = upNext
     ? `${upNext.title || upNext.file.replace(/\.[^.]+$/, "")}${upNext.artist ? ` — ${upNext.artist}` : ""}`
     : "";
-  // Condensed audio tech summary under the title: "FLAC · 973k · 16/44.1"
-  const techStr = fmtTech(tech);
+  // Ultra-condensed readout under the title: "16/44.1" (same as the player
+  // bar); the tooltip carries the full codec/bitrate detail.
+  const techStr = fmtPair(tech);
+  const techTip = fmtTech(tech);
 
   const VolIcon = vol <= 0 ? VolumeX : vol < 0.5 ? Volume1 : Volume2;
 
@@ -886,8 +889,9 @@ export default function NowPlayingView(p: Props) {
                 blanking a row while the next track's tags load is what made
                 the block (and the title itself) shake on next/previous. */}
             <div className="text-center w-full max-w-[26rem] min-w-0">
-              <div className="h-8 flex items-center justify-center" title={title}>
+              <div className="h-8 flex items-center justify-center gap-2" title={title}>
                 <div className="text-2xl font-bold text-white truncate">{title}</div>
+                <AdvisoryMark value={freshTags?.ITUNESADVISORY} />
               </div>
               <div className="h-6 mt-1 flex items-center justify-center" title={albumArtist}>
                 <div className="text-zinc-300 truncate">{albumArtist}</div>
@@ -895,7 +899,7 @@ export default function NowPlayingView(p: Props) {
               <div className="h-4 mt-0.5 flex items-center justify-center" title={albumName}>
                 <div className="text-xs text-zinc-500 truncate">{albumName}</div>
               </div>
-              <div className="h-4 mt-1 flex items-center justify-center" title={techStr}>
+              <div className="h-4 mt-1 flex items-center justify-center" title={techTip || undefined}>
                 <div className="text-[11px] text-zinc-500 font-mono truncate">{techStr}</div>
               </div>
               <div className="h-4 mt-2.5 flex items-center justify-center gap-1.5 min-w-0" title={upNextLabel}>

@@ -29,6 +29,19 @@ export function fmtBitrate(bps?: number | null): string {
   return `${Math.round(bps / 1000)} kbps`;
 }
 
+/** Ultra-condensed depth/rate readout for beside the title: "16/44.1".
+ * Video files fall back to their resolution — the one figure that
+ * identifies them. */
+export function fmtPair(t?: TechInfo | null): string {
+  if (!t) return "";
+  if (t.width && t.height) return `${t.width}×${t.height}`;
+  if (t.bits_per_sample && t.sample_rate)
+    return `${Math.round(t.bits_per_sample)}/${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")}`;
+  if (t.bits_per_sample) return `${Math.round(t.bits_per_sample)} bit`;
+  if (t.sample_rate) return `${(t.sample_rate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`;
+  return "";
+}
+
 export function fmtTech(t?: TechInfo | null): string {
   if (!t) return "";
   // Video containers: lead with resolution (the thing that tells a video

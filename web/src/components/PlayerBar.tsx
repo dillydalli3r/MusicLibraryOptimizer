@@ -5,7 +5,7 @@ import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBa
 import { api } from "../api";
 import { toast, useStore } from "../store";
 import { fmtDuration } from "../pages/LibraryPage";
-import { isVideoFile } from "../lib/fmt";
+import { fmtPair, fmtTech, isVideoFile } from "../lib/fmt";
 import { nextSpeed, fmtSpeed } from "../lib/playback";
 import { AdvisoryMark } from "./Badges";
 import VolumePct from "./VolumePct";
@@ -143,17 +143,14 @@ export default function PlayerBar() {
   });
   const displayTitle =
     current?.title || currentTags?.tags?.TITLE || (current ? current.file.replace(/\.[^.]+$/, "") : "");
-  // Compact tech readout for beside the title — codec + kbps only (the
-  // depth/rate pair lives in the fullscreen player and the track page);
-  // keeping it short leaves the song name most of the flank.
+  // Ultra-condensed readout beside the title: just "16/44.1" (resolution
+  // for videos). The full codec/bitrate detail stays in the tooltip and in
+  // the fullscreen player's larger readouts.
   const techInfo = currentTags?.tech as
     | { codec?: string; bitrate?: number; bits_per_sample?: number; sample_rate?: number }
     | undefined;
-  const techStr = techInfo
-    ? [techInfo.codec, techInfo.bitrate ? `${Math.round(techInfo.bitrate / 1000)} kbps` : ""]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
+  const techStr = fmtPair(techInfo);
+  const techTip = fmtTech(techInfo);
   const [thumbFailed, setThumbFailed] = useState(false);
   useEffect(() => setThumbFailed(false), [current?.path]);
   const stepRef = useRef<(dir: 1 | -1) => void>(() => {});
@@ -570,7 +567,7 @@ export default function PlayerBar() {
                 <ScrollingText text={displayTitle} />
                 <AdvisoryMark value={currentTags?.tags?.ITUNESADVISORY} />
                 {techStr && (
-                  <span className="text-[10px] font-mono text-zinc-500 shrink-0" title="Codec · bitrate · bit depth/sample rate">
+                  <span className="text-[10px] font-mono text-zinc-500 shrink-0" title={techTip || "Bit depth/sample rate"}>
                     {techStr}
                   </span>
                 )}
@@ -613,6 +610,18 @@ export default function PlayerBar() {
             <span className="w-10 shrink-0">{fmtDuration(duration)}</span>
           </div>
           <div className="flex items-center gap-0.5">
+            {/* like — far LEFT of the transport, mirroring the speed chip on
+                the far right */}
+            <button
+              className={`p-2 rounded-lg hover:bg-raise min-w-[46px] flex items-center justify-center shrink-0 ${
+                liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"
+              } ${idle ? "opacity-40 pointer-events-none" : ""}`}
+              onClick={toggleLike}
+              disabled={idle}
+              title={liked ? "Unlike" : "Like this track"}
+            >
+              <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
+            </button>
             <button
               className={`p-2 rounded-lg hover:bg-raise ${shuffle ? "text-accent" : "text-zinc-500"}`}
               onClick={() => setShuffle(!shuffle)}
@@ -836,17 +845,6 @@ export default function PlayerBar() {
               </div>
 
               {current && <TrackDownloadExport path={current.path} iconOnly />}
-
-              <button
-                className={`p-2 rounded-lg hover:bg-raise shrink-0 ${
-                  liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"
-                } ${idle ? "opacity-40 pointer-events-none" : ""}`}
-                onClick={toggleLike}
-                disabled={idle}
-                title={liked ? "Unlike" : "Like this track"}
-              >
-                <Heart className={`h-4 w-4 ${liked ? "fill-current" : ""}`} />
-              </button>
             </div>
 
             {/* layer 2: the volume bar beneath the buttons */}
