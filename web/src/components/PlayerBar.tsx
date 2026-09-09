@@ -158,6 +158,12 @@ export default function PlayerBar() {
   const techTip = fmtTech(techInfo);
   const [thumbFailed, setThumbFailed] = useState(false);
   useEffect(() => setThumbFailed(false), [current?.path]);
+  // What plays after this track (meaningful only without shuffle) — shown
+  // as a compact "UP NEXT" readout in the actions row.
+  const upNextTrack = !shuffle ? queue[index + 1] : undefined;
+  const upNextTitle = upNextTrack
+    ? upNextTrack.title || upNextTrack.file.replace(/\.[^.]+$/, "")
+    : "";
   const stepRef = useRef<(dir: 1 | -1) => void>(() => {});
 
   // OS-level media controls (lockscreen / media keys) — guarded, best effort.
@@ -690,6 +696,18 @@ export default function PlayerBar() {
         <div className="flex items-center gap-2 shrink-0 justify-self-end w-full min-w-0 justify-end pr-4">
           <div className="flex flex-col items-center gap-0.5 min-w-0">
             <div className="flex items-center gap-0.5">
+              {/* up next — mirrors the fullscreen player's top-bar readout;
+                  opens the same queue popover */}
+              {upNextTrack && (
+                <button
+                  className="hidden lg:flex items-center gap-1.5 px-1.5 py-1 rounded-md font-mono text-[10px] tabular-nums text-zinc-500 hover:text-white hover:bg-raise min-w-0 max-w-[13rem] shrink"
+                  onClick={() => setQueueOpen(true)}
+                  title={`Up next — ${upNextTitle}${upNextTrack.artist ? ` — ${upNextTrack.artist}` : ""} · click to view the queue`}
+                >
+                  <span className="uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
+                  <span className="truncate">{upNextTitle}</span>
+                </button>
+              )}
               {/* queue position — the fraction lives here, left of the playlist
                   button; clicking it (or the queue button) opens the queue */}
               {current && queue.length > 1 && (

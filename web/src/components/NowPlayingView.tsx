@@ -626,9 +626,9 @@ export default function NowPlayingView(p: Props) {
   // title, then ALBUM, then ARTIST — the two sub-lines render identically.
   const albumLine = p.current.album || freshTags?.ALBUM || album?.meta?.ALBUM || "—";
   const artistLine = p.current.artist || freshTags?.ARTIST || p.current.albumPath.split("/").pop() || "";
-  const upNext = queue[index + 1] as
+  const upNext = !p.shuffle ? queue[index + 1] as
     | { title?: string; artist?: string; file: string }
-    | undefined;
+    | undefined : undefined;
   const upNextLabel = upNext
     ? `${upNext.title || upNext.file.replace(/\.[^.]+$/, "")}${upNext.artist ? ` — ${upNext.artist}` : ""}`
     : "";
@@ -698,7 +698,30 @@ export default function NowPlayingView(p: Props) {
           >
             <ChevronDown className="h-5 w-5" />
           </button>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 min-w-0">
+            {p.queuePos && (
+              <span className="text-[10px] font-mono text-zinc-500 mr-1 tabular-nums" title="Queue position">
+                {p.queuePos}
+              </span>
+            )}
+            {/* up next — lives beside the queue it describes; click opens it */}
+            {upNextLabel && (
+              <button
+                className="hidden sm:flex max-w-[15rem] min-w-0 items-center gap-1.5 px-1.5 py-1 rounded-md text-[10px] font-mono text-zinc-500 hover:text-white hover:bg-white/10"
+                onClick={() => setQueueOpen(true)}
+                title={`Up next — ${upNextLabel} · click to view the queue`}
+              >
+                <span className="uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
+                <span className="truncate">{upNextLabel}</span>
+              </button>
+            )}
+            <button
+              className={`p-2 rounded-lg hover:bg-white/10 ${queueOpen ? "text-white bg-white/10" : "text-zinc-400 hover:text-white"}`}
+              onClick={() => setQueueOpen(!queueOpen)}
+              title="Up next (queue)"
+            >
+              <ListMusic className="h-5 w-5" />
+            </button>
             <button
               className={`p-2 rounded-lg hover:bg-white/10 ${viz ? "text-accent" : "text-zinc-400 hover:text-white"}`}
               onClick={() => {
@@ -709,18 +732,6 @@ export default function NowPlayingView(p: Props) {
               title="Toggle visualizer bars"
             >
               <AudioLines className="h-5 w-5" />
-            </button>
-            {p.queuePos && (
-              <span className="text-[10px] font-mono text-zinc-500 mr-1 tabular-nums" title="Queue position">
-                {p.queuePos}
-              </span>
-            )}
-            <button
-              className={`p-2 rounded-lg hover:bg-white/10 ${queueOpen ? "text-white bg-white/10" : "text-zinc-400 hover:text-white"}`}
-              onClick={() => setQueueOpen(!queueOpen)}
-              title="Up next (queue)"
-            >
-              <ListMusic className="h-5 w-5" />
             </button>
             <div className="relative">
               <button
@@ -909,14 +920,6 @@ export default function NowPlayingView(p: Props) {
               </div>
               <div className="h-5 mt-0.5 flex items-center justify-center" title={artistLine}>
                 <div className="text-sm text-zinc-400 truncate">{artistLine}</div>
-              </div>
-              <div className="h-4 mt-2.5 flex items-center justify-center gap-1.5 min-w-0" title={upNextLabel}>
-                {upNextLabel ? (
-                  <>
-                    <span className="text-[9px] uppercase tracking-widest text-zinc-600 shrink-0">Up next</span>
-                    <span className="text-[11px] text-zinc-400 truncate">{upNextLabel}</span>
-                  </>
-                ) : null}
               </div>
             </div>
 
