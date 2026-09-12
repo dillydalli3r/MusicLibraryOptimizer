@@ -762,6 +762,137 @@ def _sample_model_times(model_syl, count, line_start, line_end):
     return out
 
 
+def _ffprobe_media_duration(audio_path):
+    """Track duration in seconds (None when it can't be determined)."""
+    import subprocess
+    ffprobe = "ffprobe"
+    try:
+        from mlo.tools import detect_all_tools
+        exe = (detect_all_tools().get("ffmpeg") or {}).get("ffprobe_exe")
+        if exe and os.path.isfile(str(exe)):
+            ffprobe = str(exe)
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(audio_path)],
+            capture_output=True, text=True, timeout=60)
+        return float(r.stdout.strip().splitlines()[0])
+    except Exception:
+        return None
+
+
+def _ffmpeg_transcode_file(audio_path):
+    """Compact mono transcode as a temp file — the chunk source for
+    long-track alignment. Opus preferred, MP3 fallback."""
+    import subprocess
+    import tempfile
+    ffmpeg = _ffmpeg_bin()
+    for args, fmt in ((["-c:a", "libopus", "-b:a", "48k"], "ogg"),
+                      (["-c:a", "libmp3lame", "-q:a", "6"], "mp3")):
+        fd, tmp = tempfile.mkstemp(suffix=f".{fmt}")
+        os.close(fd)
+        proc = subprocess.run(
+            [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+             "-i", str(audio_path), "-ac", "1", "-ar", "24000", *args,
+             "-f", fmt, tmp],
+            capture_output=True)
+        if proc.returncode == 0 and os.path.getsize(tmp) > 0:
+            return tmp
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    raise ValueError("ffmpeg could not decode this track for alignment")
+
+
+def _clip_b64(ffmpeg, src, start, length):
+    """base64 Opus payload of one clip of the transcoded file."""
+    import base64
+    import subprocess
+    import tempfile
+    fd, out = tempfile.mkstemp(suffix=".bin")
+    os.close(fd)
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+             "-ss", f"{start:.2f}", "-t", f"{length:.2f}", "-i", src,
+             "-c:a", "libopus", "-b:a", "48k", "-f", "ogg", out],
+            capture_output=True)
+        if proc.returncode != 0 or os.path.getsize(out) == 0:
+            return None
+        with open(out, "rb") as fh:
+            return base64.b64encode(fh.read()).decode("ascii")
+    finally:
+        try:
+            os.unlink(out)
+        except OSError:
+            pass
+
+
+_CHUNK_LEN = 80.0
+_CHUNK_OVERLAP = 8.0
+
+
+def _align_hits(config, rows, audio_path, timeout, progress):
+    """Run the alignment model over the track and return raw hits with
+    ABSOLUTE times: [{"start": s, "syl": [(t, x)]}, ...].
+
+    Long tracks are sent in ~80s chunks (8s overlap) — a model's temporal
+    attention degrades over minutes of audio, and per-clip timestamps are
+    far tighter than whole-song guesses. Chunk times are relative to the
+    clip and shifted to absolute here.
+    """
+    ffmpeg = _ffmpeg_bin()
+    total = _ffprobe_media_duration(audio_path)
+    progress("transcode", 8)
+    src = _ffmpeg_transcode_file(audio_path)
+    try:
+        if total and total > _CHUNK_LEN + 10:
+            spans = []
+            a = 0.0
+            while a < total - 1:
+                spans.append((a, min(a + _CHUNK_LEN, total)))
+                a += _CHUNK_LEN - _CHUNK_OVERLAP
+        else:
+            spans = [(0.0, total)]
+        numbered = "\n".join(f"{i + 1}. {body}" for i, (_s, body) in enumerate(rows))
+        hits = []
+        for ci, (a, b) in enumerate(spans):
+            if len(spans) == 1:
+                progress("listen", 30)
+                b64, mime = _ffmpeg_audio_payload(audio_path)
+                prompt = f"LYRIC LINES:\n{numbered}"
+            else:
+                progress("listen", 30 + 45 * ci / max(len(spans) - 1, 1))
+                b64 = _clip_b64(ffmpeg, src, a, b - a)
+                mime = "audio/ogg"
+                if not b64:
+                    continue
+                prompt = (
+                    f"This clip covers {a:.2f}s to {b:.2f}s of the song. "
+                    f"Timestamps must be RELATIVE TO THE START OF THIS "
+                    f"CLIP.\n\nLYRIC LINES:\n{numbered}"
+                )
+            raw = _align_chat(config, prompt, b64, mime, timeout=timeout)
+            got = _align_parse_model_json(raw)
+            for _i, hit in got.items():
+                if len(spans) == 1:
+                    hits.append(hit)
+                    continue
+                shifted = {"start": hit["start"] + a,
+                           "syl": [(t + a, x) for (t, x) in hit["syl"]]}
+                if -1.0 <= shifted["start"] <= (total or 1e9) + 5.0:
+                    hits.append(shifted)
+        return hits
+    finally:
+        try:
+            os.unlink(src)
+        except OSError:
+            pass
+
+
 def _progress_fn(progress):
     """Wrap an optional progress(stage, pct) callback so pipeline code can
     fire updates without None checks, and callback errors never break the
@@ -778,17 +909,18 @@ def _progress_fn(progress):
 
 
 def lyrics_align_audio(config, lrc_text, audio_path, timeout=300.0,
-                       progress=None):
+                       progress=None, line_ref=None):
     """Acoustically align lyrics to the track audio at syllable level.
 
-    The model listens to the track and returns a real start time plus
-    per-syllable timestamps for every line. The STORED WORDING is never
-    changed: the model's times are mapped onto the canonical syllable
-    split of the stored text (1:1 when the counts match, monotone
-    sampling otherwise), so spacing and punctuation always stay perfect.
-    Lines the model missed, mis-ordered, or mismatched beyond
-    punctuation differences keep their slot with deterministic
-    distribution. Returns (elrc_text, {"aligned": k, "total": n}).
+    Accuracy model: the model is only ever asked for what no other source
+    knows. Line START times come from trusted anchors wherever they exist
+    (``line_ref`` — LRCLIB's human-made timings, or the input file's own
+    line stamps) and from the audio model only when no reference exists;
+    unknown runs are interpolated between anchored neighbours. The model's
+    per-syllable rhythm is then re-anchored onto each trusted line start
+    and clamped inside the line span, so a drift of seconds in the model's
+    own clock can never move a line. The STORED WORDING is never changed.
+    Returns (elrc_text, {"aligned": k, "total": n}).
     """
     if not audio_path or not os.path.isfile(str(audio_path)):
         raise ValueError("no audio file to align against")
@@ -808,14 +940,8 @@ def lyrics_align_audio(config, lrc_text, audio_path, timeout=300.0,
     if not rows:
         raise ValueError("no lyric lines to align")
 
-    numbered = "\n".join(f"{i + 1}. {body}" for i, (_s, body) in enumerate(rows))
-    progress("transcode", 8)
-    audio_b64, audio_mime = _ffmpeg_audio_payload(audio_path)
-    progress("listen", 30)
-    raw = _align_chat(config, f"LYRIC LINES:\n{numbered}", audio_b64,
-                      audio_mime, timeout=timeout)
-    progress("align", 85)
-    got = _align_parse_model_json(raw)
+    hits = _align_hits(config, rows, audio_path, timeout, progress)
+    progress("align", 80)
 
     # The model's line NUMBERS are untrustworthy (they drift, skip intros,
     # shift by one) — its TEXTS are not. Assign each returned row to the
@@ -847,53 +973,77 @@ def lyrics_align_audio(config, lrc_text, audio_path, timeout=300.0,
             used.add(cands[0])
             assign[cands[0]] = hit
 
-    for _i, hit in sorted(got.items(), key=lambda kv: kv[1]["start"]):
+    for hit in sorted(hits, key=lambda h: h["start"]):
         _assign(hit)
 
+    # ---- start times: TRUSTED ANCHORS WIN --------------------------------
+    # A model's absolute clock drifts by seconds between runs — never use
+    # it where a trusted time exists. Precedence per line:
+    #   1. line_ref (LRCLIB sync lines / the reference the wording was
+    #      matched against — human-made timings)
+    #   2. the input text's own line stamp (re-aligning an already-synced
+    #      file must not move its lines)
+    #   3. the model's start (only when no reference exists at all)
+    #   4. interpolation between surrounding anchored lines
+    ref: dict = {int(k): float(v) for k, v in (line_ref or {}).items()}
+    for i, (ps, _body) in enumerate(rows):
+        if ps is not None and i not in ref:
+            ref[i] = ps
+    starts: dict = {}
+    for i in range(len(rows)):
+        if i in ref:
+            starts[i] = max(ref[i], 0.01)
+        else:
+            h = assign.get(i)
+            if h:
+                starts[i] = max(h["start"], 0.01)
+    # interpolate unknown runs between their known neighbours
+    known_idx = sorted(starts)
+    for a_i, b_i in zip([-1] + known_idx, known_idx + [len(rows)]):
+        unk = list(range(a_i + 1, b_i))
+        if not unk:
+            continue
+        left = starts[a_i] if a_i >= 0 else None
+        right = starts[b_i] if b_i < len(rows) else None
+        base = left if left is not None else (
+            right - 3.0 * len(unk) if right is not None else 0.0)
+        top = right if right is not None else base + 3.0 * len(unk)
+        if top <= base + 0.2:
+            top = base + 3.0 * len(unk)
+        for pos, j in enumerate(unk):
+            starts[j] = max(base + (top - base) * ((pos + 1) / (len(unk) + 1)), 0.01)
+
+    progress("build", 90)
     out = []
     aligned = 0
-    last_known = None
-    pending: list = []
-
-    def _flush_pending(next_t):
-        """Rows the model missed get interpolated times between the last
-        known line and the next known one (never 0:00.00 — the formatter's
-        canonical form forbids a tight zero stamp)."""
-        nonlocal last_known
-        if not pending:
-            return
-        seg_start = last_known if last_known is not None else 0.0
-        if next_t is None or next_t <= seg_start + 0.2:
-            next_t = seg_start + max(2.0, 3.0 * len(pending))
-        k = len(pending)
-        for j, body in enumerate(pending):
-            t = max(seg_start + (next_t - seg_start) * ((j + 1) / (k + 1)), 0.01)
-            out.append(f"{_fmt_ts(t)}{body}")
-        pending.clear()
-
-    for i, (prev_start, body) in enumerate(rows):
+    import difflib as _difflib
+    for i, (_ps, body) in enumerate(rows):
+        s = starts[i]
+        # the next anchored line bounds this line's syllable window
+        nxt = None
+        for j in range(i + 1, len(rows)):
+            if starts[j] > s:
+                nxt = starts[j]
+                break
         hit = assign.get(i)
-        used_model = False
+        line = None
         if hit and hit["syl"]:
-            s = hit["start"]
-            # reject out-of-order hits (the model shuffling verses): a real
-            # start can repeat a previous one (duets) but never jump far back
-            if last_known is None or s >= last_known - 0.05:
-                # the next ASSIGNED line bounds this line's window
-                nxt = None
-                for j in range(i + 1, len(rows)):
-                    h2 = assign.get(j)
-                    if h2 and (last_known is None or h2["start"] >= s - 0.05):
-                        nxt = h2["start"]
-                        break
-                _flush_pending(max(s, 0.01))
-                # a real line can start at 0:00 (cold open), but a tight
-                # [00:00.00] stamp collides with the formatter's zero-
-                # timestamp canonical form — keep the first centisecond
-                s = max(s, 0.01)
+            # accept the model's subdivision when its wording is at least a
+            # near-match (the exact text gate is the assignment step; here a
+            # ~0.85 ratio still means the syllable RHYTHM belongs to this
+            # line, and the times get re-anchored and clamped anyway)
+            joined = _alnum_norm("".join(x for _t, x in hit["syl"]))
+            target = _alnum_norm(body)
+            ratio = 1.0 if joined == target else _difflib.SequenceMatcher(None, joined, target).ratio()
+            if ratio >= 0.85:
+                # keep the model's within-line syllable RHYTHM, but re-anchor
+                # it onto the trusted line start and clamp it inside the line
+                # span
+                m_start = hit["start"]
+                end = nxt if nxt is not None and nxt > s else s + min(6.0, 0.35 * max(len(body), 1))
+                shifted = [(s + max(0.0, t - m_start), x) for (t, x) in hit["syl"]]
                 pieces = _line_syllable_pieces(body)
-                times = _sample_model_times(hit["syl"], len(pieces), s,
-                                            nxt if nxt and nxt > s else s + min(6.0, 0.35 * max(len(pieces), 1)))
+                times = _sample_model_times(shifted, len(pieces), s, end)
                 # group pieces into words; glue the tags inside a word
                 word_groups = []
                 for (ptext, wend), t in zip(pieces, times):
@@ -902,18 +1052,13 @@ def lyrics_align_audio(config, lrc_text, audio_path, timeout=300.0,
                         word_groups[-1][1] = wend
                     else:
                         word_groups.append([[(t, ptext)], wend])
-                line_tags = []
-                for group, _wend in word_groups:
-                    tags = "".join(f"<{_fmt_ts(t)[1:-1]}>{txt}" for t, txt in group)
-                    line_tags.append(tags)
-                out.append(f"{_fmt_ts(s)}" + " ".join(line_tags))
+                line = _fmt_ts(s) + " ".join(
+                    "".join(f"<{_fmt_ts(t)[1:-1]}>{txt}" for t, txt in g)
+                    for g, _w in word_groups)
                 aligned += 1
-                used_model = True
-                last_known = s
-        if not used_model:
-            pending.append(body)
-
-    _flush_pending(None)
+        if line is None:
+            line = f"{_fmt_ts(s)}{body}"
+        out.append(line)
 
     # Re-positioned lines (the model finding a chorus later in the song
     # than the stale stored copy had it) can leave the list non-chronological;
@@ -937,14 +1082,15 @@ def _cfg_sync_level(config):
     return str(config.get("lrc_sync_level") or "SYLLABLE").lower()
 
 
-def _maybe_align(config, lrc_text, audio_path, progress=None):
+def _maybe_align(config, lrc_text, audio_path, progress=None, line_ref=None):
     """Acoustic syllable alignment when AI + audio are available; returns
     (lrc, aligned?). Failures fall back silently to the caller's path."""
     if not audio_path or not ai_configured(config):
         return lrc_text, False
     try:
         aligned, _info = lyrics_align_audio(config, lrc_text, audio_path,
-                                            progress=progress)
+                                            progress=progress,
+                                            line_ref=line_ref)
         return aligned, True
     except Exception:
         return lrc_text, False
@@ -994,12 +1140,18 @@ def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
                 except Exception:
                     ai = None
                 if ai:
-                    lrc = _build_timed_lrc(existing, ai, duration)
-                    aligned, ok = _maybe_align(config, lrc, audio_path, progress=progress)
+                    matched = dict(det) if det else {}
+                    matched.update(ai)  # the AI match wins where both agree
+                    lrc = _build_timed_lrc(existing, matched, duration)
+                    # the built stamps carry the reference times, which
+                    # anchor the alignment — no explicit index map needed
+                    aligned, ok = _maybe_align(config, lrc, audio_path,
+                                               progress=progress)
                     return (aligned, "ai-sync+align") if ok else (wordsync_lrc(lrc, level=level), "ai-sync")
             if det:
                 lrc = _build_timed_lrc(existing, det, duration)
-                aligned, ok = _maybe_align(config, lrc, audio_path, progress=progress)
+                aligned, ok = _maybe_align(config, lrc, audio_path,
+                                           progress=progress)
                 return (aligned, "aligned+align") if ok else (wordsync_lrc(lrc, level=level), "aligned")
         # nothing to align against on LRCLIB — the audio itself is the
         # reference: acoustically timestamp the user's own lines. When
@@ -1013,7 +1165,10 @@ def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
     if best:
         if best["sync_lines"]:
             lrc = "\n".join(f"{_fmt_ts(t)} {txt}" for t, txt in best["sync_lines"])
-            aligned, ok = _maybe_align(config, lrc, audio_path, progress=progress)
+            # the candidate's line stamps are human-made — anchor to them
+            line_ref = {i: t for i, (t, _txt) in enumerate(best["sync_lines"])}
+            aligned, ok = _maybe_align(config, lrc, audio_path,
+                                       progress=progress, line_ref=line_ref)
             return (aligned, "candidate+align") if ok else (wordsync_lrc(lrc, level=level), "candidate")
         if best["plain"].strip():
             aligned, ok = _maybe_align(config, best["plain"].strip(), audio_path, progress=progress)
