@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CloudDownload, Loader2, PenLine, Search, Sparkles, X, ChevronDown, ChevronUp, ClipboardPaste, Upload } from "lucide-react";
+import { CloudDownload, Loader2, PenLine, Search, X, ChevronDown, ChevronUp, ClipboardPaste, Upload } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 import LrclibPublishPanel from "./LrclibPublish";
@@ -73,7 +73,6 @@ export default function LyricsManagerModal({
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [searchedVariants, setSearchedVariants] = useState(0);
   const [preview, setPreview] = useState<number | null>(null);
-  const [aiBusy, setAiBusy] = useState(false);
   const [manual, setManual] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
   const [pubOpen, setPubOpen] = useState(false);
@@ -145,22 +144,6 @@ export default function LyricsManagerModal({
     onApplied(lrc, source);
   };
 
-  const runAiSync = async () => {
-    setAiBusy(true);
-    try {
-      const res = await api.lyricsAiSync(path, currentText?.trim() ? currentText : undefined);
-      if (!res.lrc?.trim()) {
-        toast("AI detect found nothing for this track");
-        return;
-      }
-      apply(res.lrc, `AI detect & sync (${res.source})`);
-    } catch (e: any) {
-      toast(String(e?.message ?? e));
-    } finally {
-      setAiBusy(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6" onClick={onClose}>
       <div
@@ -182,15 +165,6 @@ export default function LyricsManagerModal({
         </div>
 
         <div className="px-5 pb-3 flex gap-2 flex-wrap">
-          <button
-            className="btn-primary !py-1.5 text-xs"
-            onClick={runAiSync}
-            disabled={aiBusy}
-            title="AI picks the best LRCLIB match and syncs it (works offline via deterministic alignment)"
-          >
-            {aiBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            {aiBusy ? "Detecting…" : "AI detect & sync"}
-          </button>
           <button className="btn-ghost !py-1.5 text-xs" onClick={search} disabled={loading}>
             <CloudDownload className="h-3.5 w-3.5" /> Re-search
           </button>
@@ -250,7 +224,7 @@ export default function LyricsManagerModal({
           )}
           {!loading && candidates.length === 0 && (
             <div className="text-xs text-zinc-500 py-8 text-center">
-              No candidates on LRCLIB. Try <b>AI detect &amp; sync</b>, or paste lyrics manually.
+              No candidates on LRCLIB. Paste lyrics manually instead.
             </div>
           )}
           {candidates.map((c) => {

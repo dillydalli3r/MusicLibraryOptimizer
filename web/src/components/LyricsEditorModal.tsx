@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  CloudDownload, Keyboard, Languages, Loader2, Pause, Play, Plus, Save,
-  Sparkles, Trash2, Undo2, Wand2, X,
+  Eraser, Keyboard, Languages, Loader2, Pause, Play, Plus, Save,
+  Trash2, Undo2, Wand2, X,
 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
@@ -16,7 +16,6 @@ import {
 } from "../lib/lyricsKeys";
 import { syllabifyLine } from "../lib/syllables";
 import { SPEEDS, fmtSpeed } from "../lib/playback";
-import { useLyricsSyncJob, LyricsSyncBar } from "./LyricsSyncProgress";
 
 type StampMode = "line" | "word" | "syllable";
 
@@ -301,51 +300,12 @@ export default function LyricsEditorModal({
     setSelIdx(0);
   };
 
-  // ---- AI actions ----------------------------------------------------------
+  // ---- tools ---------------------------------------------------------------
   const textOut = () => serializeLrc(lines, dec);
-  const lrcJob = useLyricsSyncJob();
-  const aiBusy = busy !== null || lrcJob.active;
-
-  const runAlign = async () => {
-    if (aiBusy) return;
-    if (!lines.length) {
-      toast("Add lyric lines first");
-      return;
-    }
-    setBusy("align");
-    try {
-      const res = await lrcJob.run("align", path, textOut());
-      if (res?.ok && res.lrc) {
-        const parsed = parseLrc(res.lrc);
-        if (parsed.length) commit(parsed);
-        toast(`Acoustically aligned ${res.aligned}/${res.total} lines (syllable level)`);
-      } else if (res) {
-        toast(`AI align failed: ${res.error ?? "unknown error"}`);
-      }
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const runDetect = async () => {
-    if (aiBusy) return;
-    setBusy("detect");
-    try {
-      const res = await lrcJob.run("sync", path, textOut().trim() ? textOut() : undefined);
-      if (res?.ok && res.lrc) {
-        const parsed = parseLrc(res.lrc);
-        if (parsed.length) commit(parsed);
-        toast(`Detect & sync done (${res.source})`);
-      } else if (res) {
-        toast(`Detect failed: ${res.error ?? "no lyrics found"}`);
-      }
-    } finally {
-      setBusy(null);
-    }
-  };
+  const aiBusy = busy !== null;
 
   const runOfflineSync = async () => {
-    if (busy) return;
+    if (aiBusy) return;
     setBusy("offline");
     try {
       const res = await api.lyricsAi("wordsync", textOut());
@@ -611,7 +571,8 @@ export default function LyricsEditorModal({
                 {lines.map((l, i) => {
                   const isSel = i === selIdx;
                   const isActive = i === activeLine && playing;
-                  const pieces = isSel && mode === "syllable" ? syllabifyLine(l.text) : null;
+                  const pieces = isSel && mode === "syllable" && !l.words ? syllabifyLine(l.text) : null;
+                  const pending = pendingRef.current && pendingRef.current.idx === i ? pendingRef.current : null;
                   return (
                     <div
                       key={i}
@@ -633,7 +594,19 @@ export default function LyricsEditorModal({
                         >
                           <Play className="h-3 w-3" />
                         </button>
-                        <span className="w-[52px] text-right font-mono text-[11px] text-zinc-500 shrink-0 tabular-nums">{fmtDur(l.time)}</span>
+                        <input
+                          data-lyrictime
+                          className="w-[58px] text-right font-mono text-[11px] text-zinc-400 outline-none border border-transparent focus:border-accent rounded px-1 py-0.5 shrink-0 tabular-nums"
+                          value={l.ts && l.ts !== "[00:00.00]" ? l.ts.slice(1, -1) : fmtDur(l.time)}
+                          placeholder="0:00.00"
+                          title="Line start — type m:ss.xx"
+                          onChange={(e) => {
+                            const m = e.target.value.match(/^(?:(\d+):)?(\d{1,2})(?:[.:](\d{1,2}))?$/);
+                            if (!m) return;
+                            const t = (m[1] ? parseInt(m[1], 10) * 60 : 0) + parseInt(m[2], 10) + (m[3] ? parseInt(m[3].padEnd(2, "0").slice(0, 2), 10) / 100 : 0);
+                            updateLine(i, { time: t });
+                          }}
+                        />
                         <input
                           data-lyrictext
                           className="flex-1 bg-transparent text-sm text-zinc-200 outline-none border border-transparent focus:border-accent rounded px-1 py-0.5 min-w-0"
@@ -651,6 +624,11 @@ export default function LyricsEditorModal({
                           </span>
                         ) : null}
                         <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity shrink-0">
+                          {l.words?.length ? (
+                            <button className="text-zinc-500 hover:text-amber-300" onClick={(e) => { e.stopPropagation(); updateLine(i, { words: undefined }); }} title="Clear this line's word/syllable timings">
+                              <Eraser className="h-3.5 w-3.5" />
+                            </button>
+                          ) : null}
                           <button className="text-zinc-500 hover:text-accent-soft" onClick={(e) => { e.stopPropagation(); addLine(i); }} title="Add line after">
                             <Plus className="h-3.5 w-3.5" />
                           </button>
@@ -670,13 +648,45 @@ export default function LyricsEditorModal({
                           />
                         </div>
                       )}
-                      {pieces && pieces.length > 0 && (
-                        <div className="flex flex-wrap gap-1 px-1 mt-1" title="Syllable chips — each Space/stamp assigns the next time">
-                          {pieces.map((s, si) => (
-                            <span key={si} className="chip text-[9px] bg-white/5 border border-white/10 text-zinc-400">
-                              {s.text.trim() || "·"}
-                            </span>
+                      {isSel && l.words?.length ? (
+                        // stamped syllable chips: click one to seek to it
+                        <div className="flex flex-wrap gap-1 px-1 mt-1" title="Stamped syllables — click to seek">
+                          {l.words!.map((w, wi) => (
+                            <button
+                              key={wi}
+                              className={`chip text-[9px] border ${w.time <= playTime ? "bg-accent/10 border-accent/25 text-accent-soft" : "bg-white/5 border-white/10 text-zinc-400"} hover:border-accent`}
+                              onClick={(e) => { e.stopPropagation(); seekTo(w.time); }}
+                              title={`Seek to ${fmtDur(w.time)}`}
+                            >
+                              {w.text.trim() || "·"}
+                            </button>
                           ))}
+                        </div>
+                      ) : null}
+                      {pieces && pieces.length > 0 && (
+                        <div className="flex flex-wrap gap-1 px-1 mt-1 items-center" title="Syllable chips — each stamp assigns the next one">
+                          {pieces.map((s, si) => {
+                            const doneCount = pending && pending.idx === i ? pending.done : 0;
+                            const isNext = si === doneCount;
+                            const isDone = si < doneCount;
+                            return (
+                              <span
+                                key={si}
+                                className={`chip text-[9px] border ${
+                                  isNext
+                                    ? "bg-accent/20 border-accent text-white"
+                                    : isDone
+                                      ? "bg-accent/5 border-accent/30 text-zinc-300"
+                                      : "bg-white/5 border-white/10 text-zinc-500"
+                                }`}
+                              >
+                                {s.text.trim() || "·"}
+                              </span>
+                            );
+                          })}
+                          {pending && pending.done > 0 && (
+                            <span className="text-[9px] text-zinc-500 ml-1">{pending.done}/{pieces.length}</span>
+                          )}
                         </div>
                       )}
                       {xlitLines?.[i]?.trim() && (
@@ -712,20 +722,11 @@ export default function LyricsEditorModal({
           <div className="lg:w-80 shrink-0 border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col min-h-0 overflow-auto">
             <div className="p-4 space-y-4">
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-zinc-500 pb-1.5">AI sync</div>
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500 pb-1.5">Tools</div>
                 <div className="space-y-1.5">
-                  <button className="btn-primary !py-1.5 text-xs w-full justify-start disabled:opacity-40 flex items-center gap-2" onClick={runAlign} disabled={aiBusy} title="Send the audio to an audio-capable model: real start times and per-syllable timestamps for every line">
-                    {lrcJob.active && busy === "align" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    {lrcJob.active && busy === "align" ? "Listening…" : "AI syllable sync (uses audio)"}
-                  </button>
-                  <button className="btn-ghost !py-1.5 text-xs w-full justify-start flex items-center gap-2" onClick={runDetect} disabled={aiBusy} title="LRCLIB match + LLM alignment, then acoustic syllable alignment">
-                    {lrcJob.active && busy === "detect" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5" />}
-                    Detect &amp; sync from LRCLIB
-                  </button>
-                  {lrcJob.active && <LyricsSyncBar stage={lrcJob.stage} pct={lrcJob.pct} compact />}
-                  <button className="btn-ghost !py-1.5 text-xs w-full justify-start flex items-center gap-2" onClick={runOfflineSync} disabled={!!busy} title="No AI: distribute word/syllable times inside each line's slot, weighted by length">
+                  <button className="btn-ghost !py-1.5 text-xs w-full justify-start flex items-center gap-2" onClick={runOfflineSync} disabled={aiBusy} title="Distribute word/syllable times inside each line's slot, weighted by length — a quick first pass to refine by hand">
                     {busy === "offline" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-                    Distribute timings (offline)
+                    Auto-distribute timings
                   </button>
                 </div>
               </div>

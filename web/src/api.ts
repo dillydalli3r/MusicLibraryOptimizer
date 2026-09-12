@@ -241,44 +241,6 @@ export const api = {
       }),
     }, 180000),
 
-  lyricsAiSync: (path: string, text?: string) =>
-    json<{ lrc: string; source: string }>(`${API}/lyrics/ai/sync`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, text }),
-    }, 180000),
-
-  // Background lyrics-AI job (progress-bar capable): "align" acoustically
-  // syllable-aligns the given text; "sync" runs the full detect & sync
-  // pipeline. Poll the returned job id until done.
-  lyricsJobStart: (kind: "align" | "sync", path: string, text?: string) =>
-    json<{ job: string }>(`${API}/lyrics/jobs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, path, text: text ?? "" }),
-    }),
-  lyricsJobPoll: (job: string) =>
-    json<{
-      stage: string;
-      pct: number;
-      done: boolean;
-      ok?: boolean;
-      lrc?: string;
-      source?: string;
-      aligned?: number;
-      total?: number;
-      error?: string;
-    }>(`${API}/lyrics/jobs/${encodeURIComponent(job)}`),
-
-  // Acoustic syllable alignment: the track audio is sent to an
-  // audio-capable model, which timestamps every line and syllable.
-  lyricsAlign: (path: string, text: string) =>
-    json<{ lrc: string; aligned: number; total: number }>(`${API}/lyrics/align`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, text }),
-    }, 360000),
-
   // Transliterate one track and store it like the Lyrics Translate script
   // (TRANSLITERATION-<lang>-LATN tag + sidecar per settings). The LYRICS
   // field keeps the original language.
@@ -287,6 +249,15 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
+    }, 300000),
+
+  // Bulk tag surgery: delete `remove` tags and set `set` {tag: value}
+  // (empty value = delete) across the given tracks.
+  tagsBulk: (body: { paths: string[]; remove: string[]; set: Record<string, string> }) =>
+    json<{ ok: boolean; removed: number; added: number; failed: number; errors?: string[] }>(`${API}/tags/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     }, 300000),
 
   rymValidate: (url: string) => json<{ valid: boolean }>(`${API}/rym/validate?url=${encodeURIComponent(url)}`),

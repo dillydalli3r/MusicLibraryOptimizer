@@ -16,7 +16,6 @@ import Visualizer from "./Visualizer";
 import { parsePlayerLrc, activeLineRange, KaraokeWords, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
 import { createLyricsGlider, type LyricsGlider } from "../lib/lyrScroll";
 import { nextSpeed, fmtSpeed } from "../lib/playback";
-import { useLyricsSyncJob, LyricsSyncBar } from "./LyricsSyncProgress";
 
 const XLIT_KEY = "mlo.np.xlit";
 const TRANS_KEY = "mlo.np.trans";
@@ -329,7 +328,7 @@ export default function NowPlayingView(p: Props) {
   // the cover jump sizes / flash to the middle on next / previous.
   // lyricsVersion is bumped after an AI word-sync so the fresh timings
   // reload into the pane.
-  const [lyricsVersion, setLyricsVersion] = useState(0);
+  const [lyricsVersion] = useState(0); // bump target kept for future reload triggers
   useEffect(() => {
     let dead = false;
     setSmoothTime(0);
@@ -513,35 +512,6 @@ export default function NowPlayingView(p: Props) {
       setShowTrans(v);
       persist(TRANS_KEY, v ? "1" : "0");
     }
-  };
-
-  // ---- AI syllable sync (one click) ---------------------------------------
-  // Real acoustic alignment against the track's own audio: every line gets
-  // a start time and per-syllable timestamps from an audio-capable model.
-  // Unsynced lyrics get timestamps (LRCLIB match / AI transcription
-  // first); synced ones are re-aligned to the singing. Runs as a backend
-  // job so the menu can show a real progress bar. Written per
-  // lyrics_format and reloaded into the pane when it finishes.
-  const lrcJob = useLyricsSyncJob();
-  const aiWordSync = async () => {
-    if (lrcJob.active) return;
-    const res = await lrcJob.run("sync", p.current.path);
-    if (!res) return;
-    if (res.ok && res.lrc) {
-      try {
-        const cfg = await api.config();
-        const fmt = String((cfg as Record<string, unknown>).lyrics_format ?? "EMBEDDED").toUpperCase();
-        if (fmt === "LRC" || fmt === "BOTH") await api.lyricsWrite(p.current.path, res.lrc);
-        if (fmt === "EMBEDDED" || fmt === "BOTH") await api.lyricsEmbed(p.current.path, res.lrc);
-      } catch (e) {
-        toast(`Synced, but saving failed: ${e instanceof Error ? e.message : e}`);
-      }
-      toast(`Lyrics syllable-synced (${res.source})`);
-      setLyricsVersion((v) => v + 1); // reload the pane with the new timings
-    } else {
-      toast(`Syllable-sync failed: ${res.error ?? "no lyrics found"}`);
-    }
-    setOptions(false);
   };
 
   // ---- add to playlist -----------------------------------------------------
@@ -799,7 +769,9 @@ export default function NowPlayingView(p: Props) {
         title="Seek"
       />
       <span className="w-10 font-mono tabular-nums">{fmtDuration(duration)}</span>
-      <span className="w-px h-5 bg-white/15 mx-0.5" />
+      {/* the divider sits dead-center between the duration and volume
+          groups, on the same optical axis as the sliders */}
+      <span className="w-px h-5 bg-white/15 self-center shrink-0 mx-2" />
       <div className="hidden md:flex items-center gap-1.5 text-zinc-500 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
         <VolIcon className="h-4 w-4" />
         <input
@@ -970,17 +942,7 @@ export default function NowPlayingView(p: Props) {
                   <div className="fixed inset-0 z-40" onClick={() => setOptions(false)} />
                   <div className="absolute right-0 top-full mt-1 z-50 rounded-xl shadow-2xl p-2 w-72 max-w-[calc(100vw-1.5rem)] bg-zinc-950 border border-white/10">
                   <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1">Lyrics</div>
-                  <button
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 text-xs text-accent-soft disabled:opacity-40 text-left"
-                    onClick={aiWordSync}
-                    disabled={lrcJob.active}
-                    title="Listen to the track and syllable-sync the lyrics — real acoustic alignment against the audio (LRCLIB lookup + offline fallback when AI is off)"
-                  >
-                    {lrcJob.active && <span className="h-3 w-3 rounded-full border border-zinc-600 border-t-transparent animate-spin inline-block shrink-0" />}
-                    {lrcJob.active ? "Syllable-syncing…" : "AI syllable-sync lyrics"}
-                  </button>
-                  {lrcJob.active && <LyricsSyncBar stage={lrcJob.stage} pct={lrcJob.pct} compact />}
-                  {[
+                {[
                     { id: "xlit" as const, label: "Transliteration (romanized)", on: showXlit, act: () => toggleOpt("xlit") },
                     { id: "trans" as const, label: "Translation", on: showTrans, act: () => toggleOpt("trans") },
                     {

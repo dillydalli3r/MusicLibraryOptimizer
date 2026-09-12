@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CloudDownload, PenLine, Play, Square, Plus, Trash2, Undo2, Sparkles, Keyboard, Wand2, Eraser, Upload } from "lucide-react";
+import { CloudDownload, PenLine, Play, Square, Plus, Trash2, Undo2, Sparkles, Keyboard, Eraser, Upload } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 import LrclibPublishPanel from "./LrclibPublish";
@@ -126,7 +126,11 @@ export function activeLineRange(lines: LrcLine[], t: number): [number, number] {
  * slightly with a soft glow, already-sung pieces stay lit, upcoming ones
  * stay dim. Each piece eases between states (color + transform), so the
  * sweep reads as motion instead of a hard swap. Works per word or per
- * syllable — the pieces carry their own granularity. */
+ * syllable — the pieces carry their own granularity.
+ *
+ * Pieces are grouped into words first and each word is one unbreakable
+ * inline-block: without that, a line break could land BETWEEN the
+ * inline-block syllables of a single word and cut the word apart. */
 export function KaraokeWords({
   words,
   time,
@@ -140,25 +144,38 @@ export function KaraokeWords({
   sungClass?: string;
   upcomingClass?: string;
 }) {
+  // group the piece stream into words at the whitespace boundaries
+  const wordGroups: LrcWord[][] = [];
+  for (const w of words) {
+    const last = wordGroups[wordGroups.length - 1];
+    if (last && !/\s$/.test(last[last.length - 1].text)) last.push(w);
+    else wordGroups.push([w]);
+  }
   return (
     <>
-      {words.map((w, wi) => {
-        const sung = w.time <= time + 0.04;
-        const nextT = wi === words.length - 1 ? Infinity : words[wi + 1].time;
-        const current = sung && nextT > time + 0.04;
-        // inline-block enables the pop transform, but it would swallow the
-        // piece's trailing space — the space is re-added OUTSIDE so word
-        // wrapping still happens at the right points.
-        const trailing = /\s$/.test(w.text);
+      {wordGroups.map((group, gi) => {
+        const trailing = /\s$/.test(group[group.length - 1].text);
         return (
-          <span key={wi}>
-            <span
-              className={`inline-block transition-[color,transform,text-shadow] duration-200 ease-out ${
-                current ? currentClass : sung ? sungClass : upcomingClass
-              }`}
-              style={{ transformOrigin: "50% 75%" }}
-            >
-              {trailing ? w.text.replace(/\s+$/, "") : w.text}
+          <span key={gi}>
+            <span className="inline-block whitespace-nowrap">
+              {group.map((w, wi) => {
+                const sung = w.time <= time + 0.04;
+                const nextT = wi < group.length - 1
+                  ? group[wi + 1].time
+                  : (wordGroups[gi + 1]?.[0]?.time ?? Infinity);
+                const current = sung && nextT > time + 0.04;
+                return (
+                  <span
+                    key={wi}
+                    className={`inline-block transition-[color,transform,text-shadow] duration-200 ease-out ${
+                      current ? currentClass : sung ? sungClass : upcomingClass
+                    }`}
+                    style={{ transformOrigin: "50% 75%" }}
+                  >
+                    {w.text.trimEnd()}
+                  </span>
+                );
+              })}
             </span>
             {trailing ? " " : null}
           </span>
@@ -478,16 +495,11 @@ export default function LyricsViewer({
   }, [playing, selIdx, lines, activeLine, playTime, keys, capturing, onSave]);
 
   // ---- AI-assisted actions ------------------------------------------------
-  const runAi = async (mode: "clean" | "repair" | "wordsync") => {
+  const runAi = async (mode: "clean" | "repair") => {
     setAiMenu(false);
     setAiBusy(mode);
     try {
-      if (mode === "wordsync") {
-        const res = await api.lyricsAi("wordsync", serializeLrc(lines, dec));
-        const parsed = parseLrc(res.result);
-        commit(parsed);
-        toast(`Word-synced ${parsed.filter((l) => l.words?.length).length}/${parsed.length} lines (ELRC)`);
-      } else if (mode === "clean") {
+      if (mode === "clean") {
         const source = rawMode ? raw : lines.length ? lines.map((l) => l.text).join("\n") : raw;
         if (!source.trim()) {
           toast("Nothing to clean — paste lyrics first");
@@ -528,28 +540,6 @@ export default function LyricsViewer({
         setRaw(res.result);
         toast(parsed.length ? `Repaired — ${parsed.length} lines` : "AI repair returned no timed lines (see raw)");
       }
-    } catch (e) {
-      toast(String(e));
-    } finally {
-      setAiBusy(null);
-    }
-  };
-
-  /** Detect lyrics for this track (LRCLIB + AI match verification) and sync
-   * them — the AI aligns existing unsynced wording to the matched timestamps
-   * when the track already carries lyrics. Falls back server-side to
-   * deterministic alignment when AI is not configured. */
-  const detectAndSync = async () => {
-    setAiMenu(false);
-    setAiBusy("detect");
-    try {
-      const text = rawMode ? raw : serializeLrc(lines, dec);
-      const res = await api.lyricsAiSync(path, text.trim() ? text : undefined);
-      if (!res.lrc?.trim()) {
-        toast("No lyrics detected for this track");
-        return;
-      }
-      applyImport(res.lrc, `Detect & sync (${res.source})`);
     } catch (e) {
       toast(String(e));
     } finally {
@@ -689,14 +679,6 @@ export default function LyricsViewer({
             </button>
             {aiMenu && (
               <div className="absolute right-0 top-full mt-1 z-30 bg-zinc-900 border border-border rounded-lg shadow-xl p-1 w-64">
-                <button className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-panel flex items-center gap-2" onClick={detectAndSync}>
-                  <CloudDownload className="h-3.5 w-3.5 text-accent" />
-                  <span>Detect &amp; sync lyrics<span className="block text-zinc-500 text-[10px]">LRCLIB match + LLM alignment (offline fallback)</span></span>
-                </button>
-                <button className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-panel flex items-center gap-2" onClick={() => runAi("wordsync")}>
-                  <Wand2 className="h-3.5 w-3.5 text-accent" />
-                  <span>Word-sync lines → ELRC<span className="block text-zinc-500 text-[10px]">deterministic, offline</span></span>
-                </button>
                 <button className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-panel flex items-center gap-2" onClick={() => runAi("clean")}>
                   <Sparkles className="h-3.5 w-3.5 text-accent" />
                   <span>Clean raw lyrics<span className="block text-zinc-500 text-[10px]">strip ads / watermarks (LLM)</span></span>

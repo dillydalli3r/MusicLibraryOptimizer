@@ -12,6 +12,7 @@ import FavHeart from "../components/FavHeart";
 import { trackRef } from "../lib/refs";
 import { auditFails } from "../lib/status";
 import { isVideoFile } from "../lib/fmt";
+import BulkTagsDialog from "../components/BulkTagsDialog";
 import OverflowMenu from "../components/OverflowMenu";
 import StatsPanel from "../components/StatsPanel";
 import TrackDetails from "../components/TrackDetails";
@@ -47,12 +48,11 @@ export default function AlbumPage() {
   const [coverSearchOpen, setCoverSearchOpen] = useState(false);
   const [beetsBusy, setBeetsBusy] = useState(false);
   const [lyricsBusy, setLyricsBusy] = useState(false);
-  const [aiSyncBusy, setAiSyncBusy] = useState(false);
-  const [aiSyncProgress, setAiSyncProgress] = useState<{ done: number; total: number; name: string } | null>(null);
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [coverInfoOpen, setCoverInfoOpen] = useState(false);
   // track checkboxes (and the selection toolbar) only exist in select mode
   const [selectMode, setSelectMode] = useState(false);
+  const [tagsDialogOpen, setTagsDialogOpen] = useState(false);
   // tracklist columns: visible set + drag-resized widths, persisted under the
   // SAME key the library's expanded album rows use — one tracklist, one prefs
   const [trackCols, toggleTrackCol] = useColumnPrefs("album-tracks", ALBUM_TRACK_COLS);
@@ -292,44 +292,6 @@ export default function AlbumPage() {
     }
   };
 
-  /** AI detect & sync for the whole album: existing lyrics are re-aligned /
-   * upgraded to ELRC, missing ones are fetched — writes per lyrics_format. */
-  const aiSyncLyricsAlbum = async () => {
-    const targets = data.tracks.filter((t) => t.tags.INSTRUMENTAL !== "1");
-    if (!targets.length) return;
-    if (!window.confirm(`AI detect & sync lyrics for all ${targets.length} track(s)?\nExisting lyrics are re-aligned / word-synced; missing lyrics are fetched.`)) return;
-    setAiSyncBusy(true);
-    setAiSyncProgress({ done: 0, total: targets.length, name: targets[0]?.tags.TITLE || "" });
-    try {
-      const cfg = await api.config();
-      const fmt = String(cfg.lyrics_format ?? "EMBEDDED").toUpperCase();
-      let done = 0;
-      let failed = 0;
-      for (let i = 0; i < targets.length; i++) {
-        const t = targets[i];
-        setAiSyncProgress({ done: i, total: targets.length, name: t.tags.TITLE || t.file });
-        try {
-          const res = await api.lyricsAiSync(t.path);
-          if (res.lrc?.trim()) {
-            if (fmt === "LRC" || fmt === "BOTH") await api.lyricsWrite(t.path, res.lrc);
-            if (fmt === "EMBEDDED" || fmt === "BOTH") await api.lyricsEmbed(t.path, res.lrc);
-            done++;
-          } else {
-            failed++;
-          }
-        } catch {
-          failed++;
-        }
-      }
-      toast(`AI lyrics: ${done} synced${failed ? ` · ${failed} unavailable` : ""}`);
-      qc.invalidateQueries({ queryKey: ["library"] });
-      qc.invalidateQueries({ queryKey: ["album", decoded] });
-    } finally {
-      setAiSyncBusy(false);
-      setAiSyncProgress(null);
-    }
-  };
-
   return (
     <>
       {/* ambient blurred album cover behind the whole page */}
@@ -535,7 +497,6 @@ export default function AlbumPage() {
                   title: "Lyrics",
                   items: [
                     { label: lyricsBusy ? "Fetching…" : "Download missing (LRCLIB)", icon: CloudDownload, onClick: downloadLyricsAlbum, disabled: lyricsBusy },
-                    { label: aiSyncBusy ? "Syncing…" : "AI detect & sync", icon: Sparkles, onClick: aiSyncLyricsAlbum, disabled: aiSyncBusy },
                   ],
                 },
                 {
@@ -628,11 +589,21 @@ export default function AlbumPage() {
             <button className="btn-ghost !py-1 text-xs" onClick={addSelectionToPlaylist} disabled={selectedHere.length === 0}>
               Playlist
             </button>
+            <button className="btn-ghost !py-1 text-xs" onClick={() => setTagsDialogOpen(true)} disabled={selectedHere.length === 0} title="Bulk remove or set tags on the selected tracks">
+              Tags
+            </button>
             <button className="btn-ghost !py-1 text-xs" onClick={() => clearSelection()} disabled={selectedHere.length === 0}>
               Clear
             </button>
           </div>
         </div>
+      )}
+
+      {tagsDialogOpen && (
+        <BulkTagsDialog
+          paths={selectedHere.map((t) => t.path)}
+          onClose={() => setTagsDialogOpen(false)}
+        />
       )}
 
       <div>
@@ -817,20 +788,6 @@ export default function AlbumPage() {
       )}
       </div>
 
-      {aiSyncProgress && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 w-80 max-w-[90vw] rounded-xl border border-accent/40 bg-panel shadow-2xl px-4 py-3">
-          <div className="flex items-center justify-between text-[11px] text-zinc-300 pb-1.5 gap-2">
-            <span className="truncate">AI syllable-syncing — {aiSyncProgress.name}</span>
-            <span className="tabular-nums shrink-0 text-zinc-500">{aiSyncProgress.done}/{aiSyncProgress.total}</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-accent transition-[width] duration-300"
-              style={{ width: `${Math.round((aiSyncProgress.done / Math.max(aiSyncProgress.total, 1)) * 100)}%` }}
-            />
-          </div>
-        </div>
-      )}
     </>
   );
 }
