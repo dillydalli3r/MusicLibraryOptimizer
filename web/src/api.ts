@@ -248,6 +248,28 @@ export const api = {
       body: JSON.stringify({ path, text }),
     }, 180000),
 
+  // Background lyrics-AI job (progress-bar capable): "align" acoustically
+  // syllable-aligns the given text; "sync" runs the full detect & sync
+  // pipeline. Poll the returned job id until done.
+  lyricsJobStart: (kind: "align" | "sync", path: string, text?: string) =>
+    json<{ job: string }>(`${API}/lyrics/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, path, text: text ?? "" }),
+    }),
+  lyricsJobPoll: (job: string) =>
+    json<{
+      stage: string;
+      pct: number;
+      done: boolean;
+      ok?: boolean;
+      lrc?: string;
+      source?: string;
+      aligned?: number;
+      total?: number;
+      error?: string;
+    }>(`${API}/lyrics/jobs/${encodeURIComponent(job)}`),
+
   // Acoustic syllable alignment: the track audio is sent to an
   // audio-capable model, which timestamps every line and syllable.
   lyricsAlign: (path: string, text: string) =>

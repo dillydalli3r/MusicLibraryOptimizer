@@ -7,7 +7,7 @@ import {
 import { api } from "../api";
 import { toast } from "../store";
 import {
-  parseLrc, serializeLrc, type LrcLine, type LrcWord,
+  parseLrc, serializeLrc, KaraokeWords, type LrcLine, type LrcWord,
 } from "./LyricsViewer";
 import {
   loadLyricsKeys, saveLyricsKeys, resetLyricsKeys,
@@ -16,6 +16,7 @@ import {
 } from "../lib/lyricsKeys";
 import { syllabifyLine } from "../lib/syllables";
 import { SPEEDS, fmtSpeed } from "../lib/playback";
+import { useLyricsSyncJob, LyricsSyncBar } from "./LyricsSyncProgress";
 
 type StampMode = "line" | "word" | "syllable";
 
@@ -302,40 +303,42 @@ export default function LyricsEditorModal({
 
   // ---- AI actions ----------------------------------------------------------
   const textOut = () => serializeLrc(lines, dec);
+  const lrcJob = useLyricsSyncJob();
+  const aiBusy = busy !== null || lrcJob.active;
 
   const runAlign = async () => {
-    if (busy) return;
+    if (aiBusy) return;
     if (!lines.length) {
       toast("Add lyric lines first");
       return;
     }
     setBusy("align");
     try {
-      const res = await api.lyricsAlign(path, textOut());
-      const parsed = parseLrc(res.lrc);
-      if (parsed.length) commit(parsed);
-      toast(`Acoustically aligned ${res.aligned}/${res.total} lines (syllable level)`);
-    } catch (e) {
-      toast(`AI align failed: ${e instanceof Error ? e.message : e}`);
+      const res = await lrcJob.run("align", path, textOut());
+      if (res?.ok && res.lrc) {
+        const parsed = parseLrc(res.lrc);
+        if (parsed.length) commit(parsed);
+        toast(`Acoustically aligned ${res.aligned}/${res.total} lines (syllable level)`);
+      } else if (res) {
+        toast(`AI align failed: ${res.error ?? "unknown error"}`);
+      }
     } finally {
       setBusy(null);
     }
   };
 
   const runDetect = async () => {
-    if (busy) return;
+    if (aiBusy) return;
     setBusy("detect");
     try {
-      const res = await api.lyricsAiSync(path, textOut().trim() ? textOut() : undefined);
-      if (!res.lrc?.trim()) {
-        toast("No lyrics detected for this track");
-        return;
+      const res = await lrcJob.run("sync", path, textOut().trim() ? textOut() : undefined);
+      if (res?.ok && res.lrc) {
+        const parsed = parseLrc(res.lrc);
+        if (parsed.length) commit(parsed);
+        toast(`Detect & sync done (${res.source})`);
+      } else if (res) {
+        toast(`Detect failed: ${res.error ?? "no lyrics found"}`);
       }
-      const parsed = parseLrc(res.lrc);
-      if (parsed.length) commit(parsed);
-      toast(`Detect & sync done (${res.source})`);
-    } catch (e) {
-      toast(`Detect failed: ${e instanceof Error ? e.message : e}`);
     } finally {
       setBusy(null);
     }
@@ -657,17 +660,14 @@ export default function LyricsEditorModal({
                         </div>
                       </div>
                       {isActive && l.words?.length && (
-                        <div className="text-sm text-zinc-300 px-1 mt-1 flex flex-wrap gap-x-0">
-                          {l.words.map((w, wi) => {
-                            const sung = w.time <= playTime + 0.04;
-                            const nextT = wi === l.words!.length - 1 ? Infinity : l.words![wi + 1].time;
-                            const current = sung && nextT > playTime + 0.04;
-                            return (
-                              <span key={wi} className={current ? "text-accent font-semibold" : sung ? "text-white" : "text-zinc-500"}>
-                                {w.text}
-                              </span>
-                            );
-                          })}
+                        <div className="text-sm px-1 mt-1">
+                          <KaraokeWords
+                            words={l.words}
+                            time={playTime}
+                            currentClass="text-accent font-semibold scale-110"
+                            sungClass="text-white"
+                            upcomingClass="text-zinc-500"
+                          />
                         </div>
                       )}
                       {pieces && pieces.length > 0 && (
@@ -714,14 +714,15 @@ export default function LyricsEditorModal({
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-zinc-500 pb-1.5">AI sync</div>
                 <div className="space-y-1.5">
-                  <button className="btn-primary !py-1.5 text-xs w-full justify-start disabled:opacity-40 flex items-center gap-2" onClick={runAlign} disabled={!!busy} title="Send the audio to an audio-capable model: real start times and per-syllable timestamps for every line">
-                    {busy === "align" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    {busy === "align" ? "Listening to the track…" : "AI syllable sync (uses audio)"}
+                  <button className="btn-primary !py-1.5 text-xs w-full justify-start disabled:opacity-40 flex items-center gap-2" onClick={runAlign} disabled={aiBusy} title="Send the audio to an audio-capable model: real start times and per-syllable timestamps for every line">
+                    {lrcJob.active && busy === "align" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    {lrcJob.active && busy === "align" ? "Listening…" : "AI syllable sync (uses audio)"}
                   </button>
-                  <button className="btn-ghost !py-1.5 text-xs w-full justify-start flex items-center gap-2" onClick={runDetect} disabled={!!busy} title="LRCLIB match + LLM alignment, then acoustic syllable alignment">
-                    {busy === "detect" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5" />}
+                  <button className="btn-ghost !py-1.5 text-xs w-full justify-start flex items-center gap-2" onClick={runDetect} disabled={aiBusy} title="LRCLIB match + LLM alignment, then acoustic syllable alignment">
+                    {lrcJob.active && busy === "detect" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5" />}
                     Detect &amp; sync from LRCLIB
                   </button>
+                  {lrcJob.active && <LyricsSyncBar stage={lrcJob.stage} pct={lrcJob.pct} compact />}
                   <button className="btn-ghost !py-1.5 text-xs w-full justify-start flex items-center gap-2" onClick={runOfflineSync} disabled={!!busy} title="No AI: distribute word/syllable times inside each line's slot, weighted by length">
                     {busy === "offline" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                     Distribute timings (offline)

@@ -54,6 +54,14 @@ def ai_configured(config):
     return bool(base and model)
 
 
+def ai_effort(config):
+    """Reasoning effort for AI calls: HIGH by default (the models are asked
+    for maximum thinking — alignment and repair quality beat latency
+    here). MINIMAL disables thinking entirely for speed."""
+    raw = str(config.get("ai_effort") or "high").strip().lower()
+    return raw if raw in ("minimal", "low", "medium", "high") else "high"
+
+
 def ai_chat(config, system, user, timeout=90.0):
     """One-shot chat completion; returns the assistant message text."""
     base, key, model = ai_config(config)
@@ -70,8 +78,18 @@ def ai_chat(config, system, user, timeout=90.0):
             {"role": "user", "content": user},
         ],
     }
+    # Reasoning effort (OpenAI-style field; Google's OpenAI-compatible
+    # endpoint maps it onto thinking budgets). Providers that reject the
+    # unknown field get one plain retry.
+    effort = ai_effort(config)
+    if effort != "minimal":
+        body["reasoning_effort"] = effort
     r = httpx.post(f"{base}/chat/completions", json=body, headers=headers,
                    timeout=timeout)
+    if r.status_code >= 400 and "reasoning_effort" in body:
+        body.pop("reasoning_effort")
+        r = httpx.post(f"{base}/chat/completions", json=body, headers=headers,
+                       timeout=timeout)
     if r.status_code >= 400:
         # surface the provider's own message (bad key, unknown model, …)
         detail = (r.text or "").strip().replace("\n", " ")[:300]
@@ -570,16 +588,20 @@ def _align_chat(config, prompt, audio_b64, audio_mime, timeout=300.0):
         headers = {"User-Agent": USER_AGENT, "Content-Type": "application/json"}
         if key:
             headers["x-goog-api-key"] = key
+        effort = ai_effort(config)
+        gen = {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+            "responseSchema": _ALIGN_RESPONSE_SCHEMA,
+        }
+        # thinking budgets: 0 = off (minimal), -1 = dynamic maximum
+        gen["thinkingConfig"] = {"thinkingBudget": {"minimal": 0, "low": 1024, "medium": 8192}.get(effort, -1)}
         body = {
             "contents": [{"role": "user", "parts": [
                 {"text": prompt},
                 {"inline_data": {"mime_type": audio_mime, "data": audio_b64}},
             ]}],
-            "generationConfig": {
-                "temperature": 0.1,
-                "responseMimeType": "application/json",
-                "responseSchema": _ALIGN_RESPONSE_SCHEMA,
-            },
+            "generationConfig": gen,
         }
         r = httpx.post(
             f"https://{_GEMINI_HOST}/v1beta/models/{model}:generateContent",
@@ -599,6 +621,7 @@ def _align_chat(config, prompt, audio_b64, audio_mime, timeout=300.0):
     headers = {"User-Agent": USER_AGENT, "Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
+    effort = ai_effort(config)
     body = {
         "model": model,
         "temperature": 0.1,
@@ -611,8 +634,14 @@ def _align_chat(config, prompt, audio_b64, audio_mime, timeout=300.0):
             ]},
         ],
     }
+    if effort != "minimal":
+        body["reasoning_effort"] = effort
     r = httpx.post(f"{base}/chat/completions", json=body, headers=headers,
                    timeout=timeout)
+    if r.status_code >= 400 and "reasoning_effort" in body:
+        body.pop("reasoning_effort")
+        r = httpx.post(f"{base}/chat/completions", json=body, headers=headers,
+                       timeout=timeout)
     if r.status_code >= 400:
         detail = (r.text or "").strip().replace("\n", " ")[:300]
         raise ValueError(f"AI endpoint returned {r.status_code}: {detail}")
@@ -733,7 +762,23 @@ def _sample_model_times(model_syl, count, line_start, line_end):
     return out
 
 
-def lyrics_align_audio(config, lrc_text, audio_path, timeout=300.0):
+def _progress_fn(progress):
+    """Wrap an optional progress(stage, pct) callback so pipeline code can
+    fire updates without None checks, and callback errors never break the
+    alignment."""
+    if progress is None:
+        return lambda stage, pct: None
+
+    def _safe(stage, pct):
+        try:
+            progress(stage, pct)
+        except Exception:
+            pass
+    return _safe
+
+
+def lyrics_align_audio(config, lrc_text, audio_path, timeout=300.0,
+                       progress=None):
     """Acoustically align lyrics to the track audio at syllable level.
 
     The model listens to the track and returns a real start time plus
@@ -747,6 +792,7 @@ def lyrics_align_audio(config, lrc_text, audio_path, timeout=300.0):
     """
     if not audio_path or not os.path.isfile(str(audio_path)):
         raise ValueError("no audio file to align against")
+    progress = _progress_fn(progress)
     rows = []  # (previous start or None, body)
     for raw_line in (lrc_text or "").splitlines():
         stamps = _ALL_TIMES_RE.findall(raw_line)
@@ -763,9 +809,12 @@ def lyrics_align_audio(config, lrc_text, audio_path, timeout=300.0):
         raise ValueError("no lyric lines to align")
 
     numbered = "\n".join(f"{i + 1}. {body}" for i, (_s, body) in enumerate(rows))
+    progress("transcode", 8)
     audio_b64, audio_mime = _ffmpeg_audio_payload(audio_path)
+    progress("listen", 30)
     raw = _align_chat(config, f"LYRIC LINES:\n{numbered}", audio_b64,
                       audio_mime, timeout=timeout)
+    progress("align", 85)
     got = _align_parse_model_json(raw)
 
     # The model's line NUMBERS are untrustworthy (they drift, skip intros,
@@ -888,20 +937,22 @@ def _cfg_sync_level(config):
     return str(config.get("lrc_sync_level") or "SYLLABLE").lower()
 
 
-def _maybe_align(config, lrc_text, audio_path):
+def _maybe_align(config, lrc_text, audio_path, progress=None):
     """Acoustic syllable alignment when AI + audio are available; returns
     (lrc, aligned?). Failures fall back silently to the caller's path."""
     if not audio_path or not ai_configured(config):
         return lrc_text, False
     try:
-        aligned, _info = lyrics_align_audio(config, lrc_text, audio_path)
+        aligned, _info = lyrics_align_audio(config, lrc_text, audio_path,
+                                            progress=progress)
         return aligned, True
     except Exception:
         return lrc_text, False
 
 
 def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
-                       existing_text="", candidates=None, audio_path=None):
+                       existing_text="", candidates=None, audio_path=None,
+                       progress=None):
     """One-stop lyrics detection & syncing for a track.
 
     Returns (lrc_text, source). When an audio file is supplied and AI is
@@ -917,6 +968,7 @@ def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
                            lyrics from its own knowledge of the song
       * "unchanged"      - only unsynced lyrics available and nothing to do
     """
+    progress = _progress_fn(progress)
     rows = _candidate_rows(candidates)
     existing = [ln.strip() for ln in (existing_text or "").splitlines() if ln.strip()]
     level = _cfg_sync_level(config)
@@ -924,9 +976,11 @@ def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
     # Already carries timestamps: keep the wording, re-sync word/syllable
     # level — acoustically when the audio is available.
     if existing_text and re.search(r"\[\d{1,2}:\d{1,2}", existing_text):
-        aligned, ok = _maybe_align(config, existing_text, audio_path)
+        aligned, ok = _maybe_align(config, existing_text, audio_path,
+                                   progress=progress)
         if ok:
             return aligned, "ai-align"
+        progress("build", 90)
         return wordsync_lrc(existing_text, level=level), "wordsync"
 
     best = _best_candidate(rows, duration)
@@ -941,16 +995,17 @@ def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
                     ai = None
                 if ai:
                     lrc = _build_timed_lrc(existing, ai, duration)
-                    aligned, ok = _maybe_align(config, lrc, audio_path)
+                    aligned, ok = _maybe_align(config, lrc, audio_path, progress=progress)
                     return (aligned, "ai-sync+align") if ok else (wordsync_lrc(lrc, level=level), "ai-sync")
             if det:
                 lrc = _build_timed_lrc(existing, det, duration)
-                aligned, ok = _maybe_align(config, lrc, audio_path)
+                aligned, ok = _maybe_align(config, lrc, audio_path, progress=progress)
                 return (aligned, "aligned+align") if ok else (wordsync_lrc(lrc, level=level), "aligned")
         # nothing to align against on LRCLIB — the audio itself is the
         # reference: acoustically timestamp the user's own lines. When
         # alignment is impossible keep the wording untouched.
-        aligned, ok = _maybe_align(config, "\n".join(existing), audio_path)
+        aligned, ok = _maybe_align(config, "\n".join(existing), audio_path,
+                                   progress=progress)
         if ok:
             return aligned, "ai-align"
         return existing_text.strip(), "unchanged"
@@ -958,10 +1013,10 @@ def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
     if best:
         if best["sync_lines"]:
             lrc = "\n".join(f"{_fmt_ts(t)} {txt}" for t, txt in best["sync_lines"])
-            aligned, ok = _maybe_align(config, lrc, audio_path)
+            aligned, ok = _maybe_align(config, lrc, audio_path, progress=progress)
             return (aligned, "candidate+align") if ok else (wordsync_lrc(lrc, level=level), "candidate")
         if best["plain"].strip():
-            aligned, ok = _maybe_align(config, best["plain"].strip(), audio_path)
+            aligned, ok = _maybe_align(config, best["plain"].strip(), audio_path, progress=progress)
             if ok:
                 return aligned, "candidate+align"
             return best["plain"].strip(), "candidate"
@@ -976,7 +1031,7 @@ def lyrics_detect_sync(config, artist="", track="", album="", duration=None,
         except Exception:
             text = ""
         if text:
-            aligned, ok = _maybe_align(config, text, audio_path)
+            aligned, ok = _maybe_align(config, text, audio_path, progress=progress)
             if ok:
                 return aligned, "ai-transcribe+align"
             return text, "ai-transcribe"

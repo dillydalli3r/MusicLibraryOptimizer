@@ -268,6 +268,10 @@ export default function SettingsPage() {
         { k: "ai_api_key", label: "API key", type: "text" },
         { k: "ai_model", label: "Model (e.g. gemini-3.5-flash-lite)", type: "text" },
         { k: "ai_align_model", label: "Syllable-alignment model (audio-capable; blank = Model)", type: "text" },
+        {
+          k: "ai_effort", label: "Reasoning effort (all AI features)", type: "select",
+          options: [["high", "High — maximum thinking (default)"], ["medium", "Medium"], ["low", "Low"], ["minimal", "Minimal — fastest, no thinking"]],
+        },
         { k: "lyrics_xlit_enabled", label: "Transliteration enabled (script 15)", type: "bool" },
         { k: "lyrics_translate_enabled", label: "Translation enabled (script 15)", type: "bool" },
         { k: "lyrics_translation_langs", label: "Translation languages (comma separated, e.g. en,de)", type: "text" },

@@ -48,6 +48,7 @@ export default function AlbumPage() {
   const [beetsBusy, setBeetsBusy] = useState(false);
   const [lyricsBusy, setLyricsBusy] = useState(false);
   const [aiSyncBusy, setAiSyncBusy] = useState(false);
+  const [aiSyncProgress, setAiSyncProgress] = useState<{ done: number; total: number; name: string } | null>(null);
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [coverInfoOpen, setCoverInfoOpen] = useState(false);
   // track checkboxes (and the selection toolbar) only exist in select mode
@@ -298,12 +299,15 @@ export default function AlbumPage() {
     if (!targets.length) return;
     if (!window.confirm(`AI detect & sync lyrics for all ${targets.length} track(s)?\nExisting lyrics are re-aligned / word-synced; missing lyrics are fetched.`)) return;
     setAiSyncBusy(true);
+    setAiSyncProgress({ done: 0, total: targets.length, name: targets[0]?.tags.TITLE || "" });
     try {
       const cfg = await api.config();
       const fmt = String(cfg.lyrics_format ?? "EMBEDDED").toUpperCase();
       let done = 0;
       let failed = 0;
-      for (const t of targets) {
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
+        setAiSyncProgress({ done: i, total: targets.length, name: t.tags.TITLE || t.file });
         try {
           const res = await api.lyricsAiSync(t.path);
           if (res.lrc?.trim()) {
@@ -322,6 +326,7 @@ export default function AlbumPage() {
       qc.invalidateQueries({ queryKey: ["album", decoded] });
     } finally {
       setAiSyncBusy(false);
+      setAiSyncProgress(null);
     }
   };
 
@@ -811,6 +816,21 @@ export default function AlbumPage() {
         />
       )}
       </div>
+
+      {aiSyncProgress && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 w-80 max-w-[90vw] rounded-xl border border-accent/40 bg-panel shadow-2xl px-4 py-3">
+          <div className="flex items-center justify-between text-[11px] text-zinc-300 pb-1.5 gap-2">
+            <span className="truncate">AI syllable-syncing — {aiSyncProgress.name}</span>
+            <span className="tabular-nums shrink-0 text-zinc-500">{aiSyncProgress.done}/{aiSyncProgress.total}</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-accent transition-[width] duration-300"
+              style={{ width: `${Math.round((aiSyncProgress.done / Math.max(aiSyncProgress.total, 1)) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
     </>
   );
 }

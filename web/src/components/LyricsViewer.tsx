@@ -121,6 +121,53 @@ export function activeLineRange(lines: LrcLine[], t: number): [number, number] {
   return [start, end];
 }
 
+/** Animated word/syllable karaoke sweep, shared by the fullscreen player,
+ * the editor preview and the inline editor: the piece being sung pops
+ * slightly with a soft glow, already-sung pieces stay lit, upcoming ones
+ * stay dim. Each piece eases between states (color + transform), so the
+ * sweep reads as motion instead of a hard swap. Works per word or per
+ * syllable — the pieces carry their own granularity. */
+export function KaraokeWords({
+  words,
+  time,
+  currentClass = "text-accent scale-110 [text-shadow:0_0_16px_rgba(255,255,255,0.4)]",
+  sungClass = "text-white",
+  upcomingClass = "text-white/45",
+}: {
+  words: LrcWord[];
+  time: number;
+  currentClass?: string;
+  sungClass?: string;
+  upcomingClass?: string;
+}) {
+  return (
+    <>
+      {words.map((w, wi) => {
+        const sung = w.time <= time + 0.04;
+        const nextT = wi === words.length - 1 ? Infinity : words[wi + 1].time;
+        const current = sung && nextT > time + 0.04;
+        // inline-block enables the pop transform, but it would swallow the
+        // piece's trailing space — the space is re-added OUTSIDE so word
+        // wrapping still happens at the right points.
+        const trailing = /\s$/.test(w.text);
+        return (
+          <span key={wi}>
+            <span
+              className={`inline-block transition-[color,transform,text-shadow] duration-200 ease-out ${
+                current ? currentClass : sung ? sungClass : upcomingClass
+              }`}
+              style={{ transformOrigin: "50% 75%" }}
+            >
+              {trailing ? w.text.replace(/\s+$/, "") : w.text}
+            </span>
+            {trailing ? " " : null}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 export function serializeLrc(lines: LrcLine[], decimals = 2): string {
   return lines
     .map((l) => {
@@ -811,17 +858,14 @@ export default function LyricsViewer({
                 }}
               />
               {i === activeLine && playing && l.words?.length ? (
-                <span className="flex-1 text-sm text-zinc-300 px-1">
-                  {l.words.map((w, wi) => {
-                    const isActive =
-                      w.time <= playTime + 0.04 &&
-                      (wi === l.words!.length - 1 || (l.words![wi + 1].time > playTime + 0.04));
-                    return (
-                      <span key={wi} className={isActive ? "text-accent font-semibold" : ""}>
-                        {w.text}{" "}
-                      </span>
-                    );
-                  })}
+                <span className="flex-1 text-sm px-1">
+                  <KaraokeWords
+                    words={l.words}
+                    time={playTime}
+                    currentClass="text-accent font-semibold scale-110"
+                    sungClass="text-zinc-200"
+                    upcomingClass="text-zinc-500"
+                  />
                 </span>
               ) : (
                 <div className="flex-1 flex items-center gap-1.5 min-w-0">

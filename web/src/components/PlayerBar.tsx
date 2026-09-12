@@ -84,7 +84,28 @@ export default function PlayerBar() {
   const aRef = useRef<HTMLAudioElement>(null);
   const bRef = useRef<HTMLAudioElement>(null);
   const activeIsA = useRef(true);
-  const audio = () => (activeIsA.current ? aRef.current : bRef.current);
+  // Which element's src currently holds which track path — the active
+  // element is resolved by PATH first: after gapless swaps / quick
+  // next-previous hops the activeIsA flag alone can point at an element
+  // that no longer carries the current track, which froze the lyric clock
+  // (getAudioTime read an idle element stuck at 0) and killed auto-scroll
+  // for every sync type.
+  const pathOnA = useRef<string | null>(null);
+  const pathOnB = useRef<string | null>(null);
+  const setElPath = (el: HTMLAudioElement | null, path: string | null) => {
+    if (el === aRef.current) pathOnA.current = path;
+    else if (el === bRef.current) pathOnB.current = path;
+  };
+  const audio = () => {
+    const p = queue[index]?.path;
+    const prim = activeIsA.current ? aRef.current : bRef.current;
+    const sec = activeIsA.current ? bRef.current : aRef.current;
+    const pPrim = activeIsA.current ? pathOnA.current : pathOnB.current;
+    const pSec = activeIsA.current ? pathOnB.current : pathOnA.current;
+    if (p && pPrim === p) return prim;
+    if (p && pSec === p) return sec;
+    return prim;
+  };
   const swapped = useRef(false); // set when the swap already advanced the queue
   const preloaded = useRef(-1); // queue index preloaded into the idle element
   const preloadedPath = useRef<string | null>(null); // what that preload holds
@@ -227,6 +248,8 @@ export default function PlayerBar() {
       for (const a of [aRef.current, bRef.current]) {
         try { a?.pause(); a && (a.src = ""); } catch { /* ignore */ }
       }
+      pathOnA.current = null;
+      pathOnB.current = null;
       preloaded.current = -1;
       preloadedPath.current = null;
       swapped.current = false;
@@ -259,6 +282,7 @@ export default function PlayerBar() {
     const el = audio();
     if (!el) return;
     el.src = api.streamUrl(track.path);
+    setElPath(el, track.path);
     el.playbackRate = speed; // fresh <src> resets the rate
     el.play().catch(() => {});
     try { videoRef.current?.pause(); } catch { /* ignore */ }
@@ -279,6 +303,7 @@ export default function PlayerBar() {
     const idle = activeIsA.current ? bRef.current : aRef.current;
     if (!idle) return;
     idle.src = api.streamUrl(queue[next].path);
+    setElPath(idle, queue[next].path);
     idle.load();
     preloaded.current = next;
     preloadedPath.current = queue[next].path;

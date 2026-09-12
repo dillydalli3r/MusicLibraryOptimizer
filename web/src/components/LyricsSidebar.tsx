@@ -93,20 +93,27 @@ export default function LyricsSidebar({
   );
 
   // ~60 fps lyric clock: shared <audio> element read directly, so line
-  // highlights stay as tight as the fullscreen player's.
+  // highlights stay as tight as the fullscreen player's. A backgrounded
+  // pane pauses rAF — fall back to the event-driven `time` prop when the
+  // ticks go stale so following never freezes.
   const [smoothTime, setSmoothTime] = useState(0);
+  const smoothTickRef = useRef(0);
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
     const tick = () => {
       const t = getAudioTime();
-      if (typeof t === "number" && isFinite(t) && t >= 0) setSmoothTime(t);
+      if (typeof t === "number" && isFinite(t) && t >= 0) {
+        setSmoothTime(t);
+        smoothTickRef.current = performance.now();
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [playing, getAudioTime]);
-  const dispTime = playing && smoothTime > 0 ? smoothTime : time;
+  const smoothFresh = performance.now() - smoothTickRef.current < 250;
+  const dispTime = playing && smoothTime > 0 && smoothFresh ? smoothTime : time;
 
   // A RANGE, not a single line: same-time lines (duets / backing vocals)
   // highlight together. activeStart is the scroll anchor.

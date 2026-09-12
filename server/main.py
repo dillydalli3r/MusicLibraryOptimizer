@@ -1166,17 +1166,14 @@ class LyricsAiSyncRequest(BaseModel):
     text: Optional[str] = None
 
 
-@app.post("/api/lyrics/ai/sync")
-async def lyrics_ai_sync(req: LyricsAiSyncRequest):
-    """Detect & sync lyrics for one track. Picks the best LRCLIB match, then
-    aligns the track's existing (unsynced) wording to the matched timestamps
-    — AI when configured, deterministic fuzzy matching otherwise — and
-    upgrades the result to ELRC word sync. A track with no lyrics gets the
-    matched candidate's synced lyrics; already-synced input is kept and
-    upgraded to ELRC."""
+def _lyrics_sync_context(req_path: str, req_text: str):
+    """Shared prep for the lyrics sync endpoints: resolve + validate the
+    file, gather its existing lyrics (request text > embedded tag > .lrc
+    sidecar) and the LRCLIB candidates. Returns (path, cfg, ai_mod, kwargs).
+    Raises HTTPException."""
     from mlo.audio import AudioFile
     from server import ai as ai_mod
-    p = os.path.normpath(req.path)
+    p = os.path.normpath(req_path)
     if not os.path.isfile(p):
         raise HTTPException(404, "file not found")
     if not _in_music_folder(p, _music_folder()):
@@ -1191,7 +1188,7 @@ async def lyrics_ai_sync(req: LyricsAiSyncRequest):
     album = (tags.get("ALBUM") or "").strip()
     duration = tech.get("length")
 
-    existing = (req.text or "").strip()
+    existing = (req_text or "").strip()
     if not existing:
         af = AudioFile(p)
         if af.audio is not None:
@@ -1207,6 +1204,19 @@ async def lyrics_ai_sync(req: LyricsAiSyncRequest):
                     existing = fh.read().strip()
             except Exception:
                 existing = ""
+    return p, artist, title, album, duration, existing
+
+
+@app.post("/api/lyrics/ai/sync")
+async def lyrics_ai_sync(req: LyricsAiSyncRequest):
+    """Detect & sync lyrics for one track. Picks the best LRCLIB match, then
+    aligns the track's existing (unsynced) wording to the matched timestamps
+    — AI when configured, deterministic fuzzy matching otherwise — and
+    acoustically re-aligns the result to syllable level against the track's
+    own audio. A track with no lyrics gets the matched candidate's synced
+    lyrics; already-synced input is kept and re-aligned."""
+    from server import ai as ai_mod
+    p, artist, title, album, duration, existing = _lyrics_sync_context(req.path, req.text or "")
 
     candidates = []
     try:
@@ -1226,6 +1236,141 @@ async def lyrics_ai_sync(req: LyricsAiSyncRequest):
     if not lrc:
         raise HTTPException(404, "no lyrics found for this track")
     return {"lrc": lrc, "source": source}
+
+
+# --------------------------------------------------------------------------- #
+# Lyrics AI jobs: the same work as /api/lyrics/align and /api/lyrics/ai/sync
+# but started in the background so the UI can show a real progress bar
+# (stage + percent) while the model listens to the track.
+# --------------------------------------------------------------------------- #
+_LYRICS_JOBS: dict = {}
+_LYRICS_JOBS_LOCK = threading.Lock()
+_LYRICS_JOB_TASKS: set = set()
+
+
+def _lyrics_job_update(job_id, stage, pct):
+    with _LYRICS_JOBS_LOCK:
+        job = _LYRICS_JOBS.get(job_id)
+        if job is not None:
+            job["stage"] = stage
+            job["pct"] = float(pct)
+
+
+def _lyrics_gc_jobs():
+    """Drop finished jobs older than an hour (and keep the dict bounded)."""
+    import time as _time
+    now = _time.time()
+    with _LYRICS_JOBS_LOCK:
+        for jid in [j for j, job in _LYRICS_JOBS.items()
+                    if job.get("done") and now - job.get("done_at", now) > 3600]:
+            _LYRICS_JOBS.pop(jid, None)
+        if len(_LYRICS_JOBS) > 200:
+            for jid in [j for j, job in sorted(_LYRICS_JOBS.items(),
+                                               key=lambda kv: kv[1].get("done_at", 0))
+                        if job.get("done")][: len(_LYRICS_JOBS) - 200]:
+                _LYRICS_JOBS.pop(jid, None)
+
+
+class LyricsJobRequest(BaseModel):
+    kind: str  # "align" | "sync"
+    path: str
+    text: str = ""
+
+
+@app.post("/api/lyrics/jobs")
+async def lyrics_job_start(req: LyricsJobRequest):
+    import uuid
+    from mlo.audio import AudioFile
+    from server import ai as ai_mod
+
+    if req.kind not in ("align", "sync"):
+        raise HTTPException(400, f"unknown job kind: {req.kind}")
+    cfg = load_config()
+    if not ai_mod.ai_configured(cfg):
+        raise HTTPException(400, "AI is not configured — set base URL and model in Settings → AI")
+
+    if req.kind == "align":
+        p = os.path.normpath(req.path)
+        if not os.path.isfile(p):
+            raise HTTPException(404, "file not found")
+        if not _in_music_folder(p, _music_folder()):
+            raise HTTPException(400, "file outside music folder")
+        text = (req.text or "").strip()
+        if not text:
+            raise HTTPException(400, "no lyrics text provided")
+        sync_kwargs = None
+    else:
+        p, artist, title, album, duration, existing = _lyrics_sync_context(req.path, req.text)
+        text = existing
+        sync_kwargs = {"artist": artist, "track": title, "album": album,
+                       "duration": duration}
+
+    _lyrics_gc_jobs()
+    job_id = uuid.uuid4().hex
+    with _LYRICS_JOBS_LOCK:
+        _LYRICS_JOBS[job_id] = {"stage": "queued", "pct": 0.0, "done": False}
+
+    def _progress(stage, pct):
+        _lyrics_job_update(job_id, stage, pct)
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        try:
+            if req.kind == "align":
+                _lyrics_job_update(job_id, "prepare", 2)
+                lrc, info = await loop.run_in_executor(
+                    None, lambda: ai_mod.lyrics_align_audio(
+                        cfg, text, p, progress=_progress))
+                result = {"ok": True, "lrc": lrc,
+                          "aligned": info.get("aligned", 0),
+                          "total": info.get("total", 0)}
+            else:
+                _lyrics_job_update(job_id, "lookup", 5)
+                candidates = []
+                try:
+                    candidates = await loop.run_in_executor(
+                        None, lambda: intg.lrclib_search(
+                            sync_kwargs["artist"], sync_kwargs["track"],
+                            sync_kwargs["album"] or None,
+                            int(round(sync_kwargs["duration"])) if sync_kwargs["duration"] else None))
+                except Exception:
+                    candidates = []
+                lrc, source = await loop.run_in_executor(
+                    None, lambda: ai_mod.lyrics_detect_sync(
+                        cfg, existing_text=text, candidates=candidates,
+                        audio_path=p, progress=_progress, **sync_kwargs))
+                if not lrc:
+                    result = {"ok": False, "error": "no lyrics found for this track"}
+                else:
+                    result = {"ok": True, "lrc": lrc, "source": source}
+            with _LYRICS_JOBS_LOCK:
+                job = _LYRICS_JOBS.get(job_id)
+                if job is not None:
+                    job.update(result, done=True, pct=100.0,
+                               stage="done" if result.get("ok") else "error",
+                               done_at=time.time())
+        except Exception as e:
+            with _LYRICS_JOBS_LOCK:
+                job = _LYRICS_JOBS.get(job_id)
+                if job is not None:
+                    job.update(ok=False, done=True, error=str(e),
+                               stage="error", pct=100.0,
+                               done_at=time.time())
+        finally:
+            _LYRICS_JOB_TASKS.discard(asyncio.current_task())
+
+    task = asyncio.create_task(_run())
+    _LYRICS_JOB_TASKS.add(task)
+    return {"job": job_id}
+
+
+@app.get("/api/lyrics/jobs/{job_id}")
+def lyrics_job_poll(job_id: str):
+    with _LYRICS_JOBS_LOCK:
+        job = _LYRICS_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(404, "unknown job")
+        return dict(job)
 
 
 class LyricsAlignRequest(BaseModel):

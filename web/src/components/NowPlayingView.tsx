@@ -13,9 +13,10 @@ import CoverImg from "./CoverImg";
 import { activeAnalyser } from "../lib/analyser";
 import { SubtitledVideo } from "./SubtitledVideo";
 import Visualizer from "./Visualizer";
-import { parsePlayerLrc, activeLineRange, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
+import { parsePlayerLrc, activeLineRange, KaraokeWords, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
 import { createLyricsGlider, type LyricsGlider } from "../lib/lyrScroll";
 import { nextSpeed, fmtSpeed } from "../lib/playback";
+import { useLyricsSyncJob, LyricsSyncBar } from "./LyricsSyncProgress";
 
 const XLIT_KEY = "mlo.np.xlit";
 const TRANS_KEY = "mlo.np.trans";
@@ -159,20 +160,29 @@ export default function NowPlayingView(p: Props) {
   }, [queueOpen, index]);
 
   // ~60 fps lyric clock: while playing, rAF reads the shared <audio> element
-  // directly so word highlighting isn't stepped at timeupdate's ~4 Hz.
+  // directly so syllable highlighting isn't stepped at timeupdate's ~4 Hz.
+  // A backgrounded pane PAUSES rAF, so freshness is tracked — when ticks
+  // stop arriving the clock falls back to the event-driven `time` prop
+  // (which always advances), keeping auto-scroll alive for every sync type
+  // even while the pane is throttled.
   const [smoothTime, setSmoothTime] = useState(0);
+  const smoothTickRef = useRef(0);
   useEffect(() => {
     if (!p.playing) return;
     let raf = 0;
     const tick = () => {
       const t = p.getAudioTime?.();
-      if (typeof t === "number" && isFinite(t) && t >= 0) setSmoothTime(t);
+      if (typeof t === "number" && isFinite(t) && t >= 0) {
+        setSmoothTime(t);
+        smoothTickRef.current = performance.now();
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [p.playing, p.getAudioTime]);
-  const dispTime = p.playing && smoothTime > 0 ? smoothTime : time;
+  const smoothFresh = performance.now() - smoothTickRef.current < 250;
+  const dispTime = p.playing && smoothTime > 0 && smoothFresh ? smoothTime : time;
 
   // cover file + dominant color for the ambient background — the album
   // payload also supplies the canonical album artist / album name shown
@@ -509,26 +519,29 @@ export default function NowPlayingView(p: Props) {
   // Real acoustic alignment against the track's own audio: every line gets
   // a start time and per-syllable timestamps from an audio-capable model.
   // Unsynced lyrics get timestamps (LRCLIB match / AI transcription
-  // first); synced ones are re-aligned to the singing. Written per
+  // first); synced ones are re-aligned to the singing. Runs as a backend
+  // job so the menu can show a real progress bar. Written per
   // lyrics_format and reloaded into the pane when it finishes.
-  const [lrcSyncing, setLrcSyncing] = useState(false);
+  const lrcJob = useLyricsSyncJob();
   const aiWordSync = async () => {
-    if (lrcSyncing) return;
-    setLrcSyncing(true);
-    setOptions(false);
-    try {
-      const cfg = await api.config();
-      const fmt = String((cfg as Record<string, unknown>).lyrics_format ?? "EMBEDDED").toUpperCase();
-      const res = await api.lyricsAiSync(p.current.path);
-      if (fmt === "LRC" || fmt === "BOTH") await api.lyricsWrite(p.current.path, res.lrc);
-      if (fmt === "EMBEDDED" || fmt === "BOTH") await api.lyricsEmbed(p.current.path, res.lrc);
+    if (lrcJob.active) return;
+    const res = await lrcJob.run("sync", p.current.path);
+    if (!res) return;
+    if (res.ok && res.lrc) {
+      try {
+        const cfg = await api.config();
+        const fmt = String((cfg as Record<string, unknown>).lyrics_format ?? "EMBEDDED").toUpperCase();
+        if (fmt === "LRC" || fmt === "BOTH") await api.lyricsWrite(p.current.path, res.lrc);
+        if (fmt === "EMBEDDED" || fmt === "BOTH") await api.lyricsEmbed(p.current.path, res.lrc);
+      } catch (e) {
+        toast(`Synced, but saving failed: ${e instanceof Error ? e.message : e}`);
+      }
       toast(`Lyrics syllable-synced (${res.source})`);
       setLyricsVersion((v) => v + 1); // reload the pane with the new timings
-    } catch (e) {
-      toast(`Word-sync failed: ${e instanceof Error ? e.message : e}`);
-    } finally {
-      setLrcSyncing(false);
+    } else {
+      toast(`Syllable-sync failed: ${res.error ?? "no lyrics found"}`);
     }
+    setOptions(false);
   };
 
   // ---- add to playlist -----------------------------------------------------
@@ -628,20 +641,9 @@ export default function NowPlayingView(p: Props) {
               : { transform: `scale(${INACTIVE_SCALE[lyricSize]})`, transformOrigin: "0 50%" }
           }
         >
-          {!replaced && isActive && karaoke && l.words?.length
-            ? l.words.map((w, wi) => {
-                // Syllable/word sweep: the piece being sung is accented,
-                // everything already sung stays lit, upcoming pieces dim.
-                const sung = w.time <= dispTime + 0.04;
-                const nextT = wi === l.words!.length - 1 ? Infinity : l.words![wi + 1].time;
-                const current = sung && nextT > dispTime + 0.04;
-                return (
-                  <span key={wi} className={current ? "text-accent" : sung ? "text-white" : "text-white/45"}>
-                    {w.text}
-                  </span>
-                );
-              })
-            : primary}
+          {!replaced && isActive && karaoke && l.words?.length ? (
+            <KaraokeWords words={l.words} time={dispTime} />
+          ) : primary}
           {trans && !transDup && (
             <div className={`${size.xlit} font-normal text-accent-soft/70 mt-0.5 leading-snug`}>{trans}</div>
           )}
@@ -672,11 +674,159 @@ export default function NowPlayingView(p: Props) {
 
   const VolIcon = vol <= 0 ? VolumeX : vol < 0.5 ? Volume1 : Volume2;
 
+  // Shared control blocks — the audio layout shows them under the cover;
+  // the fullscreen-video layout overlays them at the bottom of the picture.
+  const textBlock = (
+    /* Every text row keeps a fixed height and is ALWAYS rendered —
+       blanking a row while the next track's tags load is what made
+       the block (and the title itself) shake on next/previous. */
+    <div className="text-center w-full max-w-[26rem] min-w-0">
+      <div className="h-8 flex items-center justify-center gap-2" title={title}>
+        <div className="text-2xl font-bold text-white truncate">{title}</div>
+        <AdvisoryMark value={freshTags?.ITUNESADVISORY} />
+        {/* bit depth/sample rate rides beside the title, same as the
+            player bar; tooltip carries the full codec/bitrate detail */}
+        {techStr && (
+          <span className="text-[11px] font-mono text-zinc-500 shrink-0" title={techTip || undefined}>
+            {techStr}
+          </span>
+        )}
+      </div>
+      <div className="h-5 mt-1 flex items-center justify-center" title={albumLine}>
+        <div className="text-sm text-zinc-400 truncate">{albumLine}</div>
+      </div>
+      <div className="h-5 mt-0.5 flex items-center justify-center" title={artistLine}>
+        <div className="text-sm text-zinc-400 truncate">{artistLine}</div>
+      </div>
+    </div>
+  );
+  const transportRow = (
+    <div className="flex items-center justify-center gap-2.5 flex-wrap">
+      <button className={`p-2 rounded-lg hover:bg-white/10 ${p.shuffle ? "text-accent" : "text-zinc-500"}`} onClick={p.onToggleShuffle} title="Shuffle">
+        <Shuffle className="h-4 w-4" />
+      </button>
+      <button className="p-2.5 rounded-lg hover:bg-white/10 text-white" onClick={() => p.onStep(-1)} title="Previous track">
+        <SkipBack className="h-5 w-5" />
+      </button>
+      <button
+        className="p-4 rounded-lg bg-accent on-accent hover:bg-accent-soft shadow-lg"
+        onClick={p.onTogglePlay}
+        title="Play / pause (Space)"
+      >
+        {p.playing ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6 ml-0.5" />}
+      </button>
+      <button className="p-2.5 rounded-lg hover:bg-white/10 text-white" onClick={() => p.onStep(1)} title="Next track">
+        <SkipForward className="h-5 w-5" />
+      </button>
+      <button className={`p-2 rounded-lg hover:bg-white/10 ${p.loop ? "text-accent" : "text-zinc-500"}`} onClick={p.onToggleLoop} title="Repeat one">
+        <Repeat className="h-4 w-4" />
+      </button>
+      <button
+        className="p-2 rounded-lg hover:bg-white/10 text-xs font-mono text-zinc-400 min-w-[46px]"
+        onClick={() => p.onSpeedChange(nextSpeed(p.speed, 1))}
+        title="Playback speed — [ slower · ] faster · 0 reset to 1×"
+      >
+        {fmtSpeed(p.speed)}
+      </button>
+      <span className="w-px h-6 bg-white/15 mx-1" />
+      <button
+        className={`p-2 rounded-lg hover:bg-white/10 ${p.liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"}`}
+        onClick={p.onToggleLike}
+        title={p.liked ? "Unlike" : "Like this track"}
+      >
+        <Heart className={`h-[18px] w-[18px] ${p.liked ? "fill-current" : ""}`} />
+      </button>
+      <div className="relative">
+        <button
+          className={`p-2 rounded-lg hover:bg-white/10 ${plOpen ? "text-accent bg-white/10" : "text-zinc-500 hover:text-zinc-300"}`}
+          onClick={() => setPlOpen(!plOpen)}
+          title="Add this track to a playlist"
+        >
+          <ListPlus className="h-[18px] w-[18px]" />
+        </button>
+        {plOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setPlOpen(false)} />
+            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-20 rounded-xl shadow-2xl border border-white/10 p-2 w-60 bg-zinc-950 max-h-72 flex flex-col">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1">Playlists</div>
+              <div className="overflow-y-auto min-h-0">
+                {(playlists ?? []).filter((pl) => pl.kind === "manual").map((pl) => (
+                  <button
+                    key={pl.id}
+                    className="w-full text-left px-2 py-1.5 rounded-lg text-xs text-zinc-300 hover:bg-white/10 hover:text-white truncate"
+                    onClick={() => addToPlaylist(pl)}
+                    title={`Add to ${pl.name}`}
+                  >
+                    {pl.name}
+                  </button>
+                ))}
+                {!(playlists ?? []).some((pl) => pl.kind === "manual") && (
+                  <div className="px-2 py-1.5 text-[11px] text-zinc-600">No manual playlists yet</div>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 pt-1.5 mt-1 border-t border-white/10">
+                <input
+                  className="input !py-1 !px-2 text-[11px] flex-1 min-w-0"
+                  placeholder="New playlist name"
+                  value={newPlName}
+                  onChange={(e) => setNewPlName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") createPlaylistAndAdd();
+                  }}
+                  autoFocus
+                />
+                <button className="btn-primary !py-1 !px-2 text-[11px] shrink-0" onClick={createPlaylistAndAdd} disabled={!newPlName.trim()}>
+                  Create
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+  const seekRow = (
+    <div className="flex items-center gap-2 text-xs text-zinc-400 w-full max-w-[26rem] px-2">
+      <span className="w-10 text-right font-mono tabular-nums">{fmtDuration(dispTime)}</span>
+      <input
+        type="range"
+        min={0}
+        max={duration || 0}
+        step={0.05}
+        value={Math.min(dispTime, duration || 0)}
+        onChange={(e) => p.onSeek(Number(e.target.value))}
+        className="flex-1 min-w-0 seek-fat"
+        title="Seek"
+      />
+      <span className="w-10 font-mono tabular-nums">{fmtDuration(duration)}</span>
+      <span className="w-px h-5 bg-white/15 mx-0.5" />
+      <div className="hidden md:flex items-center gap-1.5 text-zinc-500 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
+        <VolIcon className="h-4 w-4" />
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={vol}
+          onChange={(e) => setVol(Number(e.target.value))}
+          className="w-24 seek-fat"
+          title="Volume"
+        />
+        <VolumePct value={vol} onChange={setVol} />
+      </div>
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 z-50 bg-zinc-950 overflow-clip">
       {/* overflow-clip (not hidden): a hidden box is still a scroll container,
           so wheel / scrollIntoView can silently scroll the whole overlay and
           leave the view "stuck" half-rendered. Clip can never be scrolled. */}
+      {/* Music videos own the whole screen: the picture fills the viewport
+          (object-contain over black), controls overlay the bottom edge. The
+          cover/orb ambience is skipped — the video IS the background. */}
+      {!videoPath && (
+      <>
       {/* ---- ambient background: blurred cover + drifting color orbs,
               swelling with the beat when the pulse effect is on ---- */}
       <div ref={bgRef} className="absolute inset-0 blur-3xl" style={{ opacity: 0.25, transform: "scale(1.1)" }}>
@@ -720,10 +870,45 @@ export default function NowPlayingView(p: Props) {
       {/* legibility wash — deliberately light so the animated color field
           stays visible; only the very top and bottom darken for the bars */}
       <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/55 via-zinc-950/20 to-zinc-950/80" />
+      </>
+      )}
 
-      <div className="relative h-full flex flex-col">
+      {videoPath && (
+        <div className="absolute inset-0 bg-black">
+          {!videoFailed ? (
+            <SubtitledVideo
+              key={videoPath}
+              path={videoPath!}
+              muted
+              controls={false}
+              videoRef={videoRef}
+              onClick={p.onTogglePlay}
+              onError={() => setVideoFailed(true)}
+              className="absolute inset-0 h-full w-full object-contain cursor-pointer"
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center p-8">
+              <div className="max-w-lg text-center text-xs text-zinc-400 border border-white/10 rounded-2xl bg-black/60 p-6">
+                This video can't play in the browser. Remux it (album page → Remux videos) or open the file externally.
+              </div>
+            </div>
+          )}
+          {/* bottom control overlay — same blocks as the audio layout */}
+          <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 via-black/45 to-transparent pt-24 pb-5 px-4 sm:px-8">
+            <div className="max-w-3xl mx-auto flex flex-col items-center gap-4">
+              {textBlock}
+              {transportRow}
+              {seekRow}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* pointer-events pass through to the fullscreen video; the top bar
+          opts back in so its buttons still work */}
+      <div className={`relative h-full flex flex-col ${videoPath ? "pointer-events-none" : ""}`}>
         {/* top bar — exit button top-left, queue/options cluster top-right */}
-        <div className="flex items-center justify-between px-5 py-3">
+        <div className={`flex items-center justify-between px-5 py-3 ${videoPath ? "pointer-events-auto" : ""}`}>
           <button
             className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white"
             onClick={p.onClose}
@@ -788,12 +973,13 @@ export default function NowPlayingView(p: Props) {
                   <button
                     className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 text-xs text-accent-soft disabled:opacity-40 text-left"
                     onClick={aiWordSync}
-                    disabled={lrcSyncing}
+                    disabled={lrcJob.active}
                     title="Listen to the track and syllable-sync the lyrics — real acoustic alignment against the audio (LRCLIB lookup + offline fallback when AI is off)"
                   >
-                    {lrcSyncing && <span className="h-3 w-3 rounded-full border border-zinc-600 border-t-transparent animate-spin inline-block shrink-0" />}
-                    {lrcSyncing ? "Syllable-syncing…" : "AI syllable-sync lyrics"}
+                    {lrcJob.active && <span className="h-3 w-3 rounded-full border border-zinc-600 border-t-transparent animate-spin inline-block shrink-0" />}
+                    {lrcJob.active ? "Syllable-syncing…" : "AI syllable-sync lyrics"}
                   </button>
+                  {lrcJob.active && <LyricsSyncBar stage={lrcJob.stage} pct={lrcJob.pct} compact />}
                   {[
                     { id: "xlit" as const, label: "Transliteration (romanized)", on: showXlit, act: () => toggleOpt("xlit") },
                     { id: "trans" as const, label: "Translation", on: showTrans, act: () => toggleOpt("trans") },
@@ -898,192 +1084,37 @@ export default function NowPlayingView(p: Props) {
           </div>
         </div>
 
-        {/* main area — music videos get a cinema layout: big 16:9 picture
-            centered, no lyrics column, transport underneath */}
-        <div className={`flex-1 min-h-0 flex flex-col lg:flex-row items-center gap-4 sm:gap-8 px-4 sm:px-8 pb-4 overflow-clip ${videoPath ? "justify-center" : layoutHasLyrics ? "" : "lg:justify-center"}`}>
+        {/* main area — music videos never reach this branch: their picture
+            fills the screen behind the top bar (see the video layer above)
+            with the same controls overlaid at the bottom edge */}
+        {!videoPath && (
+        <div className={`flex-1 min-h-0 flex flex-col lg:flex-row items-center gap-4 sm:gap-8 px-4 sm:px-8 pb-4 overflow-clip ${layoutHasLyrics ? "" : "lg:justify-center"}`}>
           {/* left column: cover, track/album/artist, all playback controls —
               centered as a group inside the full column height */}
           <div
             className={`flex flex-col items-center justify-center gap-4 shrink-0 min-w-0 ${
-              videoPath ? "w-full max-w-5xl" : layoutHasLyrics ? "lg:w-[42%] lg:h-full" : ""
+              layoutHasLyrics ? "lg:w-[42%] lg:h-full" : ""
             }`}
           >
-            {videoPath ? (
-              /* music video: muted mirror of the player bar's popout decoder
-                 (which owns the sound), subtitles wired in; the transport
-                 below drives the real decoder so every button works */
-              videoFailed ? (
-                <div className="aspect-video w-full max-w-4xl rounded-2xl bg-black border border-white/10 flex items-center justify-center p-6 text-center text-xs text-zinc-400">
-                  This video can't play in the browser. Remux it (album page → Remux videos) or open the file externally.
-                </div>
-              ) : (
-              <SubtitledVideo
-                key={videoPath}
-                path={videoPath!}
-                muted
-                controls={false}
-                videoRef={videoRef}
-                onClick={p.onTogglePlay}
-                onError={() => setVideoFailed(true)}
-                className="relative aspect-video w-full max-w-4xl rounded-2xl bg-black border border-white/10 shadow-2xl object-contain cursor-pointer"
-              />
-              )
-            ) : (
-              <div className="relative">
-                {orbs && (
-                  <div
-                    className="artwork-glow absolute -inset-6 rounded-[2rem] blur-2xl"
-                    style={{ background: `radial-gradient(circle, rgb(${rgb.join(" ")} / 0.55), transparent 70%)` }}
-                  />
-                )}
-                <CoverImg
-                  albumPath={p.current.albumPath}
-                  coverFile={coverFile}
-                  // ONE size with or without lyrics — the art must never
-                  // jump when a track's lyrics load or finish.
-                  wrapperClass="relative rounded-2xl shadow-2xl border border-white/10 bg-raise overflow-hidden w-72 h-72 lg:w-[min(28rem,48vh)] lg:h-[min(28rem,48vh)]"
+            <div className="relative">
+              {orbs && (
+                <div
+                  className="artwork-glow absolute -inset-6 rounded-[2rem] blur-2xl"
+                  style={{ background: `radial-gradient(circle, rgb(${rgb.join(" ")} / 0.55), transparent 70%)` }}
                 />
-              </div>
-            )}
-            {/* Every text row keeps a fixed height and is ALWAYS rendered —
-                blanking a row while the next track's tags load is what made
-                the block (and the title itself) shake on next/previous. */}
-            <div className="text-center w-full max-w-[26rem] min-w-0">
-              <div className="h-8 flex items-center justify-center gap-2" title={title}>
-                <div className="text-2xl font-bold text-white truncate">{title}</div>
-                <AdvisoryMark value={freshTags?.ITUNESADVISORY} />
-                {/* bit depth/sample rate rides beside the title, same as the
-                    player bar; tooltip carries the full codec/bitrate detail */}
-                {techStr && (
-                  <span className="text-[11px] font-mono text-zinc-500 shrink-0" title={techTip || undefined}>
-                    {techStr}
-                  </span>
-                )}
-              </div>
-              <div className="h-5 mt-1 flex items-center justify-center" title={albumLine}>
-                <div className="text-sm text-zinc-400 truncate">{albumLine}</div>
-              </div>
-              <div className="h-5 mt-0.5 flex items-center justify-center" title={artistLine}>
-                <div className="text-sm text-zinc-400 truncate">{artistLine}</div>
-              </div>
+              )}
+              <CoverImg
+                albumPath={p.current.albumPath}
+                coverFile={coverFile}
+                // ONE size with or without lyrics — the art must never
+                // jump when a track's lyrics load or finish.
+                wrapperClass="relative rounded-2xl shadow-2xl border border-white/10 bg-raise overflow-hidden w-72 h-72 lg:w-[min(28rem,48vh)] lg:h-[min(28rem,48vh)]"
+              />
             </div>
-
-            {/* transport + like + add to playlist — directly under the cover */}
-            <div className="flex items-center justify-center gap-2.5 flex-wrap">
-              <button className={`p-2 rounded-lg hover:bg-white/10 ${p.shuffle ? "text-accent" : "text-zinc-500"}`} onClick={p.onToggleShuffle} title="Shuffle">
-                <Shuffle className="h-4 w-4" />
-              </button>
-              <button className="p-2.5 rounded-lg hover:bg-white/10 text-white" onClick={() => p.onStep(-1)} title="Previous track">
-                <SkipBack className="h-5 w-5" />
-              </button>
-              <button
-                className="p-4 rounded-lg bg-accent on-accent hover:bg-accent-soft shadow-lg"
-                onClick={p.onTogglePlay}
-                title="Play / pause (Space)"
-              >
-                {p.playing ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6 ml-0.5" />}
-              </button>
-              <button className="p-2.5 rounded-lg hover:bg-white/10 text-white" onClick={() => p.onStep(1)} title="Next track">
-                <SkipForward className="h-5 w-5" />
-              </button>
-              <button className={`p-2 rounded-lg hover:bg-white/10 ${p.loop ? "text-accent" : "text-zinc-500"}`} onClick={p.onToggleLoop} title="Repeat one">
-                <Repeat className="h-4 w-4" />
-              </button>
-              <button
-                className="p-2 rounded-lg hover:bg-white/10 text-xs font-mono text-zinc-400 min-w-[46px]"
-                onClick={() => p.onSpeedChange(nextSpeed(p.speed, 1))}
-                title="Playback speed — [ slower · ] faster · 0 reset to 1×"
-              >
-                {fmtSpeed(p.speed)}
-              </button>
-              <span className="w-px h-6 bg-white/15 mx-1" />
-              <button
-                className={`p-2 rounded-lg hover:bg-white/10 ${p.liked ? "text-accent" : "text-zinc-500 hover:text-zinc-300"}`}
-                onClick={p.onToggleLike}
-                title={p.liked ? "Unlike" : "Like this track"}
-              >
-                <Heart className={`h-[18px] w-[18px] ${p.liked ? "fill-current" : ""}`} />
-              </button>
-              <div className="relative">
-                <button
-                  className={`p-2 rounded-lg hover:bg-white/10 ${plOpen ? "text-accent bg-white/10" : "text-zinc-500 hover:text-zinc-300"}`}
-                  onClick={() => setPlOpen(!plOpen)}
-                  title="Add this track to a playlist"
-                >
-                  <ListPlus className="h-[18px] w-[18px]" />
-                </button>
-                {plOpen && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setPlOpen(false)} />
-                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-20 rounded-xl shadow-2xl border border-white/10 p-2 w-60 bg-zinc-950 max-h-72 flex flex-col">
-                      <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1">Playlists</div>
-                      <div className="overflow-y-auto min-h-0">
-                        {(playlists ?? []).filter((pl) => pl.kind === "manual").map((pl) => (
-                          <button
-                            key={pl.id}
-                            className="w-full text-left px-2 py-1.5 rounded-lg text-xs text-zinc-300 hover:bg-white/10 hover:text-white truncate"
-                            onClick={() => addToPlaylist(pl)}
-                            title={`Add to ${pl.name}`}
-                          >
-                            {pl.name}
-                          </button>
-                        ))}
-                        {!(playlists ?? []).some((pl) => pl.kind === "manual") && (
-                          <div className="px-2 py-1.5 text-[11px] text-zinc-600">No manual playlists yet</div>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5 pt-1.5 mt-1 border-t border-white/10">
-                        <input
-                          className="input !py-1 !px-2 text-[11px] flex-1 min-w-0"
-                          placeholder="New playlist name"
-                          value={newPlName}
-                          onChange={(e) => setNewPlName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") createPlaylistAndAdd();
-                          }}
-                          autoFocus
-                        />
-                        <button className="btn-primary !py-1 !px-2 text-[11px] shrink-0" onClick={createPlaylistAndAdd} disabled={!newPlName.trim()}>
-                          Create
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
+            {textBlock}
+            {transportRow}
             {/* seek + volume — a single line under the transport */}
-            <div className="flex items-center gap-2 text-xs text-zinc-400 w-full max-w-[26rem] px-2">
-              <span className="w-10 text-right font-mono tabular-nums">{fmtDuration(dispTime)}</span>
-              <input
-                type="range"
-                min={0}
-                max={duration || 0}
-                step={0.05}
-                value={Math.min(dispTime, duration || 0)}
-                onChange={(e) => p.onSeek(Number(e.target.value))}
-                className="flex-1 min-w-0 seek-fat"
-                title="Seek"
-              />
-              <span className="w-10 font-mono tabular-nums">{fmtDuration(duration)}</span>
-              <span className="w-px h-5 bg-white/15 mx-0.5" />
-              <div className="hidden md:flex items-center gap-1.5 text-zinc-500 shrink-0" title={`Volume — ${Math.round(vol * 100)}%`}>
-                <VolIcon className="h-4 w-4" />
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={vol}
-                  onChange={(e) => setVol(Number(e.target.value))}
-                  className="w-24 seek-fat"
-                  title="Volume"
-                />
-                <VolumePct value={vol} onChange={setVol} />
-              </div>
-            </div>
-
+            {seekRow}
             {/* frequency-bar visualizer — the same one the fullscreen view
                 uses; toggle via the button in the top bar or options menu */}
             {viz && (
@@ -1127,6 +1158,7 @@ export default function NowPlayingView(p: Props) {
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* up-next queue drawer — same features as the player bar's queue

@@ -421,6 +421,10 @@ DEFAULT_CONFIG = {
     # Optional override model for acoustic syllable alignment (needs audio
     # input; blank = ai_model). Audio-capable models align best.
     "ai_align_model": "",
+    # Reasoning effort for every AI call. HIGH is the default: maximum
+    # thinking budget for alignment/repair quality. MINIMAL disables
+    # thinking for speed.
+    "ai_effort": "high",
     "ai_model": "",
     "ai_translate_lang": "en",
 
@@ -533,6 +537,8 @@ _CHOICES = {
     # SYLLABLE = glued per-syllable ELRC tags, WORD = per-word ELRC tags,
     # LINE = plain [mm:ss.xx] line timestamps only.
     "lrc_sync_level": {"SYLLABLE", "WORD", "LINE"},
+    # AI reasoning effort (thinking budget) for every AI-assisted feature.
+    "ai_effort": {"MINIMAL", "LOW", "MEDIUM", "HIGH"},
     "cue_file_type": {"WAVE", "MP3"},
     "audiometa_key_notation": {"musical", "camelot", "openkey"},
     "video_preset": {"ultrafast", "superfast", "veryfast", "faster", "fast",
