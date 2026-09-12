@@ -619,7 +619,10 @@ def get_tags(path: str = Query(...)):
                 return None
         return None
 
-    from mlo.lyrics_xlit import primary_translation_lang
+    from mlo.lyrics_xlit import (
+        _same_essence, needs_transliteration, needs_translation,
+        primary_translation_lang,
+    )
     # Language-specific transform tags (TRANSLITERATION-JA-LATN,
     # TRANSLATION-EN, …) read first; the bare legacy names still read.
     xlit = str(af.get_lyrics_transform("TRANSLITERATION") or "").strip() or None
@@ -628,6 +631,18 @@ def get_tags(path: str = Query(...)):
     trans = str(af.get_lyrics_transform("TRANSLATION", primary_translation_lang(load_config())) or "").strip() or None
     if trans is None:
         trans = _sidecar_text(f".{primary_translation_lang(load_config())}.lrc")
+    # Suppress REDUNDANT transforms — romanizing lyrics that are already in
+    # Latin script (or already in the reader's own script) and "translating"
+    # lyrics whose script already matches the target language produce the
+    # useless sub-lines the sidebar used to render under e.g. English songs.
+    # Same rules script 15 and the grader apply.
+    _cfg = load_config()
+    _lyr_text = str(lyr or "")
+    if xlit is not None and not needs_transliteration(_lyr_text, _cfg):
+        xlit = None
+    if trans is not None and (not needs_translation(_lyr_text, _cfg)
+                              or _same_essence(trans, _lyr_text)):
+        trans = None
     cover = None
     try:
         alb = os.path.dirname(p)

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, X } from "lucide-react";
 import { api } from "../api";
-import { parsePlayerLrc, activeLineRange, type LrcLine } from "./LyricsViewer";
+import { parsePlayerLrc, activeLineRange, KaraokeWords, type LrcLine } from "./LyricsViewer";
 import { createLyricsGlider, type LyricsGlider } from "../lib/lyrScroll";
 import Visualizer from "./Visualizer";
 
@@ -199,6 +199,10 @@ export default function LyricsSidebar({
             const isActive = synced && activeEnd >= activeStart && i >= activeStart && i <= activeEnd;
             const trans = payload?.trans?.[i];
             const xlit = payload?.xlit?.[i];
+            // a stored sub-line that just mirrors the primary line (same
+            // words, ignoring case/punctuation) is noise, not a transform
+            const essence = (s: string) => s.toLowerCase().replace(/[\W_]+/g, "");
+            const dup = (s?: string) => !!s && essence(s) === essence(l.text) && !!essence(l.text);
             return (
               <div
                 key={i}
@@ -233,12 +237,16 @@ export default function LyricsSidebar({
                     transformOrigin: "0 50%",
                   }}
                 >
-                  {l.text}
+                  {synced && isActive && l.words?.length ? (
+                    <KaraokeWords words={l.words} time={dispTime} />
+                  ) : (
+                    l.text
+                  )}
                 </div>
-                {xlit && xlit.trim() && xlit.trim() !== l.text.trim() && (
+                {xlit && xlit.trim() && !dup(xlit) && xlit.trim() !== l.text.trim() && (
                   <div className="text-xs text-zinc-400 mt-0.5 leading-snug">{xlit}</div>
                 )}
-                {trans && trans.trim() && (
+                {trans && trans.trim() && !dup(trans) && (
                   <div className="text-xs text-accent-soft/70 mt-0.5 leading-snug">{trans}</div>
                 )}
               </div>
