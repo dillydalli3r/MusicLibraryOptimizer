@@ -70,6 +70,14 @@ export const api = {
    * MPEG-2/VC-1/etc. through ffmpeg into playable H.264/AAC MP4). */
   videoStreamUrl: (path: string, transcode = false) =>
     `${API}/videos/stream?path=${encodeURIComponent(path)}${transcode ? "&transcode=1" : ""}`,
+  /** Playback decision for a video: native (browser-decodable container +
+   * codecs) vs live transcode, plus ffprobe's real duration — fragmented
+   * live transcodes report Infinity on the media element, so this is the
+   * only reliable length source for those. */
+  videoMeta: (path: string) =>
+    json<{ native: boolean; reason: string | null; duration: number | null; video_codec: string | null; audio_codecs: string[] }>(
+      `${API}/videos/meta?path=${encodeURIComponent(path)}`
+    ),
   subtitles: (path: string) =>
     json<{ muxed: { n: number; codec: string; title: string }[]; sidecars: { file: string; name: string; language: string | null }[] }>(
       `${API}/videos/subtitles?path=${encodeURIComponent(path)}`
@@ -125,10 +133,13 @@ export const api = {
       body: JSON.stringify({ name, kind, filter }),
     }),
   renamePlaylist: (id: number, name: string) =>
+    api.playlistUpdate(id, { name }),
+  /** Partial update (currently: rename). */
+  playlistUpdate: (id: number, patch: { name?: string }) =>
     json<import("./types").Playlist>(`${API}/playlists/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(patch),
     }),
   deletePlaylist: (id: number) => json<{ ok: boolean }>(`${API}/playlists/${id}`, { method: "DELETE" }),
   playlistAdd: (id: number, paths: string[], position?: number) =>

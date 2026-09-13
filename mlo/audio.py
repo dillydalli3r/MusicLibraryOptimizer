@@ -3,7 +3,7 @@ import os
 
 from .deps import (
     FLAC, OggVorbis, OggOpus, MP3, MP4, MP4FreeForm,
-    TXXX, USLT, COMM, Encoding, TextFrame, Frames,
+    TXXX, USLT, COMM, Encoding, TextFrame, Frames, APIC, MP4Cover, Picture,
 )
 from .stats import _decode_mp4_value
 
@@ -1313,4 +1313,129 @@ class AudioFile:
             return False
 
         return False
+
+    # ------------------------------------------------------------------
+    # Embedded cover art — FLAC pictures, MP3 APIC, MP4 covr and the OGG/
+    # Opus METADATA_BLOCK_PICTURE base64 form. Videos (attachments) and
+    # raw AAC are not supported and return empty results.
+    # ------------------------------------------------------------------
+    def embedded_pictures(self):
+        """[(mime, bytes)] of the embedded cover art currently in the file."""
+        try:
+            if self.kind == "flac" and self.audio is not None:
+                return [(p.mime, bytes(p.data)) for p in self.audio.pictures]
+
+            if self.kind == "mp3" and self.audio is not None and self.audio.tags:
+                return [
+                    ((f.mime or "image/jpeg"), bytes(f.data))
+                    for f in self.audio.tags.getall("APIC")
+                ]
+
+            if self.kind == "mp4" and self.audio is not None and self.audio.tags:
+                covers = self.audio.tags.get("covr") or []
+                out = []
+                for c in covers:
+                    data = bytes(c)
+                    fmt = getattr(c, "imageformat", None)
+                    mime = "image/png" if fmt == 14 else "image/jpeg"
+                    out.append((mime, data))
+                return out
+
+            if self.kind in ("ogg", "opus") and self.audio is not None and self.audio.tags:
+                for k, v in self.audio.tags.items():
+                    if str(k).lower() == "metadata_block_picture":
+                        vals = v if isinstance(v, list) else [v]
+                        import base64
+                        out = []
+                        for raw in vals:
+                            try:
+                                pic = Picture(base64.b64decode(str(raw)))
+                                out.append((pic.mime, bytes(pic.data)))
+                            except Exception:
+                                pass
+                        return out
+            return []
+        except Exception as e:
+            self.error = f"embedded_pictures: {e}"
+            return []
+
+    def remove_embedded_pictures(self):
+        """Strip every embedded picture. True when the file was changed."""
+        self._invalidate_cache()
+        try:
+            if self.kind == "flac" and self.audio is not None:
+                if not self.audio.pictures:
+                    return False
+                self.audio.clear_pictures()
+                self.audio.save()
+                return True
+
+            if self.kind == "mp3" and self.audio is not None and self.audio.tags:
+                if not self.audio.tags.getall("APIC"):
+                    return False
+                self.audio.tags.delall("APIC")
+                self.audio.save()
+                return True
+
+            if self.kind == "mp4" and self.audio is not None and self.audio.tags:
+                if "covr" not in self.audio.tags:
+                    return False
+                del self.audio.tags["covr"]
+                self.audio.save()
+                return True
+
+            if self.kind in ("ogg", "opus") and self.audio is not None and self.audio.tags:
+                keys = [k for k in self.audio.tags.keys()
+                        if str(k).lower() == "metadata_block_picture"]
+                if not keys:
+                    return False
+                for k in keys:
+                    del self.audio.tags[k]
+                self.audio.save()
+                return True
+            return False
+        except Exception as e:
+            self.error = f"remove_embedded_pictures: {e}"
+            return False
+
+    def add_embedded_picture(self, data, mime="image/jpeg"):
+        """Embed one front-cover picture. True when the file was changed."""
+        self._invalidate_cache()
+        try:
+            if self.kind == "flac" and self.audio is not None:
+                pic = Picture()
+                pic.type = 3  # front cover
+                pic.mime = mime
+                pic.data = data
+                self.audio.add_picture(pic)
+                self.audio.save()
+                return True
+
+            if self.kind == "mp3" and self.audio is not None:
+                if self.audio.tags is None:
+                    self.audio.add_tags()
+                self.audio.tags.delall("APIC")
+                self.audio.tags.add(APIC(encoding=3, mime=mime, type=3, data=data))
+                self.audio.save()
+                return True
+
+            if self.kind == "mp4" and self.audio is not None:
+                fmt = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
+                self.audio.tags["covr"] = [MP4Cover(data, imageformat=fmt)]
+                self.audio.save()
+                return True
+
+            if self.kind in ("ogg", "opus") and self.audio is not None:
+                import base64
+                pic = Picture()
+                pic.type = 3
+                pic.mime = mime
+                pic.data = data
+                self.audio.tags["METADATA_BLOCK_PICTURE"] = base64.b64encode(pic.write()).decode("ascii")
+                self.audio.save()
+                return True
+            return False
+        except Exception as e:
+            self.error = f"add_embedded_picture: {e}"
+            return False
 

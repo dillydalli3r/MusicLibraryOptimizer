@@ -11,11 +11,12 @@ import { fmtTech, fmtPair, isVideoFile } from "../lib/fmt";
 import { AdvisoryMark } from "./Badges";
 import CoverImg from "./CoverImg";
 import { activeAnalyser } from "../lib/analyser";
-import { SubtitledVideo } from "./SubtitledVideo";
 import Visualizer from "./Visualizer";
-import { parsePlayerLrc, activeLineRange, KaraokeWords, type LrcLine } from "./LyricsViewer";import type { Playlist } from "../types";
+import { parsePlayerLrc, activeLineRange, KaraokeWords, type LrcLine } from "./LyricsViewer";
+import type { Playlist } from "../types";
 import { createLyricsGlider, type LyricsGlider } from "../lib/lyrScroll";
 import { nextSpeed, fmtSpeed } from "../lib/playback";
+import { fmtDuration } from "../pages/LibraryPage";
 
 const XLIT_KEY = "mlo.np.xlit";
 const TRANS_KEY = "mlo.np.trans";
@@ -32,6 +33,11 @@ interface Props {
   playing: boolean;
   time: number;
   duration: number;
+  /** The popout's live <video> element (music videos) — adopted into the
+   * fullscreen picture via a DOM move so playback never reloads. */
+  videoEl?: React.RefObject<HTMLVideoElement | null>;
+  /** Where that element returns to when the fullscreen view closes. */
+  videoHome?: React.RefObject<HTMLDivElement | null>;
   shuffle: boolean;
   loop: boolean;
   liked: boolean;
@@ -286,38 +292,83 @@ export default function NowPlayingView(p: Props) {
   // Persisted-toggle helper shared by the options menu and inline buttons.
   const persist = (key: string, v: string) => localStorage.setItem(key, v);
 
-  // ---- video mirror (music videos in the queue) ----------------------------
-  // The player bar's popout <video> owns the sound — a second unmuted
-  // decoder would double the audio — so the fullscreen picture plays muted
-  // and follows the bar's media clock with a small drift tolerance.
-  // (The bar routes music videos through its popout video, never <audio>,
-  // so the clock is always a real video clock.)
+  // ---- video adoption (music videos in the queue) --------------------------
+  // The player bar's popout <video> owns the sound and IS the only decoder;
+  // the fullscreen view doesn't mirror it with a second muted element
+  // (double decode, double network stream, drift-sync that stalls on live
+  // transcodes) — it ADOPTS the element itself via a plain DOM move, so
+  // playback continues seamlessly across the transition. On close the
+  // element returns to its popout home.
   const videoPath = isVideoFile(p.current.file || p.current.path) ? p.current.path : null;
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoSlotRef = useRef<HTMLDivElement>(null);
   const [videoFailed, setVideoFailed] = useState(false);
   useEffect(() => setVideoFailed(false), [videoPath]);
   useEffect(() => {
     if (!videoPath) return;
-    // Safety: never let a stray <audio> decoder double the video's sound.
-    for (const a of Array.from(document.querySelectorAll("audio"))) {
-      try { (a as HTMLAudioElement).pause(); } catch { /* ignore */ }
-    }
-    let raf = 0;
-    const tick = () => {
-      const v = videoRef.current;
-      if (v && !videoFailed) {
-        const t = p.getAudioTime?.() ?? 0;
-        if (isFinite(t) && t > 0 && Math.abs(v.currentTime - t) > 0.35) {
-          try { v.currentTime = t; } catch { /* ignore */ }
-        }
-        if (p.playing && v.paused) v.play().catch(() => {});
-        if (!p.playing && !v.paused) v.pause();
+    const el = p.videoEl?.current;
+    const slot = videoSlotRef.current;
+    const home = p.videoHome?.current;
+    if (!el || !slot || !home) return;
+    const prevClassName = el.className;
+    const prevControls = el.controls;
+    // object-CONTAIN: the picture always keeps its original aspect ratio —
+    // no cropping, no stretching — and contain IS the largest it can be
+    // drawn on screen: it scales the frame up until one dimension touches
+    // the viewport edge (full height on a wider screen, full width on a
+    // taller one). Remaining edges stay black, like every video player.
+    el.className = "absolute inset-0 h-full w-full object-contain bg-black";
+    el.controls = false;
+    slot.appendChild(el);
+    const onError = () => setVideoFailed(true);
+    el.addEventListener("error", onError);
+    return () => {
+      el.removeEventListener("error", onError);
+      // Return the element before this slot unmounts — but only if React
+      // hasn't already detached it (track change remounts the popout's
+      // <video> elsewhere; re-homing a detached node would orphan it).
+      if (el.parentNode === slot) {
+        home.appendChild(el);
+        el.className = prevClassName;
+        el.controls = prevControls;
       }
-      raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [videoPath, videoFailed, p.playing, p.getAudioTime]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoPath, p.videoEl, p.videoHome]);
+
+  // ---- auto-hiding chrome (video mode) ------------------------------------
+  // Like every serious video player: any mouse movement / key / touch shows
+  // the top bar, the control overlay and the cursor, then ~2.5s of stillness
+  // hides them again over the playing picture. Paused or with a popover open
+  // the chrome stays put — hidden controls must never be a surprise.
+  const [chromeVisible, setChromeVisible] = useState(true);
+  const chromeTimer = useRef<number | null>(null);
+  useEffect(() => {
+    if (!videoPath) {
+      setChromeVisible(true);
+      return;
+    }
+    const arm = () => {
+      if (chromeTimer.current !== null) window.clearTimeout(chromeTimer.current);
+      chromeTimer.current = window.setTimeout(() => {
+        if (p.playing && !queueOpen && !options && !plOpen) setChromeVisible(false);
+      }, 2500);
+    };
+    const poke = () => {
+      setChromeVisible(true);
+      arm();
+    };
+    arm();
+    const evts: (keyof WindowEventMap)[] = ["mousemove", "mousedown", "keydown", "touchstart"];
+    evts.forEach((e) => window.addEventListener(e, poke, { passive: true }));
+    return () => {
+      evts.forEach((e) => window.removeEventListener(e, poke));
+      if (chromeTimer.current !== null) window.clearTimeout(chromeTimer.current);
+    };
+  }, [videoPath, p.playing, queueOpen, options, plOpen]);
+  // Pausing always brings the chrome back.
+  useEffect(() => {
+    if (!p.playing) setChromeVisible(true);
+  }, [p.playing]);
 
   // ---- lyrics for the current track --------------------------------------
   // Stored transforms (script 15 tags / .romaji.lrc / .<lang>.lrc sidecars)
@@ -493,7 +544,10 @@ export default function NowPlayingView(p: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // Esc steps OUT of the browser fullscreen first (matching native
+        // video players); a second Esc then closes the viewer itself.
         if (plOpen) setPlOpen(false);
+        else if (document.fullscreenElement) document.exitFullscreen().catch(() => { /* gone */ });
         else p.onClose();
       }
     };
@@ -717,8 +771,8 @@ export default function NowPlayingView(p: Props) {
         {plOpen && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setPlOpen(false)} />
-            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-20 rounded-xl shadow-2xl border border-white/10 p-2 w-60 bg-zinc-950 max-h-72 flex flex-col">
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1">Playlists</div>
+            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-20 rounded-lg shadow-2xl border border-border p-1.5 w-60 bg-zinc-950 max-h-72 flex flex-col">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Playlists</div>
               <div className="overflow-y-auto min-h-0">
                 {(playlists ?? []).filter((pl) => pl.kind === "manual").map((pl) => (
                   <button
@@ -790,7 +844,7 @@ export default function NowPlayingView(p: Props) {
   );
 
   return (
-    <div className="fixed inset-0 z-50 bg-zinc-950 overflow-clip">
+    <div className={`fixed inset-0 z-50 bg-zinc-950 overflow-clip ${videoPath && !chromeVisible ? "cursor-none" : ""}`}>
       {/* overflow-clip (not hidden): a hidden box is still a scroll container,
           so wheel / scrollIntoView can silently scroll the whole overlay and
           leave the view "stuck" half-rendered. Clip can never be scrolled. */}
@@ -848,25 +902,33 @@ export default function NowPlayingView(p: Props) {
       {videoPath && (
         <div className="absolute inset-0 bg-black">
           {!videoFailed ? (
-            <SubtitledVideo
-              key={videoPath}
-              path={videoPath!}
-              muted
-              controls={false}
-              videoRef={videoRef}
-              onClick={p.onTogglePlay}
-              onError={() => setVideoFailed(true)}
-              className="absolute inset-0 h-full w-full object-contain cursor-pointer"
-            />
+            <>
+              {/* the popout's live <video> is adopted into this slot */}
+              <div ref={videoSlotRef} className="absolute inset-0" />
+              {/* click surface for play/pause — sits above the video, below
+                  the bottom controls, and keeps working while the chrome is
+                  hidden */}
+              <div
+                className="absolute inset-0 z-[1] cursor-pointer"
+                onClick={p.onTogglePlay}
+                title="Play / pause (Space)"
+              />
+            </>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <div className="max-w-lg text-center text-xs text-zinc-400 border border-white/10 rounded-2xl bg-black/60 p-6">
-                This video can't play in the browser. Remux it (album page → Remux videos) or open the file externally.
+                This video can't be decoded by this browser. Install ffmpeg (Dependencies) to enable automatic
+                transcoding, remux it (album page → Remux videos), or open the file externally.
               </div>
             </div>
           )}
-          {/* bottom control overlay — same blocks as the audio layout */}
-          <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 via-black/45 to-transparent pt-24 pb-5 px-4 sm:px-8">
+          {/* bottom control overlay — same blocks as the audio layout; eases
+              away (with the cursor) while the video plays untouched */}
+          <div
+            className={`absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 via-black/45 to-transparent pt-24 pb-5 px-4 sm:px-8 transition-[opacity,transform] duration-300 ease-out ${
+              chromeVisible ? "" : "pointer-events-none opacity-0 translate-y-6"
+            }`}
+          >
             <div className="max-w-3xl mx-auto flex flex-col items-center gap-4">
               {textBlock}
               {transportRow}
@@ -877,10 +939,18 @@ export default function NowPlayingView(p: Props) {
       )}
 
       {/* pointer-events pass through to the fullscreen video; the top bar
-          opts back in so its buttons still work */}
-      <div className={`relative h-full flex flex-col ${videoPath ? "pointer-events-none" : ""}`}>
-        {/* top bar — exit button top-left, queue/options cluster top-right */}
-        <div className={`flex items-center justify-between px-5 py-3 ${videoPath ? "pointer-events-auto" : ""}`}>
+          opts back in so its buttons still work. z-[2]: the video layer's
+          click-catcher is z-[1] in the same (root) stacking context — the
+          bar must paint and hit-test above it, while the bottom controls
+          (z-10) and queue drawer (z-20) stay above the bar. */}
+      <div className={`relative z-[2] h-full flex flex-col ${videoPath ? "pointer-events-none" : ""}`}>
+        {/* top bar — exit button top-left, queue/options cluster top-right;
+            eases away with the bottom overlay while the video plays */}
+        <div
+          className={`flex items-center justify-between px-5 py-3 transition-[opacity,transform] duration-300 ease-out ${
+            videoPath ? (chromeVisible ? "pointer-events-auto" : "pointer-events-none opacity-0 -translate-y-3") : ""
+          }`}
+        >
           <button
             className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white"
             onClick={p.onClose}
@@ -940,8 +1010,8 @@ export default function NowPlayingView(p: Props) {
                       lyrics; the panel itself is opaque and layered above
                       everything so it reads cleanly over moving text */}
                   <div className="fixed inset-0 z-40" onClick={() => setOptions(false)} />
-                  <div className="absolute right-0 top-full mt-1 z-50 rounded-xl shadow-2xl p-2 w-72 max-w-[calc(100vw-1.5rem)] bg-zinc-950 border border-white/10">
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1">Lyrics</div>
+                  <div className="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-2xl p-1.5 w-72 max-w-[calc(100vw-1.5rem)] bg-zinc-950 border border-border">
+                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 pt-1 pb-1">Lyrics</div>
                 {[
                     { id: "xlit" as const, label: "Transliteration (romanized)", on: showXlit, act: () => toggleOpt("xlit") },
                     { id: "trans" as const, label: "Translation", on: showTrans, act: () => toggleOpt("trans") },
@@ -956,7 +1026,7 @@ export default function NowPlayingView(p: Props) {
                       },
                     },
                   ].map((o) => (
-                    <label key={o.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer text-xs text-zinc-300">
+                    <label key={o.id} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10 cursor-pointer text-xs text-zinc-300">
                       <input type="checkbox" className="accent-[var(--accent)]" checked={o.on} onChange={o.act} />
                       {o.label}
                     </label>
@@ -994,7 +1064,7 @@ export default function NowPlayingView(p: Props) {
                     <span className="w-9 text-right text-[10px] text-zinc-500 tabular-nums">{Math.round(lyricZoom * 100)}%</span>
                   </div>
                   <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pt-2 pb-1">Background</div>
-                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer text-xs text-zinc-300">
+                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10 cursor-pointer text-xs text-zinc-300">
                     <input
                       type="checkbox"
                       className="accent-[var(--accent)]"
@@ -1007,7 +1077,7 @@ export default function NowPlayingView(p: Props) {
                     />
                     Animated color drift
                   </label>
-                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer text-xs text-zinc-300">
+                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10 cursor-pointer text-xs text-zinc-300">
                     <input
                       type="checkbox"
                       className="accent-[var(--accent)]"
@@ -1020,7 +1090,7 @@ export default function NowPlayingView(p: Props) {
                     />
                     Background pulse
                   </label>
-                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer text-xs text-zinc-300">
+                  <label className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/10 cursor-pointer text-xs text-zinc-300">
                     <input
                       type="checkbox"
                       className="accent-[var(--accent)]"
@@ -1040,9 +1110,6 @@ export default function NowPlayingView(p: Props) {
                 </>
               )}
             </div>
-            <button className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white" onClick={p.onClose} title="Close (Esc)">
-              <ChevronDown className="h-5 w-5" />
-            </button>
           </div>
         </div>
 
@@ -1126,7 +1193,7 @@ export default function NowPlayingView(p: Props) {
       {/* up-next queue drawer — same features as the player bar's queue
           popover: CLEAR upcoming, per-track ✕, drag to reorder */}
       {queueOpen && (
-        <div className="absolute top-12 right-0 bottom-0 w-80 max-w-[85vw] z-20 glass bg-zinc-950/90 flex flex-col rounded-l-2xl">
+        <div className="absolute top-12 right-0 bottom-0 w-80 max-w-[85vw] z-20 bg-zinc-950 flex flex-col rounded-l-2xl border-l border-t border-border">
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 gap-2">
             <div className="text-[11px] uppercase tracking-widest text-zinc-400 min-w-0 truncate">
               Queue · {queue.length} track{queue.length === 1 ? "" : "s"}
@@ -1179,7 +1246,7 @@ export default function NowPlayingView(p: Props) {
                     setOverIdx(null);
                   }}
                   className={`group/qr w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-3 transition-colors border-t-2 ${
-                    isCurrent ? "bg-accent/15" : "hover:bg-white/5"
+                    isCurrent ? "bg-accent/15" : "hover:bg-white/10"
                   } ${isOver ? "border-accent" : "border-transparent"} ${isDragging ? "opacity-40" : ""}`}
                   title="Drag to reorder · click to play now"
                 >
@@ -1217,10 +1284,4 @@ export default function NowPlayingView(p: Props) {
 
     </div>
   );
-}
-
-function fmtDuration(t: number) {
-  const m = Math.floor(t / 60);
-  const s = Math.floor(t % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
 }

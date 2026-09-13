@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Save, RotateCcw, Check, Eye, EyeOff } from "lucide-react";
+import { FolderOpen, Save, RotateCcw, Settings as SettingsIcon, Check, Eye, EyeOff } from "lucide-react";
 import { api } from "../api";
 import ConfirmButton from "../components/ConfirmButton";
 import { toast } from "../store";
@@ -77,6 +77,15 @@ export default function SettingsPage() {
         { k: "flac_preserve_picture", label: "Preserve embedded picture", type: "bool" },
         { k: "flac_no_padding", label: "No padding", type: "bool" },
         { k: "force_reencode_flac", label: "Force re-encode", type: "bool" },
+      ],
+    },
+    {
+      title: "Embedded covers",
+      blurb: "Off by default: optimization removes embedded art from audio files — covers live on disk as cover.* / sidecars. When on, the album cover is embedded into every track instead.",
+      fields: [
+        { k: "embed_covers", label: "Embed covers into audio files", type: "bool" },
+        { k: "embed_cover_jpeg_quality", label: "Embedded JPEG quality (JPEG embeds only)", type: "number", min: 60, max: 100 },
+        { k: "embed_cover_resolution", label: "Embedded cover max resolution (px, 0 = original)", type: "number", min: 0, max: 4000 },
       ],
     },
     {
@@ -267,7 +276,6 @@ export default function SettingsPage() {
         { k: "ai_base_url", label: "Base URL", type: "text" },
         { k: "ai_api_key", label: "API key", type: "text" },
         { k: "ai_model", label: "Model (e.g. gemini-3.5-flash-lite)", type: "text" },
-        { k: "ai_align_model", label: "Syllable-alignment model (audio-capable; blank = Model)", type: "text" },
         {
           k: "ai_effort", label: "Reasoning effort (all AI features)", type: "select",
           options: [["high", "High — maximum thinking (default)"], ["medium", "Medium"], ["low", "Low"], ["minimal", "Minimal — fastest, no thinking"]],
@@ -446,6 +454,7 @@ export default function SettingsPage() {
     { id: "autoimport", label: "Auto-import", section: "Integrations" },
     { id: "deps", label: "Dependencies", section: "Integrations" },
     { id: "flac", label: "FLACs & lossless", section: "Scripts" },
+    { id: "embedcovers", label: "Embedded covers", section: "Scripts" },
     { id: "images", label: "Images", section: "Scripts" },
     { id: "lyrics", label: "Lyrics & CUEs", section: "Scripts" },
     { id: "dr", label: "DR / ReplayGain", section: "Scripts" },
@@ -609,7 +618,7 @@ export default function SettingsPage() {
   // Tab → group, matched by title (robust against group reordering).
   const GROUP_BY_TAB: Record<string, CfgGroup> = Object.fromEntries(
     [
-      ["flac", "FLACs"], ["images", "Images"], ["lyrics", "Lyrics & CUEs"],
+      ["flac", "FLACs"], ["embedcovers", "Embedded covers"], ["images", "Images"], ["lyrics", "Lyrics & CUEs"],
       ["dr", "DR / ReplayGain"], ["audit", "Audit"], ["autotag", "AutoTag"],
       ["accurip", "AccurateRip"], ["tagwrites", "Tag writes"],
       ["grading", "Grading"], ["cdrips", "CD Rips"], ["videos", "Videos"],
@@ -753,7 +762,9 @@ export default function SettingsPage() {
   return (
     <div className="p-6">
       <div className="flex items-end justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+          <SettingsIcon className="h-6 w-6 text-accent" /> Settings
+        </h1>
         <div className="relative w-full max-w-md">
           <input
             className="input !py-1.5 text-sm w-full"
@@ -762,7 +773,7 @@ export default function SettingsPage() {
             onChange={(e) => setQ(e.target.value)}
           />
           {searching && (
-            <div className="absolute z-30 left-0 right-0 top-full mt-1 glass rounded-lg bg-zinc-950/95 border border-border shadow-2xl max-h-80 overflow-auto p-1.5">
+            <div className="absolute z-30 left-0 right-0 top-full mt-1 rounded-lg bg-zinc-950 border border-border shadow-2xl max-h-80 overflow-auto p-1.5">
               {searchHits.length === 0 && (
                 <div className="px-2.5 py-2 text-xs text-zinc-500">No settings match “{q.trim()}”.</div>
               )}

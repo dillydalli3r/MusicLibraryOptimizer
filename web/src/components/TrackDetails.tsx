@@ -1,6 +1,8 @@
-import { X, ShieldCheck, CircleAlert, Info } from "lucide-react";
+import { X, ShieldCheck, CircleAlert, Info, ExternalLink } from "lucide-react";
+import { Link } from "react-router-dom";
 import type { Track } from "../types";
 import { isVideoTech } from "../lib/fmt";
+import { trackRef } from "../lib/refs";
 import { AuditBadge, GradeBadge } from "./Badges";
 import TrackDownloadExport from "./TrackDownloadExport";
 
@@ -136,7 +138,17 @@ export default function TrackDetails({
             )}
           </div>
 
-          <TrackDownloadExport path={track.path} title={track.tags?.TITLE ?? track.file} />
+          <div className="flex flex-wrap items-center gap-2">
+            <TrackDownloadExport path={track.path} title={track.tags?.TITLE ?? track.file} />
+            {/* jump to the track's own page for full tag editing */}
+            <Link
+              to={trackRef({ path: track.path, tags: { MUSICBRAINZ_TRACKID: track.tags?.MUSICBRAINZ_TRACKID } })}
+              className="btn-ghost !py-1.5 text-xs"
+              title="Open the track page"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Track page
+            </Link>
+          </div>
 
           {issues.length > 0 && (
             <div>

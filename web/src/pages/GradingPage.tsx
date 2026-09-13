@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { RotateCcw, Save } from "lucide-react";
+import { ClipboardCheck, RotateCcw, Save } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
 import ConfirmButton from "../components/ConfirmButton";
@@ -39,6 +39,8 @@ const GROUPS: Group[] = [
       { k: "grade_check_album_tags", label: "Album-level tags", desc: "Album-wide tags (album, album artist, catalog number, …) must be present on the tracks." },
       { k: "grade_check_encoder", label: "Encoder identity", desc: "ENCODER_PROGRAM / QUALITY / VERSION must be present." },
       { k: "grade_check_naming", label: "Naming script match", desc: "File paths must match the configured naming script (full or shortened MusicBrainz IDs both accepted)." },
+      { k: "grade_check_filename_case", label: "Path capitalization", desc: "Filenames and folder names must match the naming script's letter case exactly — TOXICITY vs Toxicity fails. Organize applies the canonical casing." },
+      { k: "grade_check_ext_case", label: "Lowercase extensions", desc: "File extensions must be lowercase (01 - Song.FLAC fails). Organize lowercases every extension it touches." },
       { k: "grade_check_key_bpm", label: "Key & BPM", desc: "INITIALKEY and BPM tags (written by script 12) are required." },
       { k: "grade_check_excess_tags", label: "Excess tags", desc: "Any tag the optimizer would strip — outside the known tag set — fails the track. Run Optimization to remove them." },
       { k: "grade_check_media", label: "Media type", desc: "The MEDIA tag must be present and consistent with the release." },
@@ -68,10 +70,10 @@ const GROUPS: Group[] = [
   {
     id: "links",
     title: "Identity links",
-    desc: "Database identity links graded per track and album.",
+    desc: "The two release-level identity links, graded per track.",
     items: [
-      { k: "grade_check_mb_links", label: "MusicBrainz links", desc: "MusicBrainz recording / release IDs must be tagged." },
-      { k: "grade_check_rym_links", label: "RateYourMusic links", desc: "RateYourMusic URLs must be tagged." },
+      { k: "grade_check_mb_links", label: "MusicBrainz release link", desc: "The MusicBrainz release (or its release group) must be tagged." },
+      { k: "grade_check_rym_links", label: "RateYourMusic release link", desc: "The RateYourMusic release page URL must be tagged." },
     ],
   },
   {
@@ -198,10 +200,12 @@ export default function GradingPage() {
   const aiReady = !!String(local?.ai_base_url ?? "").trim() && !!String(local?.ai_model ?? "").trim();
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="flex items-start justify-between gap-4 sticky top-0 z-20 bg-bg/90 backdrop-blur py-2 -mt-2">
+    <div className="p-6 space-y-5">
+      <div className="flex items-start justify-between gap-4 sticky top-0 z-20 bg-bg/95 backdrop-blur py-2 -mt-2">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Grading</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <ClipboardCheck className="h-6 w-6 text-accent" /> Grading
+          </h1>
           <p className="text-xs text-zinc-500 mt-0.5 max-w-2xl">
             Everything that can count for or against a grade, checked per track, album and file.
             Toggles take effect the next time the grader runs (any grade view or the Grade script).

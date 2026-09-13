@@ -9,7 +9,7 @@ import { EmptyState, MediaChip, AdvisoryMark, GradeBadge } from "../components/B
 import CoverImg, { TrackCover } from "../components/CoverImg";
 import CoverSearchModal from "../components/CoverSearchModal";
 import FavHeart from "../components/FavHeart";
-import { trackRef } from "../lib/refs";
+import { trackRef, entityLinkClick } from "../lib/refs";
 import { auditFails } from "../lib/status";
 import { isVideoFile } from "../lib/fmt";
 import BulkTagsDialog from "../components/BulkTagsDialog";
@@ -713,10 +713,7 @@ export default function AlbumPage() {
                         to={trackRef(tr)}
                         className="hover:text-accent-soft break-words flex-1 min-w-0"
                         title="Click to play · Ctrl-click to open track page"
-                        onClick={(e) => {
-                          if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
-                          else e.preventDefault();
-                        }}
+                        onClick={(e) => entityLinkClick(e, () => navigate(trackRef(tr)))}
                       >
                         {tr.tags.TITLE ?? tr.file}
                       </Link>

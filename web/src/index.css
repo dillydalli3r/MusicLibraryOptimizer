@@ -357,12 +357,6 @@ table td {
 }
 
 /* Frosted panel used across the redesigned surfaces */
-.glass {
-  background: rgb(255 255 255 / 0.05);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgb(255 255 255 / 0.08);
-}
 /* Scrollable-but-chromeless: wheel/touch scrolling still works, no bar. */
 .no-scrollbar {
   scrollbar-width: none;

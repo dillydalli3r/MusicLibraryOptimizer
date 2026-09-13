@@ -13,6 +13,7 @@ import ArtistPage from "./pages/ArtistPage";
 import AlbumPage from "./pages/AlbumPage";
 import TrackPage from "./pages/TrackPage";
 import PlaylistsPage from "./pages/PlaylistsPage";
+import PlaylistDetailPage from "./pages/PlaylistDetailPage";
 import FavoritesPage from "./pages/FavoritesPage";
 import SettingsPage from "./pages/SettingsPage";
 import SetupPage from "./pages/SetupPage";
@@ -60,10 +61,37 @@ export function applyAccent(name: string | null) {
   document.documentElement.style.setProperty("--accent-fg", fg);
 }
 
+/** Soulseek availability dot: green = logged into the Soulseek network,
+ * amber = slskd running but not logged in, hidden = not running. Sits on
+ * the nav icon's corner so it reads the same with the sidebar collapsed. */
+function useSlskDot() {
+  const { data: st } = useQuery({
+    queryKey: ["soulseek", "status-dot"],
+    queryFn: api.soulseekStatus,
+    refetchInterval: 20000,
+    staleTime: 15000,
+    retry: false,
+  });
+  if (st?.logged_in) return { cls: "bg-emerald-500", tip: "Soulseek — connected" };
+  if (st?.running) return { cls: "bg-amber-400", tip: "Soulseek — running, not logged in" };
+  return null;
+}
+
+function SlskIconDot({ dot }: { dot: { cls: string; tip: string } | null }) {
+  if (!dot) return null;
+  return (
+    <span
+      className={`absolute -top-1 -right-1.5 h-2 w-2 rounded-full ${dot.cls} ring-2 ring-panel`}
+      title={dot.tip}
+    />
+  );
+}
+
 export default function App() {
   const { progress, setProgress, toast: toastMsg, query, setQuery } = useStore();
   const progressClear = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
+  const slskDot = useSlskDot();
 
   // ---- navigation history (top-bar back / forward) ------------------------
   const location = useLocation();
@@ -243,7 +271,10 @@ export default function App() {
               }`
             }
           >
-            <Icon className="h-4 w-4 shrink-0" />
+            <span className="relative shrink-0 inline-flex">
+              <Icon className="h-4 w-4 shrink-0" />
+              {to === "/soulseek" && <SlskIconDot dot={slskDot} />}
+            </span>
             <span
               className={`overflow-hidden whitespace-nowrap transition-[max-width,opacity] duration-150 ${
                 collapsed ? "max-w-0 opacity-0" : "max-w-[110px] opacity-100"
@@ -293,7 +324,10 @@ export default function App() {
                   }`
                 }
               >
-                <Icon className="h-4 w-4 shrink-0" />
+                <span className="relative shrink-0 inline-flex">
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {to === "/soulseek" && <SlskIconDot dot={slskDot} />}
+                </span>
                 <span className="whitespace-nowrap">{label}</span>
               </NavLink>
             ))}
@@ -396,6 +430,7 @@ export default function App() {
             <Route path="/album/:path" element={<AlbumPage />} />
             <Route path="/track/:path" element={<TrackPage />} />
             <Route path="/playlists" element={<PlaylistsPage />} />
+            <Route path="/playlist/:id" element={<PlaylistDetailPage />} />
             <Route path="/favorites" element={<Navigate to="/favorites/tracks" replace />} />
             <Route path="/favorites/:kind" element={<FavoritesPage />} />
             <Route path="/soulseek" element={<SoulseekPage />} />

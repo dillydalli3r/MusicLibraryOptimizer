@@ -44,7 +44,7 @@ export default function AlbumCard({ al, artistName, selectable, selected, onSele
         </Link>
         {selectable && (
           <div
-            className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 rounded-md px-1 py-0.5"
+            className="absolute top-1.5 right-10 row-hover transition-opacity bg-black/60 rounded-md px-1 py-0.5"
             onClick={(e) => e.stopPropagation()}
           >
             <input type="checkbox" checked={!!selected} onChange={() => onSelect?.(al.path)} title="Select album" />

@@ -67,7 +67,7 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="la musica API", version="2.0.0", lifespan=_lifespan)
+app = FastAPI(title="la musica API", version="2.1.0", lifespan=_lifespan)
 
 # Docker/bootstrap: MLO_MUSIC_FOLDER env seeds music_folder when unset.
 _MLO_ENV_FOLDER = os.environ.get("MLO_MUSIC_FOLDER")
@@ -147,8 +147,9 @@ class PlaylistCreate(BaseModel):
     filter: Optional[dict] = None
 
 
-class PlaylistRename(BaseModel):
-    name: str
+class PlaylistUpdate(BaseModel):
+    """Partial playlist update (currently: rename)."""
+    name: str | None = None
 
 
 class PlaylistTracks(BaseModel):
@@ -206,7 +207,7 @@ def shutdown_backend():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "2.1.0"}
 
 
 @app.get("/api/config")
@@ -549,8 +550,11 @@ def videos_stream(path: str = Query(...), transcode: int = Query(0)):
     try:
         import subprocess
 
+        # CREATE_NO_WINDOW: a piped ffmpeg still allocates a console on
+        # Windows unless suppressed — one flashed open per video otherwise.
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=0x08000000 if os.name == "nt" else 0)
     except Exception as e:
         raise HTTPException(500, f"ffmpeg failed to start: {e}")
 
@@ -570,6 +574,68 @@ def videos_stream(path: str = Query(...), transcode: int = Query(0)):
             proc.stderr.close()
 
     return StreamingResponse(_gen(), media_type="video/mp4")
+
+
+# Video/audio codecs Chromium-based webviews (WebView2/Tauri, Chrome, Firefox)
+# decode natively. Deliberately conservative: AC-3/E-AC-3/DTS decode in
+# Edge/WebView2 but NOT in plain Chrome (video plays with no sound and no
+# error), so those transcode to AAC; MPEG-4 Part 2 / VC-1 / WMV fail hard.
+_NATIVE_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1", "hevc", "theora"}
+_NATIVE_AUDIO_CODECS = {"aac", "mp3", "opus", "vorbis", "flac", "alac",
+                        "pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s16be",
+                        "pcm_f32le"}
+_playback_meta_cache: dict = {}
+
+
+@app.get("/api/videos/meta")
+def videos_meta(path: str = Query(...)):
+    """Playback decision for a music video: can the browser decode the file
+    natively (container + codec probe) and how long is it (seconds).
+
+    The player uses `native` to pick the stream URL upfront instead of
+    guessing and retrying on error — this also catches the silent case
+    (decodable video, undecodable audio) that never raises an error event.
+    `duration` is ffprobe's container length, which fragmented-MP4 live
+    transcodes cannot carry (the element reports Infinity there). Cached
+    per path+mtime; probes run once per file version."""
+    from mlo.remux import _stream_info
+    from mlo.tools import detect_all_tools
+
+    p = os.path.normpath(mbresolve.resolve_track(path) or path)
+    if not os.path.isfile(p):
+        raise HTTPException(404, "file not found")
+    if not _in_music_folder(p, _music_folder()):
+        raise HTTPException(400, "file outside music folder")
+    try:
+        mtime = os.path.getmtime(p)
+    except OSError:
+        mtime = 0.0
+    hit = _playback_meta_cache.get(p)
+    if hit and hit[0] == mtime:
+        return {"path": p.replace("\\", "/"), **hit[1]}
+
+    ext = os.path.splitext(p)[1].lower()
+    ffprobe = (detect_all_tools().get("ffmpeg") or {}).get("ffprobe_exe")
+    info = _stream_info(p, ffprobe) if ffprobe else None
+    vcodec = info[0] if info else None
+    # Only the FIRST audio track matters: videos_stream maps 0:a:0, so the
+    # other tracks never reach the browser.
+    acodecs = info[1] if info else []
+    duration = info[3] if info else None
+    if info is None:
+        native, reason = False, "unreadable by ffprobe — live transcode"
+    elif ext not in _NATIVE_VIDEO_EXTS:
+        native, reason = False, f"{ext} container is always transcoded"
+    elif (vcodec or "").lower() not in _NATIVE_VIDEO_CODECS:
+        native, reason = False, f"{vcodec or 'unknown'} video codec"
+    elif acodecs and (acodecs[0] or "").lower() not in _NATIVE_AUDIO_CODECS:
+        native, reason = False, f"{acodecs[0]} audio codec"
+    else:
+        native, reason = True, None
+    meta = {"native": native, "reason": reason, "duration": duration,
+            "video_codec": vcodec, "audio_codecs": acodecs}
+    _playback_meta_cache[p] = (mtime, meta)
+    return {"path": p.replace("\\", "/"), **meta}
 
 
 @app.get("/api/tags")
@@ -1445,8 +1511,10 @@ def playlists_get(pid: int):
 
 
 @app.patch("/api/playlists/{pid}")
-def playlists_rename(pid: int, req: PlaylistRename):
-    if not pl_mod.rename_playlist(pid, req.name.strip()):
+def playlists_rename(pid: int, req: PlaylistUpdate):
+    # only the fields the client actually sent (icon: null CLEARS the icon)
+    fields = {k: getattr(req, k) for k in req.model_fields_set}
+    if not pl_mod.update_playlist(pid, fields):
         raise HTTPException(404, "playlist not found")
     return pl_mod.get_playlist(pid)
 
@@ -2324,8 +2392,10 @@ def soulseek_preview_stream(path: str = Query(...), native: int = Query(0)):
         "-f", "mp4", "pipe:1",
     ]
     try:
+        # CREATE_NO_WINDOW — same reason as videos_stream above.
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=0x08000000 if os.name == "nt" else 0)
     except Exception as e:
         raise HTTPException(500, f"ffmpeg failed to start: {e}")
 
@@ -2910,15 +2980,21 @@ def organize(req: OrganizeRequest):
             if not rel:
                 errors.append(f"{t['file']}: script evaluated to empty path")
                 continue
-            # The script defines the path without the file extension — keep
-            # the source extension (re-appending it; beets does the same).
-            rel += os.path.splitext(t["path"])[1]
+            # The script defines the path without the file extension — the
+            # source extension is re-appended LOWERCASE (beets keeps the
+            # source ext; this app additionally normalizes its case).
+            rel += os.path.splitext(t["path"])[1].lower()
             dst = os.path.normpath(os.path.join(folder, rel))
             if not _in_music_folder(dst, folder):
                 errors.append(f"{t['file']}: destination outside music folder")
                 continue
             src = os.path.normpath(t["path"])
             if os.path.normcase(src) == os.path.normcase(dst):
+                if src != dst:
+                    # case-only difference (TOXICITY.FLAC -> toxicity.flac or
+                    # wrong capitalization): still queued — os.rename handles
+                    # same-file case renames on case-insensitive filesystems.
+                    moves.append((src, dst))
                 dst_dirs.append(os.path.dirname(dst))
                 continue
             stem, ext = os.path.splitext(dst)
@@ -2958,9 +3034,9 @@ def organize(req: OrganizeRequest):
                     if fext.lower() not in (".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus", ".wav", ".aac"):
                         fstem_l = fstem.lower()
                         if fstem_l == sstem or fstem_l.startswith(sstem + "."):
-                            target = os.path.join(ddir, dstem + fext)
-                            if os.path.normcase(fpath) == os.path.normcase(target):
-                                continue  # already in place
+                            target = os.path.join(ddir, dstem + fext.lower())
+                            if fpath == target:
+                                continue  # already in place (exact)
                             sidecar_moves.append((fpath, target))
             except OSError:
                 pass
@@ -2980,7 +3056,12 @@ def organize(req: OrganizeRequest):
         for src, dst in moves + sidecar_moves:
             try:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.move(src, dst)
+                if os.path.normcase(src) == os.path.normcase(dst):
+                    # case-only rename (capitalization / extension case) —
+                    # shutil.move would refuse a "existing" destination
+                    os.rename(src, dst)
+                else:
+                    shutil.move(src, dst)
                 moved += 1
             except Exception as e:
                 errors.append(f"{os.path.basename(src)}: {e}")
@@ -2997,19 +3078,23 @@ def organize(req: OrganizeRequest):
                 fpath = os.path.join(root, f)
                 if not os.path.exists(fpath):
                     continue
-                dst = os.path.join(new_root, f)
+                # extensions are normalized to lowercase on every move
+                fbase, fext = os.path.splitext(f)
+                dst = os.path.join(new_root, fbase + fext.lower())
                 # Already sitting in the album root: moving it onto itself
                 # must be skipped, or the dedupe below renames it " (2)".
                 if os.path.normcase(os.path.abspath(fpath)) == os.path.normcase(os.path.abspath(dst)):
                     continue
                 n = 2
-                while os.path.exists(dst):
-                    base, ext = os.path.splitext(f)
-                    dst = os.path.join(new_root, f"{base} ({n}){ext}")
+                while os.path.exists(dst) and os.path.normcase(os.path.abspath(dst)) != os.path.normcase(os.path.abspath(fpath)):
+                    dst = os.path.join(new_root, f"{fbase} ({n}){fext.lower()}")
                     n += 1
                 try:
                     os.makedirs(new_root, exist_ok=True)
-                    shutil.move(fpath, dst)
+                    if os.path.normcase(fpath) == os.path.normcase(dst):
+                        os.rename(fpath, dst)
+                    else:
+                        shutil.move(fpath, dst)
                     leftovers += 1
                 except Exception as e:
                     errors.append(f"{f}: {e}")

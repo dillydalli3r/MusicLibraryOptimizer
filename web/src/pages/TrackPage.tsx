@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link } from "react-router-dom";
-import { ExternalLink, Save, Play, Disc3, ListPlus, ListStart, ListMusic, ShieldCheck, ImageUp, Clapperboard, Search, FolderOpen } from "lucide-react";
+import { Save, Play, Disc3, ListPlus, ListStart, ListMusic, ShieldCheck, ImageUp, Clapperboard, Search, FolderOpen } from "lucide-react";
 import { api } from "../api";
 import { fmtTech, isVideoFile } from "../lib/fmt";
-import { LinkChips, LinkEditorButton } from "../components/Links";
+import { uncacheTrack } from "../lib/mediaCache";
+import { LinkEditorButton, MbIcon, RymIcon } from "../components/Links";
 import { SubtitledVideo } from "../components/SubtitledVideo";
 import { useStore, toast } from "../store";
 import { AuditBadge, GradeBadge, IssueList } from "../components/Badges";
@@ -150,14 +151,14 @@ export default function TrackPage() {
     }
   };
 
-  const linkTags: Record<string, { label: string; url?: (v: string) => string }> = {
-    MUSICBRAINZ_ALBUMID: { label: "MusicBrainz Album", url: (v) => `https://musicbrainz.org/release/${v}` },
-    MUSICBRAINZ_TRACKID: { label: "MusicBrainz Track", url: (v) => `https://musicbrainz.org/recording/${v}` },
-    MUSICBRAINZ_ARTISTID: { label: "MusicBrainz Artist", url: (v) => `https://musicbrainz.org/artist/${v}` },
-    MUSICBRAINZ_RELEASEGROUPID: { label: "MusicBrainz Release Group", url: (v) => `https://musicbrainz.org/release-group/${v}` },
-    RATEYOURMUSIC_ALBUM: { label: "RateYourMusic Album" },
-    RATEYOURMUSIC_TRACK: { label: "RateYourMusic Track" },
-    RATEYOURMUSIC_ARTIST: { label: "RateYourMusic Artist" },
+  const linkTags: Record<string, { label: string; kind: "mb" | "rym"; url?: (v: string) => string }> = {
+    MUSICBRAINZ_ALBUMID: { label: "MusicBrainz Album", kind: "mb", url: (v) => `https://musicbrainz.org/release/${v}` },
+    MUSICBRAINZ_TRACKID: { label: "MusicBrainz Track", kind: "mb", url: (v) => `https://musicbrainz.org/recording/${v}` },
+    MUSICBRAINZ_ARTISTID: { label: "MusicBrainz Artist", kind: "mb", url: (v) => `https://musicbrainz.org/artist/${v}` },
+    MUSICBRAINZ_RELEASEGROUPID: { label: "MusicBrainz Release Group", kind: "mb", url: (v) => `https://musicbrainz.org/release-group/${v}` },
+    RATEYOURMUSIC_ALBUM: { label: "RateYourMusic Album", kind: "rym" },
+    RATEYOURMUSIC_TRACK: { label: "RateYourMusic Track", kind: "rym" },
+    RATEYOURMUSIC_ARTIST: { label: "RateYourMusic Artist", kind: "rym" },
   };
 
   const mainFields = ["TITLE", "ARTIST", "ALBUM", "GENRE", "DATE", "TRACKNUMBER", "DISCNUMBER",
@@ -194,7 +195,6 @@ export default function TrackPage() {
             <GradeBadge pass={!issues.length} score={issues.length ? 0 : 100} />
             <AuditBadge audit={audit} />
             <IssueList issues={issues} />
-            <LinkChips tags={tags} />
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -248,11 +248,17 @@ export default function TrackPage() {
                 <div key={k} className="flex items-center gap-2">
                   <span className="text-[10px] text-zinc-500 uppercase w-40 shrink-0">{spec.label}</span>
                   <span className="text-sm text-zinc-200 truncate flex-1" title={tags[k]}>{tags[k]}</span>
-                  {spec.url && (
-                    <a href={spec.url(tags[k])} target="_blank" rel="noreferrer" className="text-zinc-500 hover:text-accent-soft shrink-0">
-                      <ExternalLink className="h-4 w-4" />
-                    </a>
-                  )}
+                  {/* the identity-link button lives on its own metadata row:
+                      MB rows carry the MusicBrainz mark, RYM rows the RYM mark */}
+                  <a
+                    href={spec.url ? spec.url(tags[k]) : tags[k]}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Open ${spec.label}`}
+                    className="p-1.5 rounded-lg hover:bg-raise transition-transform hover:scale-110 inline-flex items-center shrink-0"
+                  >
+                    {spec.kind === "mb" ? <MbIcon className="h-4 w-4" /> : <RymIcon className="h-4 w-4" />}
+                  </a>
                 </div>
               ) : null
             )}
@@ -430,6 +436,11 @@ function VideoTagCard({
       for (const [k, v] of Object.entries(form)) if (v.trim()) clean[k] = v.trim();
       if (advisory.trim()) clean.ITUNESADVISORY = advisory.trim();
       const r = await api.videoTag(path, clean);
+      if (r.renamed) {
+        // the file moved (remux rename) — the old stream URL's offline cache
+        // entry would serve the stale file forever
+        await uncacheTrack(path);
+      }
       toast(r.renamed
         ? `Tags written — remuxed to MKV: ${String(r.path).split(/[\/]/).pop()}`
         : "Tags written");

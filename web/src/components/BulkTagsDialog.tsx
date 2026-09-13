@@ -59,7 +59,7 @@ export default function BulkTagsDialog({
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-      <div className="glass rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl bg-zinc-950/90" onClick={(e) => e.stopPropagation()}>
+      <div className="rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl bg-card border border-border" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-3 px-5 py-3.5 border-b border-white/10">
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-white">Bulk tag editor</div>

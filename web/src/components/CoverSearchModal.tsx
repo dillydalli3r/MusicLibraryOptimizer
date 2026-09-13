@@ -92,7 +92,7 @@ export default function CoverSearchModal({ albumPath, artist, album, onClose, on
       className="fixed inset-0 z-40 bg-black/70 flex items-center justify-center p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-zinc-900 border border-border rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
+      <div className="bg-card border border-border rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
         <div className="flex items-center justify-between gap-3 p-4 border-b border-border">
           <h2 className="font-semibold flex items-center gap-2">
             <Image className="h-4 w-4 text-accent" /> Find cover

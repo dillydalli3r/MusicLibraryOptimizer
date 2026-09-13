@@ -147,7 +147,7 @@ export default function LyricsManagerModal({
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6" onClick={onClose}>
       <div
-        className="glass rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl bg-zinc-950/80"
+        className="rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl bg-card border border-border"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3 p-5 pb-3">

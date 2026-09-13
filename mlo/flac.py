@@ -397,7 +397,14 @@ def _optimize_flac(args):
         # Strip unwanted metadata from the temporary output before replacing
         # the original file. This keeps failure handling safe and accurate.
         if metaflac_exe:
-            preserve_pic = bool(config.get("flac_preserve_picture", False)) if config else False
+            # Embedded art follows the embed_covers setting: by default the
+            # optimizer removes it; when embedding is on the picture stays
+            # (script 10 embeds the album cover). flac_preserve_picture is
+            # the legacy per-format override.
+            preserve_pic = (
+                bool(config.get("embed_covers", False))
+                or bool(config.get("flac_preserve_picture", False))
+            ) if config else False
             no_pad = bool(config.get("flac_no_padding", True)) if config else True
             parts = []
             if not preserve_pic:

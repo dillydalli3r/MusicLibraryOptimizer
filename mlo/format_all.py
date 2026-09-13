@@ -15,6 +15,7 @@ already in canonical form, and it never regenerates .accurip via CUETools
 """
 
 import os
+import io
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -22,10 +23,107 @@ from .accurip import _canonical_accurip_text
 from .audio import AudioFile
 from .config import should_write_audio_tag
 from .cue import canonical_cue_text
+from .deps import HAS_PIL, Image
 from .lyrics import _canonical_lyrics, format_lyrics_text
 from .paths import AUDIO_EXTS
 from .stats import _collect_targets, _walk_files, new_stats, _make_pbar, worker_count
 from .ui import print_header, log, c, Color
+
+# Canonical on-disk cover names (mirrors the grader's COVER_NAMES).
+_COVER_NAMES = {"cover.jpg", "cover.jpeg", "cover.png", "cover.jxl"}
+
+
+def _find_cover_file(album_dir):
+    try:
+        for f in os.listdir(album_dir):
+            if f.lower() in _COVER_NAMES:
+                return os.path.join(album_dir, f)
+    except OSError:
+        pass
+    return None
+
+
+def _prepare_embedded_cover(album_dir, cfg):
+    """(data, mime) of the album cover, prepared for embedding.
+
+    JPEG embeds are re-encoded at embed_cover_jpeg_quality (only JPEG
+    honors a quality setting — PNG/lossless embeds are lossless by
+    definition). When embed_cover_resolution is set, art larger than the
+    cap is downscaled, aspect ratio preserved. Returns None when the
+    album has no on-disk cover to embed.
+    """
+    cover_path = _find_cover_file(album_dir)
+    if not cover_path:
+        return None
+    try:
+        with open(cover_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+
+    ext = os.path.splitext(cover_path)[1].lower()
+    if ext == ".jxl":
+        return (data, "image/jxl")
+    mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+
+    if not HAS_PIL:
+        return (data, mime)
+    quality = int(cfg.get("embed_cover_jpeg_quality") or 90)
+    resolution = int(cfg.get("embed_cover_resolution") or 0)
+    try:
+        img = Image.open(io.BytesIO(data))
+        if resolution > 0 and max(img.size) > resolution:
+            # thumbnail() never upscales and keeps the aspect ratio
+            img = img.convert("RGB") if mime == "image/jpeg" else img
+            img.thumbnail((resolution, resolution), Image.LANCZOS)
+        if mime != "image/jpeg":
+            return (data, mime)
+        out = io.BytesIO()
+        img.convert("RGB").save(
+            out, "JPEG", quality=quality,
+            progressive=bool(cfg.get("jpeg_progressive", True)),
+        )
+        return (out.getvalue(), "image/jpeg")
+    except Exception:
+        return (data, mime)
+
+
+def _format_embedded_covers(path, cfg, cover_cache):
+    """Embedded-art pass driven by the embed_covers setting.
+
+    OFF (default): audio files carry no embedded art — any pictures are
+    removed. ON: the album's on-disk cover is embedded into every track
+    (replacing whatever art is already there). Both directions only
+    rewrite files that actually change.
+    """
+    try:
+        af = AudioFile(path)
+        if af.audio is None or af.kind in ("video", "aac"):
+            return (path, False, None)
+        pics = af.embedded_pictures()
+        if not bool(cfg.get("embed_covers", False)):
+            if not pics:
+                return (path, False, None)
+            if not af.remove_embedded_pictures():
+                return (path, False, af.error or "could not remove embedded art")
+            return (path, True, None)
+
+        album_dir = os.path.dirname(path)
+        if album_dir not in cover_cache:
+            cover_cache[album_dir] = _prepare_embedded_cover(album_dir, cfg)
+        prep = cover_cache[album_dir]
+        if not prep:
+            return (path, False, None)  # no on-disk cover — leave audio untouched
+        data, mime = prep
+        if len(pics) == 1 and pics[0][0] == mime and pics[0][1] == data:
+            return (path, False, None)  # exactly this art is already embedded
+        if pics and not af.remove_embedded_pictures():
+            return (path, False, af.error or "could not replace embedded art")
+        if not af.add_embedded_picture(data, mime):
+            return (path, False, af.error or "could not embed cover")
+        return (path, True, None)
+    except Exception as e:
+        return (path, False, str(e))
 
 
 def _format_accurip_file(path, cfg=None, force=False):
@@ -278,7 +376,7 @@ def run_format_all(config):
         lrc_files = sorted(_walk_files(folder, (".lrc",)))
         audio_to_check = sorted(_walk_files(folder, AUDIO_EXTS))
 
-    total_tasks = len(accurip_files) + len(cue_files) + len(lrc_files) + len(audio_to_check)
+    total_tasks = len(accurip_files) + len(cue_files) + len(lrc_files) + 2 * len(audio_to_check)
     if total_tasks == 0:
         log("No files found to format.")
         return stats
@@ -391,6 +489,35 @@ def run_format_all(config):
                 stats["modified_count"] += 1
                 stats["total_scanned"] += 1
                 log(f"  ✓ {os.path.relpath(fn, folder) if os.path.commonpath([folder, fn])==folder else fn} → tags trimmed")
+                counts["ok"] += 1
+            else:
+                stats["skipped_count"] += 1
+                counts["skip"] += 1
+            if pbar:
+                try: pbar.update(1)
+                except: pass
+        # embedded cover art — remove (default) or embed the album cover
+        cover_cache = {}
+        futures = {}
+        for f in audio_to_check:
+            fut = ex.submit(_format_embedded_covers, f, config, cover_cache)
+            futures[fut] = f
+        for fut in as_completed(futures):
+            fn, ok, err = fut.result()
+            if err:
+                counts["fail"] += 1
+                stats["error_count"] += 1
+                stats["errors"].append((fn, err))
+                log(c(f"  ✕ {os.path.basename(fn)}: {err}", Color.RED))
+                if pbar:
+                    try: pbar.update(1)
+                    except: pass
+                continue
+            if ok:
+                stats["modified_count"] += 1
+                stats["total_scanned"] += 1
+                action = "cover embedded" if config.get("embed_covers") else "embedded art removed"
+                log(f"  ✓ {os.path.relpath(fn, folder) if os.path.commonpath([folder, fn])==folder else fn} → {action}")
                 counts["ok"] += 1
             else:
                 stats["skipped_count"] += 1

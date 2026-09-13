@@ -1,14 +1,15 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Disc3, Heart, ListMusic, Mic2, Play } from "lucide-react";import { api } from "../api";
+import { Disc3, FileVideo, Heart, ListMusic, Mic2, Play } from "lucide-react";import { api } from "../api";
 import { useStore } from "../store";
 import { useFavorites, useTrackLikes } from "../lib/favs";
-import { EmptyState } from "../components/Badges";
+import { AdvisoryMark, EmptyState } from "../components/Badges";
 import { TrackCover } from "../components/CoverImg";
 import AlbumCard from "../components/AlbumCard";
 import FavHeart from "../components/FavHeart";
-import { fmtDuration } from "./LibraryPage";
+import { fmtDuration, GRID_SIZE_MIN } from "./LibraryPage";
+import Segmented from "../components/Segmented";
 import { artistRef, artistMbid } from "../lib/refs";
 import type { Album, Artist, Playlist, Track } from "../types";
 
@@ -23,6 +24,7 @@ type Kind = (typeof TABS)[number]["id"];
 
 export default function FavoritesPage() {
   const { kind: raw } = useParams();
+  const navigate = useNavigate();
   const kind: Kind = (TABS.some((t) => t.id === raw) ? raw : "tracks") as Kind;
 
   return (
@@ -31,19 +33,12 @@ export default function FavoritesPage() {
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <Heart className="h-6 w-6 text-accent fill-current" /> Favorites
         </h1>
-        <div className="flex rounded-md border border-border overflow-hidden ml-2">
-          {TABS.map((t) => (
-            <Link
-              key={t.id}
-              to={`/favorites/${t.id}`}
-              className={`px-3 py-1.5 text-xs font-medium inline-flex items-center gap-1.5 transition-colors ${
-                kind === t.id ? "bg-accent on-accent" : "bg-panel text-zinc-400 hover:text-white"
-              }`}
-            >
-              <t.icon className="h-3.5 w-3.5" /> {t.label}
-            </Link>
-          ))}
-        </div>
+        <Segmented
+          className="ml-2"
+          value={kind}
+          onChange={(k) => navigate(`/favorites/${k}`)}
+          options={TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))}
+        />
       </div>
       {kind === "tracks" && <LikedTracks />}
       {kind === "albums" && <FavAlbums />}
@@ -95,7 +90,10 @@ function LikedTracks() {
           missing: false,
           mbid: track.tags.MUSICBRAINZ_TRACKID ?? undefined,
           title: track.tags.TITLE ?? track.file,
-          sub: `${displayArtist(album, artist)} · ${album.meta?.ALBUM ?? album.path.split("/").pop()}`,
+          artistName: displayArtist(album, artist),
+          albumName: album.meta?.ALBUM ?? album.path.split("/").pop() ?? "",
+          advisory: (track.tags.ITUNESADVISORY as string | undefined) ?? null,
+          isVideo: !!track.is_video,
           albumPath: album.path,
           trackPath: track.path,
           dur: track.tech?.length,
@@ -118,7 +116,10 @@ function LikedTracks() {
         missing: true,
         mbid: undefined,
         title: p.split("/").pop() ?? p,
-        sub: "not in library",
+        artistName: "",
+        albumName: "",
+        advisory: null,
+        isVideo: false,
         albumPath: p.split("/").slice(0, -1).join("/"),
         trackPath: p,
         dur: undefined,
@@ -142,8 +143,8 @@ function LikedTracks() {
     );
 
   return (
-    <div className="bg-card rounded-lg border border-border overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-border">
+    <div>
+      <div className="flex items-center gap-2 pb-2">
         <span className="text-xs text-zinc-500">
           {rows.length} liked track{rows.length === 1 ? "" : "s"}
         </span>
@@ -151,47 +152,68 @@ function LikedTracks() {
           <Play className="h-3.5 w-3.5" /> Play all
         </button>
       </div>
-      {/* Same row language as the library tables: click plays, ctrl/shift-click opens */}
-      <table className="w-full text-sm">
-        <tbody>
-          {rows.map((r, i) => (
-            <tr
-              key={r.path}
-              className="table-row group cursor-pointer"
-              title="Click to play · Ctrl-click to open track page"
-              onClick={(e) => {
-                if (!r.missing && (e.ctrlKey || e.metaKey || e.shiftKey)) {
-                  navigate(`/track/${encodeURIComponent(r.trackPath)}`);
-                } else if (!r.missing) {
-                  play(i);
-                }
-              }}
-            >
-              <td className="td text-zinc-600 w-12 tabular-nums cell-nowrap">{i + 1}</td>
-              <td className="td cell-cover pr-0">
-                {"coverFile" in r && !r.missing ? (
-                  <TrackCover
-                    albumPath={r.albumPath}
-                    trackCover={(r as { coverFile?: string | null }).coverFile}
-                    albumCover={(r as { albumCover?: string | null }).albumCover}
-                    wrapperClass="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0"
-                  />
-                ) : null}
-              </td>
-              <td className="td">
-                <span className={`block break-words ${r.missing ? "text-zinc-500" : ""}`} title={r.missing ? r.path : r.title}>
-                  {r.title}
-                </span>
-              </td>
-              <td className="td text-xs text-zinc-500 break-words">{r.sub}</td>
-              <td className="td text-xs text-zinc-600 font-mono w-16 pr-3 text-right">{fmtDuration(r.dur)}</td>
-              <td className="td w-10 pr-0" onClick={(e) => e.stopPropagation()}>
-                <FavHeart kind="track" id={r.path} mbid={r.mbid} iconClass="h-3.5 w-3.5" title="Unlike" />
-              </td>
+      {/* Same table language as the library's track view: identical columns,
+          cell classes, cover chips and hover-revealed hearts. Click plays,
+          ctrl/shift-click opens the track page. */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="border-b border-border">
+            <tr>
+              <th className="th w-12">#</th>
+              <th className="th w-12" title="Cover art"><span className="sr-only">Cover</span></th>
+              <th className="th">Title</th>
+              <th className="th w-[16%]">Artist</th>
+              <th className="th w-[16%]">Album</th>
+              <th className="th w-[7%]">Duration</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr
+                key={r.path}
+                className="table-row group cursor-pointer"
+                title="Click to play · Ctrl-click to open track page"
+                onClick={(e) => {
+                  if (!r.missing && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+                    navigate(`/track/${encodeURIComponent(r.trackPath)}`);
+                  } else if (!r.missing) {
+                    play(i);
+                  }
+                }}
+              >
+                <td className="td cell-nowrap text-zinc-600 tabular-nums">{i + 1}</td>
+                <td className="td cell-cover pr-0">
+                  {"coverFile" in r && !r.missing ? (
+                    <TrackCover
+                      albumPath={r.albumPath}
+                      trackCover={(r as { coverFile?: string | null }).coverFile}
+                      albumCover={(r as { albumCover?: string | null }).albumCover}
+                      wrapperClass="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0"
+                    />
+                  ) : null}
+                </td>
+                <td className="td">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className={`break-words flex-1 min-w-0 ${r.missing ? "text-zinc-500" : "hover:text-accent-soft"}`} title={r.missing ? r.path : r.title}>
+                      {r.title}
+                    </span>
+                    {!r.missing && <AdvisoryMark value={(r as { advisory?: string | null }).advisory} />}
+                    {!r.missing && (r as { isVideo?: boolean }).isVideo && (
+                      <span title="Music video" className="shrink-0 inline-flex"><FileVideo className="h-3.5 w-3.5 text-zinc-500" /></span>
+                    )}
+                    <span className="row-hover shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <FavHeart kind="track" id={r.path} mbid={r.mbid} iconClass="h-3.5 w-3.5" title="Unlike" />
+                    </span>
+                  </div>
+                </td>
+                <td className="td text-zinc-400 break-words">{!r.missing ? (r as { artistName: string }).artistName : "—"}</td>
+                <td className="td text-zinc-500 break-words">{!r.missing ? (r as { albumName: string }).albumName : "—"}</td>
+                <td className="td text-zinc-500">{fmtDuration(r.dur)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -215,11 +237,13 @@ function FavAlbums() {
   if (!rows.length)
     return <EmptyState title="No favorite albums yet" hint="Heart an album on its page or in the library grid." />;
 
-  // Same card layout as the library grid (shared AlbumCard).
+  // Same card layout AND same cover-size preference as the library grid
+  // (shared AlbumCard, shared mlo.gridSize setting).
+  const gridSize = (localStorage.getItem("mlo.gridSize") as "s" | "m" | "l" | null) ?? "m";
   return (
     <div
       className="grid gap-x-4 gap-y-5"
-      style={{ gridTemplateColumns: "repeat(auto-fill, minmax(164px, 1fr))" }}
+      style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_SIZE_MIN[gridSize] ?? 164}px, 1fr))` }}
     >
       {rows.map(({ album: al, artist: a }) => (
         <AlbumCard key={al.path} al={al} artistName={displayArtist(al, a)} />
@@ -247,40 +271,58 @@ function FavArtists() {
   if (isLoading) return <div className="text-sm text-zinc-500">Loading…</div>;
   if (!rows.length) return <EmptyState title="No favorite artists yet" hint="Heart an artist on their page." />;
 
+  // Same table language as the library's artist view (Artist / Albums /
+  // Tracks columns, same cell classes); play + heart ride in the Artist
+  // cell as hover affordances, exactly like hearts in the track table.
   return (
-    <div className="bg-card rounded-lg border border-border p-2">
-      <div className="space-y-1">
-      {rows.map((a) => {
-        const displayName =
-          a.display_name ||
-          a.albums.find((al) => al.album_artist)?.album_artist ||
-          a.name.replace(/\s*\[[0-9a-f-]{8,}\]\s*$/, "");
-        const q = a.albums.flatMap((al) =>
-          al.tracks.map((t) => ({
-            path: t.path, file: t.file, albumPath: al.path,
-            artist: displayArtist(al, a), album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
-            coverFile: t.cover_file ?? null, albumCover: al.cover_file ?? null,
-          }))
-        );
-        return (
-          <div key={a.path} className="group flex items-center gap-3 rounded-lg border border-transparent hover:border-border hover:bg-white/[0.04] px-3 py-1.5 transition-colors">
-            <button className="btn-ghost !px-1.5 !py-1 shrink-0 opacity-0 group-hover:opacity-100 transition-colors" title="Play all" onClick={() => q.length && playNow(q)}>
-              <Play className="h-3.5 w-3.5" />
-            </button>
-            <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-accent/40 to-indigo-700/40 border border-border flex items-center justify-center shrink-0">
-              <Mic2 className="h-5 w-5 text-zinc-300" />
-            </div>
-            <Link to={artistRef(a)} className="text-sm font-medium truncate hover:text-accent-soft min-w-0">
-              {displayName}
-            </Link>
-            <span className="text-xs text-zinc-500 ml-auto shrink-0">
-              {a.aggregate.album_count} albums · {a.aggregate.track_count} tracks
-            </span>
-            <FavHeart kind="artist" id={a.path} mbid={artistMbid(a)} iconClass="h-3.5 w-3.5" />
-          </div>
-        );
-      })}
-      </div>
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="border-b border-border">
+          <tr>
+            <th className="th">Artist</th>
+            <th className="th w-[12%]">Albums</th>
+            <th className="th w-[12%]">Tracks</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((a) => {
+            const displayName =
+              a.display_name ||
+              a.albums.find((al) => al.album_artist)?.album_artist ||
+              a.name.replace(/\s*\[[0-9a-f-]{8,}\]\s*$/, "");
+            const q = a.albums.flatMap((al) =>
+              al.tracks.map((t) => ({
+                path: t.path, file: t.file, albumPath: al.path,
+                artist: displayArtist(al, a), album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined,
+                coverFile: t.cover_file ?? null, albumCover: al.cover_file ?? null,
+              }))
+            );
+            return (
+              <tr key={a.path} className="table-row group">
+                <td className="td">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <button
+                      className="btn-ghost !px-1.5 !py-1 shrink-0 row-hover"
+                      title="Play all"
+                      onClick={() => q.length && playNow(q)}
+                    >
+                      <Play className="h-3.5 w-3.5" />
+                    </button>
+                    <Link to={artistRef(a)} className="font-medium hover:text-accent-soft break-words flex-1 min-w-0">
+                      {displayName}
+                    </Link>
+                    <span className="row-hover shrink-0">
+                      <FavHeart kind="artist" id={a.path} mbid={artistMbid(a)} iconClass="h-3.5 w-3.5" />
+                    </span>
+                  </div>
+                </td>
+                <td className="td text-zinc-500">{a.aggregate.album_count}</td>
+                <td className="td text-zinc-500">{a.aggregate.track_count}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -329,26 +371,48 @@ function FavPlaylists() {
   if (isLoading) return <div className="text-sm text-zinc-500">Loading…</div>;
   if (!rows.length) return <EmptyState title="No favorite playlists yet" hint="Heart a playlist on the Playlists page." />;
 
+  // Same table language as the other favorites tabs / the library tables.
   return (
-    <div className="bg-card rounded-lg border border-border p-2">
-      <div className="space-y-1">
-      {rows.map((p) => (
-        <div key={p.id} className="group flex items-center gap-3 rounded-lg border border-transparent hover:border-border hover:bg-white/[0.04] px-3 py-1.5 transition-colors">
-          <button className="btn-ghost !px-1.5 !py-1 shrink-0 opacity-0 group-hover:opacity-100 transition-colors" title="Play playlist" onClick={() => play(p)}>
-            <Play className="h-3.5 w-3.5" />
-          </button>
-          <ListMusic className="h-4 w-4 text-accent shrink-0" />
-          <button className="text-sm font-medium truncate hover:text-accent-soft min-w-0" onClick={() => navigate("/playlists")} title="Open the Playlists page">
-            {p.name}
-          </button>
-          {p.kind === "smart" && <span className="chip bg-accent/10 text-accent-soft border border-accent/25 text-[10px]">SMART</span>}
-          <span className="text-xs text-zinc-500 ml-auto shrink-0">{p.track_count} tracks</span>
-          <FavHeart kind="playlist" id={String(p.id)} iconClass="h-3.5 w-3.5" />
-        </div>
-      ))}
-      <div className="text-[11px] text-zinc-600 px-1 pt-1">
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="border-b border-border">
+          <tr>
+            <th className="th">Playlist</th>
+            <th className="th w-[12%]">Tracks</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((p) => (
+            <tr key={p.id} className="table-row group">
+              <td className="td">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <button
+                    className="btn-ghost !px-1.5 !py-1 shrink-0 row-hover"
+                    title="Play playlist"
+                    onClick={() => play(p)}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    className="font-medium hover:text-accent-soft break-words flex-1 min-w-0 text-left"
+                    onClick={() => navigate("/playlists")}
+                    title="Open the Playlists page"
+                  >
+                    {p.name}
+                  </button>
+                  {p.kind === "smart" && <span className="chip bg-accent/10 text-accent-soft border border-accent/25 text-[10px] shrink-0">SMART</span>}
+                  <span className="row-hover shrink-0">
+                    <FavHeart kind="playlist" id={String(p.id)} iconClass="h-3.5 w-3.5" />
+                  </span>
+                </div>
+              </td>
+              <td className="td text-zinc-500">{p.track_count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="text-[11px] text-zinc-600 px-3 pt-2">
         Playlists are managed on the <Link to="/playlists" className="text-accent-soft hover:underline">Playlists page</Link>.
-      </div>
       </div>
     </div>
   );

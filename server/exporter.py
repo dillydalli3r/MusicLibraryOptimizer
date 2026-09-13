@@ -31,6 +31,8 @@ from mlo.tools import detect_all_tools
 
 # Codec table: ffmpeg audio arguments and the container extension each
 # codec produces. "copy" keeps the source container (and its bytes).
+# Bitrate entries accept the preset keys below OR any plain number of
+# kbps ("213" -> -b:a 213k), so the UI can offer fully custom rates.
 CODECS = {
     "copy": {"label": "Copy (original codec)"},
     "flac": {
@@ -40,7 +42,7 @@ CODECS = {
     "mp3": {
         "label": "MP3", "ext": ".mp3",
         # Quality selects the -q:a VBR mode or an exact bitrate below.
-        "vbr": {"V0": "0", "V2": "2", "V4": "4"},
+        "vbr": {"V0": "0", "V1": "1", "V2": "2", "V3": "3", "V4": "4", "V5": "5"},
         "cbr": {"320": "320k", "256": "256k", "192": "192k", "128": "128k"},
     },
     "aac": {
@@ -49,11 +51,18 @@ CODECS = {
     },
     "opus": {
         "label": "Opus", "ext": ".opus",
-        "bitrates": {"256": "256k", "192": "192k", "160": "160k", "128": "128k", "96": "96k"},
+        "bitrates": {"320": "320k", "256": "256k", "224": "224k", "192": "192k",
+                     "160": "160k", "128": "128k", "112": "112k", "96": "96k",
+                     "80": "80k", "64": "64k"},
     },
     "vorbis": {
         "label": "Ogg Vorbis", "ext": ".ogg",
-        "q": {"q10": "10", "q8": "8", "q6": "6", "q4": "4"},
+        "q": {"q10": "10", "q9": "9", "q8": "8", "q7": "7", "q6": "6", "q5": "5",
+              "q4": "4", "q3": "3", "q2": "2", "q1": "1", "q0": "0"},
+    },
+    "wav": {
+        "label": "WAV (PCM, uncompressed)", "ext": ".wav",
+        "bits": {"24": "pcm_s24le", "16": "pcm_s16le"},
     },
 }
 
@@ -104,7 +113,11 @@ def _ffmpeg_for_codec(codec):
 
 
 def _codec_args(codec, quality):
-    """ffmpeg output arguments for the requested codec/quality pair."""
+    """ffmpeg output arguments for the requested codec/quality pair.
+
+    Quality presets come from the tables above; a plain number of kbps
+    ("213") is accepted as a custom bitrate for the CBR codecs, and a
+    plain 0-10 for Vorbis quality — the UI's custom fields rely on it."""
     spec = CODECS[codec]
     if codec == "flac":
         try:
@@ -113,16 +126,46 @@ def _codec_args(codec, quality):
             level = 8
         return ["-c:a", "flac", "-compression_level", str(level)]
     if codec == "mp3":
+        if quality in spec["vbr"]:
+            return ["-c:a", "libmp3lame", "-q:a", spec["vbr"][quality]]
         if quality in spec["cbr"]:
             return ["-c:a", "libmp3lame", "-b:a", spec["cbr"][quality]]
-        return ["-c:a", "libmp3lame", "-q:a", spec["vbr"].get(quality, "2")]
-    if codec == "aac":
-        return ["-c:a", "aac", "-b:a", spec["bitrates"].get(quality, "256k")]
-    if codec == "opus":
-        return ["-c:a", "libopus", "-b:a", spec["bitrates"].get(quality, "160k")]
-    if codec == "vorbis":
-        return ["-c:a", "libvorbis", "-q:a", spec["q"].get(quality, "6")]
-    return []
+    elif codec == "aac":
+        if quality in spec["bitrates"]:
+            return ["-c:a", "aac", "-b:a", spec["bitrates"][quality]]
+    elif codec == "opus":
+        if quality in spec["bitrates"]:
+            return ["-c:a", "libopus", "-b:a", spec["bitrates"][quality]]
+    elif codec == "vorbis":
+        if quality in spec["q"]:
+            return ["-c:a", "libvorbis", "-q:a", spec["q"][quality]]
+    elif codec == "wav":
+        return ["-c:a", spec["bits"].get(quality, "pcm_s16le")]
+    # Custom numeric quality: "<n>" kbps for the CBR codecs, plain n for
+    # Vorbis q — clamped to a sane range so typos can't produce garbage.
+    try:
+        n = int(str(quality).strip().rstrip("k").lstrip("q"))
+    except (TypeError, ValueError):
+        n = None
+    if n is not None:
+        if codec == "mp3":
+            return ["-c:a", "libmp3lame", "-b:a", f"{max(32, min(320, n))}k"]
+        if codec == "aac":
+            return ["-c:a", "aac", "-b:a", f"{max(32, min(512, n))}k"]
+        if codec == "opus":
+            return ["-c:a", "libopus", "-b:a", f"{max(16, min(510, n))}k"]
+        if codec == "vorbis":
+            return ["-c:a", "libvorbis", "-q:a", str(max(0, min(10, n)))]
+    # Per-codec defaults when the quality is unusable.
+    return {
+        "mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
+        "aac": ["-c:a", "aac", "-b:a", "256k"],
+        "opus": ["-c:a", "libopus", "-b:a", "160k"],
+        "vorbis": ["-c:a", "libvorbis", "-q:a", "6"],
+        "wav": ["-c:a", "pcm_s16le"],
+        "flac": ["-c:a", "flac", "-compression_level", "8"],
+        "copy": [],
+    }.get(codec, [])
 
 
 def _tracknum(af):

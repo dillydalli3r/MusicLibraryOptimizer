@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { Download, FileOutput } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CheckCircle2, Download, FileOutput } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
+import { cacheTrack, isTrackCached, uncacheTrack } from "../lib/mediaCache";
 
 /** Codec choices for per-track exports; lossy codecs expose a bitrate. */
 const CODECS = [
@@ -15,9 +16,13 @@ const CODECS = [
 
 const BITRATES = [96, 128, 160, 192, 256, 320, 448, 500];
 
-/** "Download" keeps the original file as a browser download; "Export"
- * transcodes to the chosen codec/bitrate server-side and saves that. */
-export default function TrackDownloadExport({ path, title, compact, iconOnly, disabled }: {
+/** "Download" caches the track inside the player (offline playback — no
+ * file lands in the Downloads folder); "Export" is the real file-saving
+ * action: transcode to the chosen codec/bitrate and save.
+ *
+ * `up` opens the popover above the button — required on the bottom-anchored
+ * player bar, where a downward menu is off-screen. */
+export default function TrackDownloadExport({ path, title, compact, iconOnly, disabled, up = false }: {
   path: string;
   title?: string;
   compact?: boolean;
@@ -25,23 +30,46 @@ export default function TrackDownloadExport({ path, title, compact, iconOnly, di
   iconOnly?: boolean;
   /** Nothing loaded — the buttons stay on the bar but inert. */
   disabled?: boolean;
+  /** Popover opens upward (player bar) instead of downward. */
+  up?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [codec, setCodec] = useState("flac");
   const [bitrate, setBitrate] = useState(320);
   const [busy, setBusy] = useState(false);
+  // cache state for the current track
+  const [cached, setCached] = useState(false);
+  const [cacheBusy, setCacheBusy] = useState(false);
   const chosen = CODECS.find((c) => c.id === codec) ?? CODECS[0];
 
-  const downloadOriginal = () => {
-    // a real navigation (not fetch) keeps the file in the browser's
-    // downloads like any other link
-    const a = document.createElement("a");
-    a.href = api.trackDownloadUrl(path);
-    a.download = "";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    toast("Download started");
+  useEffect(() => {
+    let dead = false;
+    setCached(false);
+    if (path) isTrackCached(path).then((v) => !dead && setCached(v));
+    return () => {
+      dead = true;
+    };
+  }, [path]);
+
+  const toggleCache = async () => {
+    if (!path) return;
+    setCacheBusy(true);
+    try {
+      if (cached) {
+        await uncacheTrack(path);
+        setCached(false);
+        toast("Removed from the offline cache");
+      } else {
+        toast("Caching for offline playback…");
+        await cacheTrack(path);
+        setCached(true);
+        toast("Cached — plays without the server");
+      }
+    } catch (e) {
+      toast(`Cache failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setCacheBusy(false);
+    }
   };
 
   const exportTrack = async () => {
@@ -63,32 +91,35 @@ export default function TrackDownloadExport({ path, title, compact, iconOnly, di
   const btnCls = iconOnly
     ? `p-2 rounded-lg text-zinc-400 ${disabled ? "opacity-40" : "hover:bg-raise hover:text-white"}`
     : "btn-ghost !py-1 text-xs";
+  const posCls = up ? "bottom-full mb-2" : "top-full mt-1";
 
   return (
     <div className={compact || iconOnly ? "inline-flex items-center gap-1" : "flex items-center gap-1.5 flex-wrap"}>
       <button
         className={btnCls}
-        onClick={downloadOriginal}
-        disabled={disabled}
-        title="Download — save the original, untouched file"
+        onClick={toggleCache}
+        disabled={disabled || cacheBusy}
+        title={cached ? "Downloaded — cached in the player · click to remove" : "Download — cache in the player for offline playback"}
         aria-label="Download"
       >
-        <Download className="h-4 w-4" />
-        {!iconOnly && " Download"}
+        {cached ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <Download className="h-4 w-4" />}
+        {!iconOnly && (cached ? " Downloaded" : " Download")}
       </button>
       <div className="relative">
         <button
           className={btnCls}
           onClick={() => setOpen(!open)}
           disabled={disabled}
-          title="Export — transcode to FLAC / MP3 / … with a chosen bitrate"
+          title="Export — transcode to FLAC / MP3 / … and save the file"
           aria-label="Export"
         >
           <FileOutput className="h-4 w-4" />
           {!iconOnly && " Export"}
         </button>
         {open && (
-          <div className="absolute z-50 right-0 mt-1 w-60 glass rounded-lg bg-zinc-950/95 border border-border shadow-2xl p-2.5 space-y-2">
+          <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className={`absolute z-50 right-0 ${posCls} w-60 rounded-lg bg-zinc-950 border border-border shadow-2xl p-3 space-y-2.5`}>
             {title && <div className="text-[11px] text-zinc-400 truncate">{title}</div>}
             <label className="block text-[10px] uppercase tracking-wider text-zinc-500">Codec</label>
             <select className="input !py-1 text-xs" value={codec} onChange={(e) => {
@@ -114,6 +145,7 @@ export default function TrackDownloadExport({ path, title, compact, iconOnly, di
               {busy ? "Preparing…" : `Export ${chosen.label}${chosen.lossy ? ` · ${bitrate}k` : ""}`}
             </button>
           </div>
+          </>
         )}
       </div>
     </div>

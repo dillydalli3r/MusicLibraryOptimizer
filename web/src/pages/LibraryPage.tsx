@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowDownUp, BarChart3, ChevronDown, ChevronRight, CloudDownload,
   FileVideo, FolderOpen, FolderSync, Info as InfoIcon, Layers, ListChecks,
@@ -17,10 +17,11 @@ import {
   ALBUM_TRACK_COLS, ALBUM_TRACK_COL_W, type Col,
 } from "../lib/columns";
 import { gradeSliver, statusFor, auditFails } from "../lib/status";
-import { albumRef, trackRef, artistRef } from "../lib/refs";
+import { albumRef, trackRef, artistRef, entityLinkClick } from "../lib/refs";
 import { fmtTech } from "../lib/fmt";
 import { EmptyState, GradeBadge, MediaChip, AdvisoryMark } from "../components/Badges";
 import { forceDict, loadForceSel } from "../lib/force";
+import Segmented from "../components/Segmented";
 import CoverImg, { TrackCover } from "../components/CoverImg";
 import FavHeart from "../components/FavHeart";
 import AlbumCard from "../components/AlbumCard";
@@ -57,8 +58,9 @@ const VIEW_TABS: { id: View; label: string }[] = [
   { id: "tracks", label: "Tracks" },
 ];
 
-/** Grid cover sizes (small / medium / large) → grid-template min column. */
-const GRID_SIZE_MIN: Record<"s" | "m" | "l", number> = { s: 126, m: 164, l: 214 };
+/** Grid cover sizes (small / medium / large) → grid-template min column.
+ * Exported so the Favorites album grid renders with the exact same sizing. */
+export const GRID_SIZE_MIN: Record<"s" | "m" | "l", number> = { s: 126, m: 164, l: 214 };
 
 const ALBUM_SORTS = [
   { key: "meta.ALBUM", label: "Album name" },
@@ -166,6 +168,7 @@ export default function LibraryPage() {
     ? config.run_all_order.filter((n: number) => n >= 1 && n <= 15)
     : DEFAULT_RUN_ALL;
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { query, setToast, folder } = useStore();
   const {
     selection, setSelection, toggleTrack, toggleAlbum, toggleArtist, clearSelection, playNow,
@@ -529,19 +532,7 @@ export default function LibraryPage() {
           window is narrow): view tabs, sort, grid size, group-by, columns,
           quick filter — then stats/select and the counts on the right. */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="flex rounded-md border border-border overflow-hidden">
-          {VIEW_TABS.map((v) => (
-            <button
-              key={v.id}
-              onClick={() => setView(v.id)}
-              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                view === v.id ? "bg-accent on-accent" : "bg-panel text-zinc-400 hover:text-white"
-              }`}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
+        <Segmented value={view} onChange={setView} options={VIEW_TABS} />
 
         {(view === "albums" || view === "compact" || view === "grid") && (
           <div className="relative">
@@ -556,7 +547,7 @@ export default function LibraryPage() {
             {sortOpen && (
               <>
                 <div className="fixed inset-0 z-30" onClick={() => setSortOpen(false)} />
-                <div className="absolute left-0 top-full mt-1 z-40 w-44 rounded-lg border border-border bg-zinc-950 shadow-xl p-1">
+                <div className="absolute left-0 top-full mt-1 z-40 w-44 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5">
                   {ALBUM_SORTS.map((s) => (
                     <button
                       key={s.key}
@@ -636,7 +627,7 @@ export default function LibraryPage() {
           {filterOpen && (
             <>
               <div className="fixed inset-0 z-30" onClick={() => setFilterOpen(false)} />
-              <div className="absolute left-0 top-full mt-1 z-40 w-52 rounded-lg border border-border bg-zinc-950 shadow-xl p-1">
+              <div className="absolute left-0 top-full mt-1 z-40 w-52 rounded-lg border border-border bg-zinc-950 shadow-2xl p-1.5">
                 {PRESETS.map((p) => (
                   <button
                     key={p.id}
@@ -885,11 +876,8 @@ export default function LibraryPage() {
                             wrapperClass="h-8 w-8 rounded bg-raise border border-border overflow-hidden shrink-0"
                           />
                           <Link to={trackRef(t)} className="break-words hover:text-accent-soft flex-1 min-w-0"
-                            onClick={(e) => {
-                              // plain click plays (row handler); Ctrl/Shift/middle opens the page
-                              if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
-                              else e.preventDefault();
-                            }}
+                            title="Click to play · Ctrl-click to open track page"
+                            onClick={(e) => entityLinkClick(e, () => navigate(trackRef(t)))}
                           >
                             {t.tags.TITLE ?? t.file}
                           </Link>
@@ -1108,11 +1096,7 @@ export default function LibraryPage() {
                               to={trackRef(tr)}
                               className="hover:text-accent-soft break-words flex-1 min-w-0"
                               title="Click to play · Ctrl-click to open track page"
-                              onClick={(e) => {
-                                // plain click plays (row handler); Ctrl/Shift/middle opens the page
-                                if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
-                                else e.preventDefault();
-                              }}
+                              onClick={(e) => entityLinkClick(e, () => navigate(trackRef(tr)))}
                             >
                               {tr.tags.TITLE ?? tr.file}
                             </Link>
@@ -1216,6 +1200,7 @@ function AlbumRowGroup({
   onTrackWidth: (id: string, px: number) => void;
   onResetTrackWidths: () => void;
 }) {
+  const navigate = useNavigate();
   const tracks = [...(album.tracks ?? [])].sort((a, b) =>
     (a.discnumber ?? 99) - (b.discnumber ?? 99) ||
     (a.tracknumber ?? 999) - (b.tracknumber ?? 999) ||
@@ -1368,10 +1353,7 @@ function AlbumRowGroup({
                                   to={trackRef(t)}
                                   className="hover:text-accent-soft break-words flex-1 min-w-0"
                                   title="Click to play · Ctrl-click to open track page"
-                                  onClick={(e) => {
-                                    if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
-                                    else e.preventDefault();
-                                  }}
+                                  onClick={(e) => entityLinkClick(e, () => navigate(trackRef(t)))}
                                 >
                                   {t.tags.TITLE ?? t.file}
                                 </Link>
@@ -1448,7 +1430,7 @@ function ScriptsDropdown({ onRun, runAllIds }: { onRun: (ids: number[], force?: 
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg p-1.5 w-44 shadow-2xl">
+          <div className="absolute right-0 top-full mt-1 z-50 bg-zinc-950 border border-border rounded-lg p-1.5 w-44 shadow-2xl">
             {items.map((s) => (
               <button
                 key={s.label}
@@ -1498,10 +1480,17 @@ function useLocalPref(key: string, initial: boolean): [boolean, (v: boolean) => 
 }
 
 export function fmtDuration(sec: number | undefined): string {
-  if (sec === undefined || Number.isNaN(sec)) return "—";
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
+  // Non-finite (Infinity / NaN) comes from live-transcoded video streams —
+  // callers fall back to the probed duration, and this keeps "—" on screen
+  // in the meantime instead of "Infinity:NaN".
+  if (sec === undefined || !Number.isFinite(sec) || sec < 0) return "—";
+  const s = Math.floor(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  return h
+    ? `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+    : `${m}:${String(ss).padStart(2, "0")}`;
 }
 
 function useLocalSort(key: string): [SortState | null, (key: string) => void] {

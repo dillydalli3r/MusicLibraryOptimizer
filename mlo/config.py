@@ -176,6 +176,18 @@ DEFAULT_CONFIG = {
     # Album covers re-encode to 90% quality; other images keep max quality.
     "cover_jpeg_quality": 90,
 
+    # Embedded cover art in audio files (applied by script 10 and the FLAC
+    # optimizer). Default OFF: optimization REMOVES embedded art — covers
+    # live on disk as cover.* / per-track sidecars, and every player reads
+    # those. When ON, the album cover is embedded into every track instead.
+    "embed_covers": False,
+    # JPEG quality of the embedded art — only applies when the embedded
+    # image is a JPEG; PNG/lossless embeds ignore it.
+    "embed_cover_jpeg_quality": 90,
+    # Max resolution (longest side, px) of the embedded art. 0 keeps the
+    # cover file's own size. The aspect ratio is always preserved.
+    "embed_cover_resolution": 1200,
+
     # Lyrics / CUE — including Enhanced/Extended LRC (new in v1.2.0)
     "optimize_lrc": True,
     "optimize_embedded_lyrics": True,
@@ -287,9 +299,16 @@ DEFAULT_CONFIG = {
     # album (organize sweeps them to the album root) or be removed.
     "grade_check_extra_images": True,
     # File paths must match the configured naming script (per-track relative
-    # path from the music folder). Both full and shortened MusicBrainz IDs
-    # are accepted so the short_folder_names setting can't cause false fails.
+    # path from the music folder). Both full and 8-char-truncated MusicBrainz
+    # IDs are accepted so the short_folder_names setting can't cause false fails.
     "grade_check_naming": True,
+    # Filenames / folder names must match the naming script's CAPITALIZATION
+    # exactly — a path that differs only in letter case (TOXICITY vs Toxicity)
+    # fails; organize applies the canonical casing.
+    "grade_check_filename_case": True,
+    # File extensions must be LOWERCASE ("01 - Song.FLAC" fails). organize
+    # lowercases every extension it touches.
+    "grade_check_ext_case": True,
     # INITIALKEY + BPM tags (written by script 12, Key & BPM) are required.
     "grade_check_key_bpm": True,
     # Excess tags: any key the optimizer's strip pass would remove (outside
@@ -302,8 +321,8 @@ DEFAULT_CONFIG = {
     # feature is enabled below (and lyrics exist): a library owner who never
     # turns on AI transforms is never penalized. Latin-script lyrics never
     # require transliteration — the romanization would be identical.
-    "grade_check_mb_links": True,   # MusicBrainz album/artist/track links required
-    "grade_check_rym_links": True,  # RateYourMusic album/artist/track links required
+    "grade_check_mb_links": True,   # MusicBrainz release (or group) link required
+    "grade_check_rym_links": True,  # RateYourMusic release link required
     "grade_check_xlit": True,
     "grade_check_trans": True,
     # Lossless but uncompressed sources (WAV/AIFF/APE/WV/SHN) fail grading —
@@ -418,12 +437,9 @@ DEFAULT_CONFIG = {
     # AI-assisted lyrics (any OpenAI-compatible /chat/completions endpoint).
     "ai_base_url": "",
     "ai_api_key": "",
-    # Optional override model for acoustic syllable alignment (needs audio
-    # input; blank = ai_model). Audio-capable models align best.
-    "ai_align_model": "",
     # Reasoning effort for every AI call. HIGH is the default: maximum
-    # thinking budget for alignment/repair quality. MINIMAL disables
-    # thinking for speed.
+    # thinking budget for cleanup/repair/translate quality. MINIMAL
+    # disables thinking for speed.
     "ai_effort": "high",
     "ai_model": "",
     "ai_translate_lang": "en",
@@ -518,6 +534,8 @@ _INT_RANGES = {
     "audit_per_file_timeout_s": (10, 60),
     "images_jpeg_quality": (70, 100),
     "cover_jpeg_quality": (70, 100),
+    "embed_cover_jpeg_quality": (60, 100),
+    "embed_cover_resolution": (0, 4000),
     "grader_cover_size_tolerance_px": (0, 5),
     "grade_log_score_threshold": (0, 100),
     "audit_log_score_threshold": (0, 100),

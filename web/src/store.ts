@@ -164,7 +164,15 @@ export const useStore = create<Store>((set) => ({
   },
 }));
 
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function toast(msg: string) {
+  // reset the timer on every call so rapid toasts each get their full 3s
+  // instead of an earlier toast's timer cutting them short
   useStore.getState().setToast(msg);
-  setTimeout(() => useStore.getState().setToast(null), 3000);
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastTimer = null;
+    useStore.getState().setToast(null);
+  }, 3000);
 }

@@ -1,50 +1,148 @@
 # la musica
 
-**la musica** (formerly Music Library Optimizer) — a modern web-based music
-library manager and player. Built on the proven `mlo` engine (grading,
-auditing, FLAC/image optimization, CUE/lyrics formatting, AccurateRip,
-**lossless video remuxing**) with a React UI, playback of music *and* music
-videos, playlists, MusicBrainz / LRCLIB / RateYourMusic integration, and a
-Soulseek auto-importer.
+**la musica** (formerly Music Library Optimizer) — a modern, self-hosted web
+app that *manages, optimizes, audits, grades and plays* your music library.
+Built on the proven `mlo` engine with a React UI: playback of music **and**
+music videos (with karaoke-synced lyrics), manual + smart playlists,
+favorites, MusicBrainz / LRCLIB / RateYourMusic integration, an offline
+player cache, multi-format export, and a Soulseek client with an automatic
+MusicBrainz-driven importer.
 
 All app state (config, playlists, favourites, the beets library, the
 Soulseek config) lives in a single `.data` folder inside your music
 directory — one folder to back up or carry between machines.
 
-Grading and auditing own all tag writes — there is no manual tag editor by
-design. Album and per-track cover art are fully supported (upload, sidecar
-covers, dominant-color tinting).
-
 ## Highlights
 
 - **Library explorer** — artists → albums → tracks with live grade/audit
-  badges, search, "fail only" filter, and sortable columns (year, title,
-  grade, audit, genre, advisory, duration, bitrate, …). Music-video MP4/M4A
-  files are first-class tracks.
-- **Artist / Album / Track pages** — grading and auditing state, MusicBrainz
-  and RateYourMusic links, album + per-track cover upload, and a built-in
-  **music video player** (watch MP4 tracks in a modal, streamed with Range
-  support).
-- **Playback** — queue player with shuffle, repeat-one, seek and volume.
-- **Playlists** — manual playlists (reorder, remove, .m3u8 export/import)
-  and **smart playlists** driven by saved grade/audit filters.
-- **Import wizard** — drag & drop uploads, MusicBrainz release linking,
-  per-track/disc matching, cascading genre import, LRCLIB lyrics with a
-  synced line editor, INSTRUMENTAL flags, and per-track ITUNESADVISORY
-  ratings (these feed grading — they are the only "metadata" writes left).
-- **Video remux (script 11)** — any video container (VOB, MKV, AVI, WMV,
-  WebM, TS, MOV, FLV…) → MP4, **losslessly**: the video stream is copied
-  bit-exact when MP4-compatible (h264/hevc/mpeg4/av1/vp9), incompatible
-  codecs are optionally re-encoded to H.264, and **every audio stream is
-  re-encoded to FLAC** (lossless from the decoded source, multi-channel and
-  hi-res safe). Output is verified with ffprobe (video present, audio
-  stream count, duration) before the original is optionally removed.
-  Text subtitles become mov_text; chapters survive. One-click from the
-  album page ("Convert N videos") or the scripts menu.
+  badges, search, "fail only" filter, selectable rows with bulk tag tools,
+  and sortable/resizable columns (year, title, grade, audit, genre,
+  advisory, duration, bitrate, dynamic range, …). Music-video files are
+  first-class tracks.
+- **Artist / Album / Track pages** — grading and auditing detail, identity
+  links (MusicBrainz + RateYourMusic logo buttons on each link's own
+  metadata row), the link paste-editor, album + per-track cover upload and
+  online cover search, manual tag editing, per-track video tag editing, and
+  a full lyrics editor (synced/word-synced ELRC, translations,
+  transliterations, hotkeys).
+- **Player** — persistent player bar (queue, drag-reorder, shuffle,
+  repeat-one, speed, sleep timer, ReplayGain, visualizer, volume shared
+  app-wide) plus a **fullscreen player** with animated karaoke lyrics,
+  queue and display options. Music videos play fullscreen with
+  auto-hiding chrome, correct aspect ratio (no cropping), and every codec
+  the bundled ffmpeg can probe (incompatible ones are transparently
+  transcoded to fragmented MP4). Browser-fullscreen with a two-stage Esc.
+- **Offline cache** — "Download" caches tracks (and video streams) in a
+  service-worker media cache; cached tracks keep playing with the backend
+  down. "Export" is the real file-saving path.
+- **Playlists** — manual playlists (drag-reorder, favorites, .m3u8
+  export/import) and **smart playlists** driven by saved grade/audit/tag
+  filters. Playlist pages look and behave exactly like album pages, with a
+  2×2 mosaic cover built from the first four tracks.
+- **Export** — export tracks, albums, artists, playlists or the whole
+  library to MP3 (VBR/CBR presets + custom bitrates), Opus, Vorbis, WAV or
+  bit-exact FLAC copies, with a size estimate and drive-fit warning.
+  Cover art and identity tags travel with the files.
+- **Favorites** — liked tracks / albums / artists / playlists, consistent
+  with the library views (ctrl-click a track title anywhere to open its
+  track page for editing; the player bar title opens it too).
+- **Import** — drag & drop uploads or a watched import folder: MusicBrainz
+  release matching, cascading genre import, LRCLIB lyrics fetch, advisory
+  ratings, then automatic organize into the naming-script layout.
+- **Soulseek** — managed slskd instance (autostart, shares = music folder),
+  search & download UI with a live status dot in the sidebar, and an
+  **auto-importer** that searches releases by catalog number / artist +
+  album, verifies rip logs (minimum logchecker score) and download
+  completeness, then imports and organizes the album automatically.
+- **Grading** — a configurable battery of ~45 checks per album (tags,
+  encoder identity, naming + capitalization, lowercase extensions, links,
+  covers, CUE/log/AccurateRip, lyrics formatting, file categories…). Every
+  check can be toggled on the Grading page; the verdict shows as a red/green
+  dot on every album and track with the failed checks itemized.
 - **Desktop + Web** — served by FastAPI (browser or Docker); a Tauri v2
-  desktop shell is planned for native file dialogs and a standalone app.
+  desktop shell lives in `desktop/`.
 
-## Quick start
+## Optimization: the 15 scripts
+
+Run All executes a configurable order (default shown in parentheses where
+it differs). Every script can run individually, on selected albums, or be
+forced to redo work.
+
+| # | Script | What it does |
+| --- | --- | --- |
+| 1 | Format lyrics | Canonical embedded LYRICS / .lrc (padding, blank lines, zero-timestamp rule, Enhanced/Extended LRC word-sync tags) |
+| 2 | Format CUEs | Canonical CUE text, FILE-line fixes, CD-N sheet renaming |
+| 3 | Optimize FLACs | Re-encode at target level, strip padding/CUESHEET/APPLICATION, remove tags outside the canonical set, convert WAV/AIFF/APE/WV/SHN to FLAC losslessly |
+| 4 | Grade | The full grading battery below |
+| 5 | Process images | Covers resized/cropped (default 1200×1200 JPEG q90, configurable), JPEG/PNG/JXL optimization, optional JPEG XL conversion |
+| 6 | Audit library | AudioAuditor detectors (silence, DR, peaks, LUFS, BPM, MQA, fake stereo…) + CD .log CRC verification → AUDIT tag |
+| 7 | DR & ReplayGain | rsgain + simple-dr-meter (album gain, FLAC and MP4 alike) |
+| 8 | Auto tagging | ITUNESADVISORY normalization, INSTRUMENTAL-from-lyrics |
+| 9 | AccurateRip | .accurip generation via CUETools, checksum verification |
+| 10 | Format All | Final canonical pass: accurip/cue/lrc/tag trim + **embedded cover policy** |
+| 11 | Remux videos | Any video container (VOB/AVI/WMV/TS/MOV/FLV…) → MKV, video copied bit-exact when possible, every audio stream re-encoded to FLAC, subtitles copied |
+| 12 | Key & BPM | librosa-backed INITIALKEY + BPM (musical/camelot/openkey notation) |
+| 13 | Fetch lyrics | LRCLIB download into the configured format (embedded / .lrc / both) |
+| 14 | Beets tagging | Managed beets (Picard parity) with the naming script, genre import, work/movement tags |
+| 15 | Lyrics xlit / translate (AI) | Any OpenAI-compatible endpoint: romanization (TRANSLITERATION-*) and translation (TRANSLATION-*) tags + `<lang>.lrc` sidecars, cached per track |
+
+### Embedded covers (new in 2.1.0)
+
+**By default the optimizer does not embed cover art — it removes it.** Audio
+files stay lean; covers live on disk as `cover.*` (and per-track sidecars),
+which every player can read. Settings → *Embedded covers* flips the policy:
+
+- **Embed covers into audio files** (off by default). When on, script 10
+  embeds the album cover into every track (FLAC picture, MP3 APIC, MP4
+  `covr`, OGG/Opus `METADATA_BLOCK_PICTURE`), replacing any existing art;
+  script 3 stops stripping the FLAC PICTURE block.
+- **Embedded JPEG quality** — applies only when the embedded image is a
+  JPEG (PNG/lossless embeds ignore it).
+- **Embedded cover max resolution** — longest side in px, downscaled with
+  the aspect ratio preserved; 0 keeps the cover file's own size.
+
+The pass is idempotent — it only rewrites files whose embedded art actually
+changes.
+
+### Filenames, capitalization and extensions (new in 2.1.0)
+
+The app now enforces canonical file naming in all three ways:
+
+- **Check** — the organizer's preview and the naming-script grading compare
+  every track's full path (folders included) against the configured naming
+  script.
+- **Grade** — new checks: *Path capitalization* (a path that matches the
+  naming script except for letter case — `TOXICITY` vs `Toxicity` — fails)
+  and *Lowercase extensions* (`01 - Song.FLAC` fails). Both toggleable on
+  the Grading page, both on by default.
+- **Optimize** — organize applies the naming script's exact capitalization
+  and lowercases every extension it touches (audio files, same-stem
+  sidecars, and leftover files like covers/logs). Case-only renames work on
+  case-insensitive filesystems too.
+
+## Grading — what the checks cover
+
+- **Tracks & albums** — unreadable files, required per-track and album-level
+  tags, encoder identity tags, naming-script match, path capitalization,
+  lowercase extensions, INITIALKEY + BPM, excess tags, media/source tags and
+  their consistency, instrumental/lyrics consistency, disallowed file types,
+  stray images, un-remuxed videos, disc folder naming, CD requirements
+  (.log exact match, .cue, FLAC lossless, CRC checksums).
+- **Auditing** — AUDIT tag presence, log checksum validity, AccurateRip
+  verification, log grade within a configurable threshold.
+- **Identity links** — the MusicBrainz release (or release group) and the
+  RateYourMusic release page must be tagged. Artist/recording-level links
+  remain optional.
+- **Covers** — presence, size/square/crop rules (tolerances configurable),
+  per-track sidecar covers under the same rules.
+- **Strict formatting** — tag padding/blank lines, lyrics canonical form,
+  CUE canonical form.
+- **Lyrics** — presence, transliteration/translation (only when AI is
+  configured and the script needs it).
+- **File categories** — which file types participate in grading at all
+  (music, covers, CUE, log, LRC, accurip, videos, other).
+
+## Getting started
 
 ```bash
 # backend
@@ -65,7 +163,8 @@ python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 
 Set your music folder in **Settings** (or point `MLO_MUSIC_FOLDER` at it).
 Install the external toolchain from Settings → Dependencies (ffmpeg, flac,
-libjxl, rsgain, AudioAuditor, Logchecker, CUETools, simple-dr-meter).
+libjxl, oxipng, rsgain, AudioAuditor, Logchecker, CUETools, librosa, beets,
+slskd). The UI walks you through the first-run setup.
 
 ## Docker
 
@@ -80,48 +179,37 @@ The image bundles the React build and the audio/image toolchain
 ## Architecture
 
 ```
-web/         React 19 + TypeScript + Tailwind UI (Vite)
+web/         React 19 + TypeScript + Tailwind UI (Vite, service-worker media cache)
 server/      FastAPI backend: library payload, playlists, integrations,
-             import, streaming, WebSocket progress
+             import, streaming (direct + on-the-fly transcode), export,
+             organize, WebSocket progress
 mlo/         core engine: grader, audit, flac, images, lyrics, cue,
-             accurip, loudness, autotag, remux (v1 engine, preserved)
+             accurip, loudness, autotag, remux, naming, discs, stats
+desktop/     Tauri v2 desktop shell
 tools/       test-library generator and test suites
 ```
 
-## API overview
+## API overview (selected)
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/library` | tag-rich library tree (grades, audits, tags, tech info; gzipped) |
 | `GET /api/album` `GET /api/artist` | entity details |
-| `GET /api/stream` | audio/video streaming (Range) |
-| `GET /api/tags` | tag read-only view (writes belong to the grading scripts) |
-| `POST /api/lyrics/embed` | write the embedded LYRICS tag only |
-| `POST /api/run` | run scripts (1–11) on targets |
-| `GET /api/videos/scan` | list remuxable video files with codec info |
+| `GET /api/stream` `GET /api/videos/stream` | audio/video streaming (Range; `?transcode=1` pipes fragmented MP4) |
+| `GET /api/videos/meta` | codec probe deciding direct play vs transcode |
+| `GET/POST /api/tags` | tag read/edit + video tag writes |
+| `POST /api/lyrics/embed` `POST /api/lyrics/write` | embedded LYRICS / .lrc sidecar writes |
+| `POST /api/run` | run any of scripts 1–15 on targets |
+| `POST /api/organize` | apply the naming script (dry-run supported) |
+| `POST /api/export` | multi-format export with codec/bitrate config |
 | `GET/POST /api/playlists…` | manual + smart playlists, .m3u8 |
 | `GET /api/mb/release/{id}` `…/genres` | MusicBrainz release + genre cascade |
 | `POST /api/mb/match` `POST /api/mb/assign` | track/disc matching, MB/RYM/genre/advisory writes |
 | `GET /api/lyrics/*` `POST /api/lyrics/write` | LRCLIB proxy + LRC sidecar write |
 | `POST /api/cover` | album cover upload (`?track=` writes per-track sidecar covers) |
 | `POST /api/import/upload` `…/commit` | upload + link assignment |
+| `POST /api/ai/*` | AI chat/config + lyric transforms (cleanup, repair, translate, transliterate) |
 | `WS /ws/progress` | live progress |
-
-## Scripts (Run All order is configurable)
-
-| # | Script | Notes |
-| --- | --- | --- |
-| 1 | Format lyrics | embedded + .lrc canonicalization |
-| 2 | Format CUEs | + CD-N sheet renaming, FILE-line fixes |
-| 3 | Optimize FLACs | level 8, padding stripped |
-| 4 | Grade | the full check battery |
-| 5 | Images | cover resize/crop to 1000×1000, JPEG optimization, optional JXL |
-| 6 | Audit | AudioAuditor + CD log CRC verification → AUDIT tags |
-| 7 | DR & ReplayGain | rsgain + simple-dr-meter (FLAC and MP4 alike) |
-| 8 | Auto Tagging | ALBUMITUNESADVISORY + INSTRUMENTAL-from-lyrics |
-| 9 | AccurateRip | .accurip generation via CUETools |
-| 10 | Format All | final canonical trim pass |
-| 11 | Video Remux | any video → MP4, video copied, audio → FLAC |
 
 ## Tests
 

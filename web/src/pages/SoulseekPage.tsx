@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Download, Eye, EyeOff, FolderOpen, Loader2, Play, Power, RefreshCw, Search, User, Zap,
-  Square, FileCheck2, FileVideo, Music2, Save, Tag, Trash2, PackageOpen,
+  ArrowDownUp, Download, Eye, EyeOff, FolderOpen, Loader2, Play, Power, RefreshCw, Search,
+  User, Zap, Square, FileCheck2, FileVideo, Music2, Save, Tag, Trash2, PackageOpen,
 } from "lucide-react";
 import { api } from "../api";
 import { toast } from "../store";
@@ -1040,7 +1040,9 @@ export default function SoulseekPage() {
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Soulseek</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <ArrowDownUp className="h-6 w-6 text-accent" /> Soulseek
+          </h1>
           <div className="text-xs text-zinc-500 mt-0.5">
             Managed slskd · {pending === "start" ? (
               <span className="text-amber-300">starting…</span>

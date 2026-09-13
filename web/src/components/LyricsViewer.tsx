@@ -678,16 +678,19 @@ export default function LyricsViewer({
               {aiBusy ? `${aiBusy}…` : "AI"}
             </button>
             {aiMenu && (
-              <div className="absolute right-0 top-full mt-1 z-30 bg-zinc-900 border border-border rounded-lg shadow-xl p-1 w-64">
-                <button className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-panel flex items-center gap-2" onClick={() => runAi("clean")}>
+              <>
+              <div className="fixed inset-0 z-20" onClick={() => setAiMenu(false)} />
+              <div className="absolute right-0 top-full mt-1 z-30 bg-zinc-950 border border-border rounded-lg shadow-2xl p-1.5 w-64">
+                <button className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 flex items-center gap-2" onClick={() => runAi("clean")}>
                   <Sparkles className="h-3.5 w-3.5 text-accent" />
                   <span>Clean raw lyrics<span className="block text-zinc-500 text-[10px]">strip ads / watermarks (LLM)</span></span>
                 </button>
-                <button className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-panel flex items-center gap-2" onClick={() => runAi("repair")}>
+                <button className="w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-white/10 flex items-center gap-2" onClick={() => runAi("repair")}>
                   <Eraser className="h-3.5 w-3.5 text-accent" />
                   <span>Repair from LRCLIB candidates<span className="block text-zinc-500 text-[10px]">fill missing lines (LLM)</span></span>
                 </button>
               </div>
+              </>
             )}
           </div>
           <div className="relative">
@@ -695,7 +698,9 @@ export default function LyricsViewer({
               <Keyboard className="h-3.5 w-3.5" />
             </button>
             {keysMenu && (
-              <div className="absolute right-0 top-full mt-1 z-30 bg-zinc-900 border border-border rounded-lg shadow-xl p-2 w-80">
+              <>
+              <div className="fixed inset-0 z-20" onClick={() => setKeysMenu(false)} />
+              <div className="absolute right-0 top-full mt-1 z-30 bg-zinc-950 border border-border rounded-lg shadow-2xl p-1.5 w-80">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 px-1 pb-1">Hotkeys</div>
                 {LYRICS_ACTIONS.map((a) => (
                   <div key={a.id} className="flex items-center gap-2 py-0.5">
@@ -723,6 +728,7 @@ export default function LyricsViewer({
                   <span className="text-[10px] text-zinc-600 px-1">saved in this browser</span>
                 </div>
               </div>
+              </>
             )}
           </div>
           <button

@@ -45,6 +45,15 @@ def _init():
                     created REAL NOT NULL,
                     updated REAL NOT NULL
                 );
+                """)
+            # lightweight migration: the old custom-icon + complete-grade
+            # columns are dropped — covers are derived from the tracks now.
+            cols = {r[1] for r in c.execute("PRAGMA table_info(playlists)")}
+            for legacy in ("icon", "complete"):
+                if legacy in cols:
+                    c.execute(f"ALTER TABLE playlists DROP COLUMN {legacy}")
+            c.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS playlist_tracks (
                     playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
                     path TEXT NOT NULL,
@@ -137,6 +146,30 @@ def create_playlist(name, kind="manual", filter_spec=None):
                 (name, kind, json.dumps(filter_spec) if filter_spec else None, now, now),
             )
             return cur.lastrowid
+
+
+def update_playlist(pid, fields):
+    """Partial update from a dict of ONLY the fields being changed — rename,
+    set the cover icon (None clears it back to the default), and/or grade
+    the playlist complete."""
+    if not fields:
+        return get_playlist(pid)
+    with _lock:
+        with _conn() as c:
+            row = c.execute("SELECT id FROM playlists WHERE id=?", (pid,)).fetchone()
+            if not row:
+                return None
+            sets, vals = [], []
+            if "name" in fields and str(fields["name"] or "").strip():
+                sets.append("name=?")
+                vals.append(str(fields["name"]).strip())
+            if not sets:
+                return get_playlist(pid)
+            sets.append("updated=?")
+            vals.append(time.time())
+            vals.append(pid)
+            c.execute(f"UPDATE playlists SET {', '.join(sets)} WHERE id=?", vals)
+            return get_playlist(pid)
 
 
 def rename_playlist(pid, name):

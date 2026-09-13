@@ -1,58 +1,45 @@
 import { useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListMusic, Plus, Trash2, Download, Upload, Play, ChevronUp, ChevronDown, Pencil } from "lucide-react";
+import { ListMusic, Play, Plus, Upload } from "lucide-react";
 import { api } from "../api";
 import { toast, useStore } from "../store";
-import { EmptyState, GradeBadge, AdvisoryMark } from "../components/Badges";
+import { EmptyState } from "../components/Badges";
 import { TrackCover } from "../components/CoverImg";
 import FavHeart from "../components/FavHeart";
-import { auditFails } from "../lib/status";
-import type { Playlist, FilterCondition } from "../types";
-
-const FIELDS = [
-  { value: "grade_pass", label: "Grade (pass/fail)" },
-  { value: "audit", label: "Audit" },
-  { value: "tags.GENRE", label: "Genre" },
-  { value: "tags.ITUNESADVISORY", label: "Advisory" },
-  { value: "tags.INSTRUMENTAL", label: "Instrumental" },
-  { value: "tags.MEDIA", label: "Media" },
-  { value: "tags.SOURCE", label: "Source" },
-  { value: "tags.DATE", label: "Year" },
-  { value: "lyrics_present", label: "Has lyrics" },
-  { value: "tech.length", label: "Duration (s)" },
-  { value: "tech.bitrate", label: "Bitrate" },
-  { value: "tags.TITLE", label: "Title" },
-];
-
-const OPS = [
-  { value: "eq", label: "=" },
-  { value: "ne", label: "≠" },
-  { value: "contains", label: "contains" },
-  { value: "lt", label: "<" },
-  { value: "gt", label: ">" },
-  { value: "missing", label: "is missing" },
-  { value: "present", label: "is present" },
-];
+import { fmtDuration, GRID_SIZE_MIN } from "./LibraryPage";
+import type { Playlist } from "../types";
 
 export default function PlaylistsPage() {
   const qc = useQueryClient();
   const { playNow } = useStore();
   const { data: playlists, isLoading } = useQuery({ queryKey: ["playlists"], queryFn: api.playlists });
   const { data: lib } = useQuery({ queryKey: ["library"], queryFn: api.library });
-  // path -> tag-derived title/artist/album so the player bar shows real names
-  const trackInfo = useMemo(() => {
-    const map = new Map<string, { artist?: string; album?: string; title?: string; coverFile?: string | null; albumCover?: string | null; albumPath?: string }>();
+  const gridSize = (localStorage.getItem("mlo.gridSize") as "s" | "m" | "l" | null) ?? "m";
+  const [newName, setNewName] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // path -> tag-derived info (title/artist/album/duration/cover) shared by
+  // the cards' duration chips and the expanded viewer
+  const trackMeta = useMemo(() => {
+    const map = new Map<string, { artist?: string; album?: string; title?: string; coverFile?: string | null; albumCover?: string | null; albumPath?: string; dur?: number; audit?: string | null; pass?: boolean; advisory?: string | null }>();
     for (const a of lib?.artists ?? [])
       for (const al of a.albums)
         for (const t of al.tracks)
-          map.set(t.path, { artist: al.album_artist || a.name, album: al.meta?.ALBUM ?? undefined, title: t.tags.TITLE || undefined, coverFile: t.cover_file ?? null, albumCover: al.cover_file ?? null, albumPath: al.path });
+          map.set(t.path, {
+            artist: al.album_artist || a.name,
+            album: al.meta?.ALBUM ?? undefined,
+            title: t.tags.TITLE || undefined,
+            coverFile: t.cover_file ?? null,
+            albumCover: al.cover_file ?? null,
+            albumPath: al.path,
+            dur: t.tech?.length ?? undefined,
+            audit: t.audit,
+            pass: t.grade_pass,
+            advisory: t.tags.ITUNESADVISORY ?? null,
+          });
     return map;
   }, [lib]);
-  const [newName, setNewName] = useState("");
-  const [editing, setEditing] = useState<Playlist | null>(null);
-  const [conditions, setConditions] = useState<FilterCondition[]>([]);
-  const [matchAll, setMatchAll] = useState(true);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["playlists"] });
 
@@ -66,41 +53,50 @@ export default function PlaylistsPage() {
     onSuccess: () => refresh(),
   });
 
-  const del = useMutation({
-    mutationFn: (id: number) => api.deletePlaylist(id),
-    onSuccess: () => refresh(),
-  });
-
-  const smartFilter = (p: Playlist) => {
-    setEditing(p);
-    setConditions(p.filter?.conditions ?? []);
-    setMatchAll(p.filter?.match !== "any");
-  };
-
-  const saveSmart = async () => {
-    if (!editing) return;
-    await api.playlistFilter(editing.id, { conditions, match: matchAll ? "all" : "any" });
-    const ev = await api.playlistEvaluate(editing.id);
-    await api.playlistOrder(editing.id, ev.paths);
-    setEditing(null);
-    refresh();
-    toast("Smart playlist updated");
-  };
-
   const importM3u8 = async (file: File) => {
     await api.playlistImport(file.name.replace(/\.m3u8?$/i, ""), file);
     refresh();
     toast("Playlist imported");
   };
 
+  const queueFor = (paths: string[]) =>
+    playNow(
+      paths.map((path) => ({
+        path,
+        file: path.split("/").pop()!,
+        albumPath: path.split("/").slice(0, -1).join("/"),
+        artist: trackMeta.get(path)?.artist,
+        album: trackMeta.get(path)?.album,
+        title: trackMeta.get(path)?.title,
+        coverFile: trackMeta.get(path)?.coverFile ?? null,
+        albumCover: trackMeta.get(path)?.albumCover ?? null,
+      }))
+    );
+
   if (isLoading) return <div className="p-8 text-zinc-500">Loading playlists…</div>;
 
   const manual = (playlists ?? []).filter((p) => p.kind === "manual");
   const smart = (playlists ?? []).filter((p) => p.kind === "smart");
 
+  const cardGrid = (list: Playlist[]) => (
+    <div
+      className="grid gap-x-4 gap-y-5"
+      style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${GRID_SIZE_MIN[gridSize]}px, 1fr))` }}
+    >
+      {list.map((p) => (
+        <PlaylistGridCard
+          key={p.id}
+          playlist={p}
+          trackMeta={trackMeta}
+          onPlay={(paths) => paths.length && queueFor(paths.slice(0))}
+        />
+      ))}
+    </div>
+  );
+
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center gap-3">
+    <div className="p-6 space-y-5">
+      <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <ListMusic className="h-6 w-6 text-accent" /> Playlists
         </h1>
@@ -130,199 +126,102 @@ export default function PlaylistsPage() {
         <EmptyState title="No playlists yet" hint="Create a manual playlist, or import an .m3u8 file." />
       )}
 
-      {manual.map((p) => (
-        <PlaylistCard key={p.id} playlist={p} onDelete={() => del.mutate(p.id)} onPlay={(paths) => playNow(paths.map((path) => ({
-              path,
-              file: path.split("/").pop()!,
-              albumPath: path.split("/").slice(0, -1).join("/"),
-              artist: trackInfo.get(path)?.artist,
-              album: trackInfo.get(path)?.album,
-              title: trackInfo.get(path)?.title,
-              coverFile: trackInfo.get(path)?.coverFile ?? null,
-              albumCover: trackInfo.get(path)?.albumCover ?? null,
-            })))} onSmart={() => smartFilter(p)} />
-      ))}
+      {/* playlists render exactly like albums in the library grid: same card
+          anatomy, same cover sizing, same hover actions */}
+      {manual.length > 0 && cardGrid(manual)}
 
       {smart.length > 0 && (
-        <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500 mb-2">Smart playlists</h2>
-          {smart.map((p) => (
-            <PlaylistCard key={p.id} playlist={p} onDelete={() => del.mutate(p.id)} onPlay={(paths) => playNow(paths.map((path) => ({
-              path,
-              file: path.split("/").pop()!,
-              albumPath: path.split("/").slice(0, -1).join("/"),
-              artist: trackInfo.get(path)?.artist,
-              album: trackInfo.get(path)?.album,
-              title: trackInfo.get(path)?.title,
-              coverFile: trackInfo.get(path)?.coverFile ?? null,
-              albumCover: trackInfo.get(path)?.albumCover ?? null,
-            })))} onSmart={() => smartFilter(p)} />
-          ))}
-        </div>
-      )}
-
-      {editing && (
-        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center" onClick={() => setEditing(null)}>
-          <div className="bg-card border border-border rounded-xl p-5 w-[560px] max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-semibold mb-3">Smart playlist: {editing.name}</h3>
-            <label className="flex items-center gap-2 text-sm text-zinc-400 mb-3">
-              <input type="checkbox" checked={matchAll} onChange={(e) => setMatchAll(e.target.checked)} className="" />
-              Match all conditions (AND)
-            </label>
-            <div className="space-y-2">
-              {conditions.map((c, i) => (
-                <div key={i} className="flex gap-2">
-                  <select className="input flex-1" value={c.field} onChange={(e) => setConditions((cs) => cs.map((x, j) => (j === i ? { ...x, field: e.target.value } : x)))}>
-                    {FIELDS.map((f) => (
-                      <option key={f.value} value={f.value}>{f.label}</option>
-                    ))}
-                  </select>
-                  <select className="input w-28" value={c.op} onChange={(e) => setConditions((cs) => cs.map((x, j) => (j === i ? { ...x, op: e.target.value } : x)))}>
-                    {OPS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
-                  {!["missing", "present"].includes(c.op) && (
-                    <input className="input w-32" value={String(c.value ?? "")} onChange={(e) => setConditions((cs) => cs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
-                  )}
-                  <button className="btn-danger !px-2" onClick={() => setConditions((cs) => cs.filter((_, j) => j !== i))}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-            <button className="btn-ghost mt-2 text-xs" onClick={() => setConditions((cs) => [...cs, { field: "grade_pass", op: "eq", value: false }])}>
-              <Plus className="h-3.5 w-3.5" /> Add condition
-            </button>
-            <div className="flex justify-end gap-2 mt-4">
-              <button className="btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary" onClick={saveSmart}>Save & evaluate</button>
-            </div>
-          </div>
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500">Smart playlists</h2>
+          {cardGrid(smart)}
         </div>
       )}
     </div>
   );
 }
 
-function PlaylistCard({ playlist, onDelete, onPlay, onSmart }: { playlist: Playlist; onDelete: () => void; onPlay: (paths: string[]) => void; onSmart: () => void }) {
-  const qc = useQueryClient();
+/** Deterministic per-playlist cover gradient (golden-angle hue spread). */
+function coverGradient(p: Playlist): string {
+  const hue = Math.round((p.id * 137.5) % 360);
+  return `linear-gradient(135deg, hsl(${hue} 42% 32%), hsl(${(hue + 40) % 360} 48% 15%))`;
+}
+
+/** Album-card-style grid card for a playlist: 2x2 cover mosaic, completion
+ * chip (its "grade"), track/duration chips, hover play + heart. Clicking
+ * opens the dedicated playlist viewer, exactly like album cards do. */
+function PlaylistGridCard({ playlist, trackMeta, onPlay }: {
+  playlist: Playlist;
+  trackMeta: Map<string, { artist?: string; album?: string; title?: string; coverFile?: string | null; albumCover?: string | null; albumPath?: string; dur?: number; audit?: string | null; pass?: boolean; advisory?: string | null }>;
+  onPlay: (paths: string[]) => void;
+}) {
   const { data: detail } = useQuery({ queryKey: ["playlist", playlist.id], queryFn: () => api.playlist(playlist.id) });
-  const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(playlist.name);
-  const { data: lib } = useQuery({ queryKey: ["library"], queryFn: api.library });
-
-  const { tracks = [] } = detail ?? {};
-
-  const move = async (i: number, dir: -1 | 1) => {
-    const j = i + dir;
-    if (j < 0 || j >= tracks.length) return;
-    const next = [...tracks];
-    [next[i], next[j]] = [next[j], next[i]];
-    await api.playlistOrder(playlist.id, next);
-    qc.invalidateQueries({ queryKey: ["playlist", playlist.id] });
-  };
-
-  const rename = async () => {
-    await api.renamePlaylist(playlist.id, name);
-    setRenaming(false);
-    qc.invalidateQueries({ queryKey: ["playlists"] });
-  };
-
-  const removeTrack = async (path: string) => {
-    await api.playlistRemove(playlist.id, [path]);
-    qc.invalidateQueries({ queryKey: ["playlist", playlist.id] });
-    qc.invalidateQueries({ queryKey: ["playlists"] });
-  };
-
-  const trackMeta = useMemo(() => {
-    const map = new Map<string, { title: string; audit: string | null; pass: boolean; artist?: string; album?: string; advisory?: string | null; coverFile?: string | null; albumCover?: string | null; albumPath?: string; trackNo?: number | null }>();
-    for (const a of lib?.artists ?? [])
-      for (const al of a.albums)
-        for (const t of al.tracks)
-          map.set(t.path, {
-            title: t.tags.TITLE ?? t.file,
-            audit: t.audit,
-            pass: t.grade_pass,
-            artist: al.album_artist || a.name,
-            album: al.meta?.ALBUM ?? undefined,
-            advisory: t.tags.ITUNESADVISORY ?? null,
-            coverFile: t.cover_file ?? null,
-            albumCover: al.cover_file ?? null,
-            albumPath: al.path,
-            trackNo: t.tracknumber ?? null,
-          });
-    return map;
-  }, [lib]);
+  const tracks = detail?.tracks ?? [];
+  const totalDur = useMemo(() => tracks.reduce((s, t) => s + (trackMeta.get(t)?.dur ?? 0), 0), [tracks, trackMeta]);
 
   return (
-    <div className="bg-card rounded-lg border border-border overflow-hidden">
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
-        <div className="flex items-center gap-1.5">
-          <button className="btn-ghost !px-2 !py-1 text-xs" title="Play playlist" onClick={() => onPlay(tracks)}><Play className="h-3.5 w-3.5" /></button>
-          {renaming ? (
-            <>
-              <input className="input max-w-xs" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && rename()} />
-              <button className="btn-primary text-xs" onClick={rename}>Save</button>
-            </>
-          ) : (
-            <span className="font-semibold">{playlist.name}</span>
+    <div
+      className="group relative rounded-xl p-2 transition-colors hover:bg-panel/70"
+    >
+      <div className="relative">
+        <Link to={`/playlist/${playlist.id}`} title="Open the playlist page" className="block">
+        <div
+          className="aspect-square w-full rounded-xl shadow-lg ring-1 ring-black/40 overflow-hidden relative"
+          style={{ background: coverGradient(playlist) }}
+        >
+          {/* cover mosaic: the first four tracks' artwork in a 2x2 grid —
+              empty slots fall back to the playlist gradient */}
+          <div className="absolute inset-0 grid grid-cols-2 grid-rows-2">
+            {tracks.slice(0, 4).map((t, i) => (
+              <div key={i} className="overflow-hidden">
+                <TrackCover
+                  albumPath={trackMeta.get(t)?.albumPath ?? t.split("/").slice(0, -1).join("/")}
+                  trackCover={trackMeta.get(t)?.coverFile}
+                  albumCover={trackMeta.get(t)?.albumCover}
+                  wrapperClass="w-full h-full"
+                />
+              </div>
+            ))}
+            {Array.from({ length: Math.max(0, 4 - Math.min(4, tracks.length)) }).map((_, i) => (
+              <div key={`empty-${i}`} className="flex items-center justify-center opacity-25">
+                <ListMusic className="h-5 w-5 text-white/60" />
+              </div>
+            ))}
+          </div>
+          <span className="absolute bottom-1.5 left-1.5 bg-black/65 text-zinc-300 text-[9px] font-mono tracking-wide rounded px-1 py-0.5 border border-white/10">
+            {playlist.track_count} track{playlist.track_count === 1 ? "" : "s"}
+          </span>
+          {totalDur > 0 && (
+            <span className="absolute bottom-1.5 right-1.5 bg-black/65 text-zinc-200 text-[9px] font-mono tracking-wide rounded px-1 py-0.5 border border-white/10">
+              {fmtDuration(totalDur)}
+            </span>
           )}
         </div>
-        {playlist.kind === "smart" && (
-          <span className="chip bg-accent/10 text-accent-soft border border-accent/25">SMART</span>
-        )}
-        <span className="text-xs text-zinc-500">{tracks.length} tracks</span>
-        <div className="ml-auto flex gap-1.5">
-          <FavHeart kind="playlist" id={String(playlist.id)} iconClass="h-3.5 w-3.5" />
-          <a className="btn-ghost !px-2 !py-1 text-xs" href={api.playlistExportUrl(playlist.id)}><Download className="h-3.5 w-3.5" /></a>
+        </Link>
+        <div className="absolute top-1.5 right-1.5 row-hover transition-opacity">
+          <FavHeart kind="playlist" id={String(playlist.id)} className="!p-1.5 bg-black/60" iconClass="h-4 w-4" />
+        </div>
+        <button
+          className="btn-primary absolute left-2 top-9 !rounded-lg !p-3 row-hover transition-opacity shadow-2xl"
+          title="Play playlist"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPlay(tracks);
+          }}
+        >
+          <Play className="h-4 w-4 fill-current" />
+        </button>
+      </div>
+      <div className="mt-2 px-0.5">
+        <div className="text-sm font-medium truncate block" title={playlist.name}>
+          {playlist.name}
+        </div>
+        <div className="text-[11px] text-zinc-500 truncate flex items-center gap-1.5 mt-0.5">
+          <span className="truncate">{playlist.kind === "smart" ? "Smart playlist" : "Manual playlist"}</span>
           {playlist.kind === "smart" && (
-            <button className="btn-ghost !px-2 !py-1 text-xs" onClick={onSmart}><Pencil className="h-3.5 w-3.5" /></button>
+            <span className="chip bg-accent/10 text-accent-soft border border-accent/25 text-[10px] shrink-0">SMART</span>
           )}
-          <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => setRenaming(!renaming)} title="Rename"><Pencil className="h-3.5 w-3.5" /></button>
-          <button className="btn-danger !px-2 !py-1 text-xs" onClick={onDelete}><Trash2 className="h-3.5 w-3.5" /></button>
         </div>
       </div>
-      {tracks.length > 0 && (
-        <div className="max-h-72 overflow-auto">
-          {tracks.map((t, i) => (
-            <div
-              key={`${playlist.id}-${i}-${t}`}
-              className="flex items-center gap-2 px-4 py-2 text-sm border-t border-border/40 first:border-t-0 hover:bg-panel cursor-pointer"
-              title="Click to play from here"
-              onClick={() => onPlay(tracks.slice(i))}
-            >
-              <span className="text-xs text-zinc-600 w-6 shrink-0 tabular-nums">{trackMeta.get(t)?.trackNo ?? i + 1}</span>
-              <TrackCover
-                albumPath={trackMeta.get(t)?.albumPath ?? t.split("/").slice(0, -1).join("/")}
-                trackCover={trackMeta.get(t)?.coverFile}
-                albumCover={trackMeta.get(t)?.albumCover}
-                wrapperClass="h-9 w-9 rounded bg-raise border border-border overflow-hidden shrink-0"
-              />
-              <span className="flex-1 break-words min-w-0">{trackMeta.get(t)?.title ?? t.split("/").pop()}</span>
-              <GradeBadge
-                pass={!!trackMeta.get(t)?.pass && !auditFails(trackMeta.get(t)?.audit)}
-                audit={trackMeta.get(t)?.audit}
-                size="sm"
-              />
-              <AdvisoryMark value={trackMeta.get(t)?.advisory} />
-              <div className="flex gap-0.5" onClick={(e) => e.stopPropagation()}>
-                <button className="text-zinc-600 hover:text-zinc-300 disabled:opacity-30" onClick={() => move(i, -1)} disabled={i === 0}><ChevronUp className="h-4 w-4" /></button>
-                <button className="text-zinc-600 hover:text-zinc-300 disabled:opacity-30" onClick={() => move(i, 1)} disabled={i === tracks.length - 1}><ChevronDown className="h-4 w-4" /></button>
-                {playlist.kind === "manual" && (
-                  <button
-                    className="text-zinc-600 hover:text-red-400 ml-1"
-                    title="Remove from playlist"
-                    onClick={() => removeTrack(t)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

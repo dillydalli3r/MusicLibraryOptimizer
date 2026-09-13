@@ -7,6 +7,23 @@
  freshly resolved path.
 */
 
+import type { MouseEvent } from "react";
+
+/** Shared click behavior for entity-title links on play rows: a plain click
+ * falls through to the row's play handler (preventDefault stops the router),
+ * while Ctrl/Shift/cmd-click opens the target page IN-APP — the browser's
+ * new-tab default is deliberately suppressed so the viewer stays inside the
+ * app. Middle-click keeps the native new-tab behavior. */
+export function entityLinkClick(e: MouseEvent, open: () => void) {
+  if (e.ctrlKey || e.metaKey || e.shiftKey) {
+    e.preventDefault();
+    e.stopPropagation();
+    open();
+  } else {
+    e.preventDefault();
+  }
+}
+
 type TrackLike = { path?: string; tags?: { MUSICBRAINZ_TRACKID?: string | null } };
 type AlbumLike = { path: string; meta?: { MUSICBRAINZ_ALBUMID?: string | null } };
 type ArtistLike = {

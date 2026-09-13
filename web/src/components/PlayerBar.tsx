@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Disc3, Heart, ListMusic, ListPlus, Maximize2, Mic2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Timer, Volume2, X } from "lucide-react";
 import { api } from "../api";
@@ -13,6 +14,7 @@ import { applyReplayGain, attachAnalyser, resumeAnalyser } from "../lib/analyser
 import NowPlayingView from "./NowPlayingView";
 import LyricsSidebar from "./LyricsSidebar";
 import TrackDownloadExport from "./TrackDownloadExport";
+import { trackRef } from "../lib/refs";
 import useSubtitleTracks from "./SubtitledVideo";
 
 /** One line of text (the song name) that auto-scrolls back and forth ONLY
@@ -116,6 +118,17 @@ export default function PlayerBar() {
   const [loop, setLoop] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
+  // Native browser fullscreen for the fullscreen player: entering the viewer
+  // also fullscreens the browser window (best effort — some embeds deny it);
+  // leaving the viewer restores it.
+  const openFullscreen = () => {
+    setFullscreen(true);
+    document.documentElement.requestFullscreen?.().catch(() => { /* denied */ });
+  };
+  const closeFullscreen = () => {
+    setFullscreen(false);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => { /* gone */ });
+  };
   const [plOpen, setPlOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   // drag-reorder state for the queue popover (offsets within "up next")
@@ -133,7 +146,23 @@ export default function PlayerBar() {
   const idle = !current;
   const isVideo = !!current && (isVideoFile(current.file) || isVideoFile(current.path));
   const videoRef = useRef<HTMLVideoElement>(null);
+  // The popout card that owns the video element between fullscreen visits —
+  // the fullscreen player moves the element back here when it closes.
+  const videoHomeRef = useRef<HTMLDivElement>(null);
   const media = () => (isVideo ? videoRef.current : audio()) as HTMLMediaElement | null;
+  // Codec probe for the current video: `native === false` means the browser
+  // cannot decode this file (container or codecs) and the player must start
+  // on the live transcode instead of waiting for a playback error — this is
+  // also the only path that catches decodable-video/undecodable-audio files
+  // (DTS/AC-3 in Chrome), which play silently without ever erroring.
+  const videoMetaQ = useQuery({
+    queryKey: ["videoMeta", current?.path],
+    queryFn: () => api.videoMeta(current!.path),
+    enabled: isVideo && !!current,
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  });
+  const preferTranscode = isVideo && videoMetaQ.data?.native === false;
   // Per-track cover resolution: queue-carried filenames first, then the
   // library payload (covers playlists/.m3u8 queues whose entries lack them).
   const { data: libForCover } = useQuery({
@@ -169,6 +198,14 @@ export default function PlayerBar() {
   });
   const displayTitle =
     current?.title || currentTags?.tags?.TITLE || (current ? current.file.replace(/\.[^.]+$/, "") : "");
+  // The media element's duration cannot be trusted for videos: live
+  // transcodes report Infinity or a FINITE-but-tiny length that creeps up
+  // as MP4 fragments stream in. The ffprobe container length (tags tech /
+  // video meta) is the real one, so videos prefer it; audio keeps the
+  // element's own (mutagen and the element agree there).
+  const probeDuration = Number((currentTags?.tech as { length?: number } | undefined)?.length ?? 0);
+  const elDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
+  const effDuration = isVideo ? (probeDuration || elDuration) : elDuration;
   // Ultra-condensed readout beside the title: just "16/44.1" (resolution
   // for videos). The full codec/bitrate detail stays in the tooltip and in
   // the fullscreen player's larger readouts.
@@ -201,11 +238,11 @@ export default function PlayerBar() {
         });
       }
       ms.setActionHandler("play", () => {
-        audio()?.play();
+        media()?.play();
         setPlaying(current.path);
       });
       ms.setActionHandler("pause", () => {
-        audio()?.pause();
+        media()?.pause();
         setPlaying(null);
       });
       ms.setActionHandler("previoustrack", () => stepRef.current(-1));
@@ -245,6 +282,8 @@ export default function PlayerBar() {
     setTime(0);
     setDuration(0);
     if (video) {
+      // Music videos play through the popout <video> — pause the <audio>
+      // pair and drop their sources so exactly one decoder exists.
       for (const a of [aRef.current, bRef.current]) {
         try { a?.pause(); a && (a.src = ""); } catch { /* ignore */ }
       }
@@ -253,11 +292,14 @@ export default function PlayerBar() {
       preloaded.current = -1;
       preloadedPath.current = null;
       swapped.current = false;
+      // The popout's own declarative src owns loading (it carries the
+      // probe-driven direct/transcode choice and remounts on path change) —
+      // here we only re-apply rate/volume and nudge playback past any
+      // autoplay-policy hesitation.
       const v = videoRef.current;
       if (v) {
         v.playbackRate = speed;
         v.volume = vol;
-        v.src = api.streamUrl(track.path);
         v.play().catch(() => {});
       }
       return;
@@ -488,7 +530,7 @@ export default function PlayerBar() {
     if (sleepAt === null) return;
     const iv = setInterval(() => {
       if (Date.now() >= sleepAt) {
-        audio()?.pause();
+        media()?.pause();
         useStore.getState().setPlaying(null);
         setSleepAt(null);
         toast("Sleep timer — playback paused");
@@ -496,25 +538,29 @@ export default function PlayerBar() {
       setSleepTick((t) => t + 1);
     }, 1000);
     return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sleepAt]);
 
   // Fired by whichever element is active when its track ends. The gapless
   // path swaps the preloaded idle element in and starts it immediately —
   // no network fetch, no decode pause.
-  const handleEnded = (e?: SyntheticEvent<HTMLAudioElement>) => {
-    if (e && e.currentTarget !== audio()) return; // stale idle element
+  const handleEnded = (e?: SyntheticEvent<HTMLMediaElement>) => {
+    // Only the ACTIVE decoder may advance the queue: one of the audio pair,
+    // or the music-video popout (which never matches audio(), so it needs
+    // its own check — without it videos would end and play nothing next).
+    if (e && e.currentTarget !== audio() && e.currentTarget !== videoRef.current) return;
     if (sleepStopNext) {
-      audio()?.pause();
+      media()?.pause();
       useStore.getState().setPlaying(null);
       setSleepStopNext(false);
       toast("Sleep timer — playback paused");
       return;
     }
     if (loop) {
-      const a = audio();
-      if (a) {
-        a.currentTime = 0;
-        a.play().catch(() => {});
+      const m = media();
+      if (m) {
+        m.currentTime = 0;
+        m.play().catch(() => {});
       }
       return;
     }
@@ -526,7 +572,8 @@ export default function PlayerBar() {
       setIndex(next);
       setPlaying(queue[next]?.path ?? null);
       setTime(0);
-      setDuration(el?.duration || 0);
+      const d = el?.duration;
+      setDuration(d !== undefined && Number.isFinite(d) ? d : 0);
       if (el) {
         el.playbackRate = speed;
         el.volume = vol;
@@ -544,13 +591,17 @@ export default function PlayerBar() {
     if (e.currentTarget === audio()) setTime(e.currentTarget.currentTime);
   };
   const onMeta = (e: SyntheticEvent<HTMLAudioElement>) => {
-    if (e.currentTarget === audio()) setDuration(e.currentTarget.duration);
+    const d = e.currentTarget.duration;
+    if (e.currentTarget === audio()) setDuration(Number.isFinite(d) ? d : 0);
   };
   const onVideoTime = (e: SyntheticEvent<HTMLVideoElement>) => {
     setTime(e.currentTarget.currentTime);
   };
   const onVideoMeta = (e: SyntheticEvent<HTMLVideoElement>) => {
-    setDuration(e.currentTarget.duration || 0);
+    // Fragmented-MP4 live transcodes report Infinity — 0 lets the probed
+    // container duration take over (effDuration).
+    const d = e.currentTarget.duration;
+    setDuration(Number.isFinite(d) ? d : 0);
   };
 
   const togglePlay = () => {
@@ -591,7 +642,7 @@ export default function PlayerBar() {
           className={`absolute inset-y-0 left-0 aspect-square rounded-l-[5px] overflow-hidden bg-raise shrink-0 flex items-center justify-center ${
             idle ? "cursor-default" : "group/cover"
           }`}
-          onClick={() => !idle && setFullscreen(true)}
+          onClick={() => !idle && openFullscreen()}
           title={idle ? "Nothing playing" : "Album art — click for the fullscreen player"}
           disabled={idle}
         >
@@ -614,7 +665,14 @@ export default function PlayerBar() {
                   the width the text needs, and shrinks (marquee) when the
                   name is too long — they never get pushed to the edge */}
               <div className="flex items-baseline gap-2 min-w-0">
-                <ScrollingText text={displayTitle} />
+                {/* title opens the track's own page (tag editing, links, lyrics) */}
+                <Link
+                  to={trackRef({ path: current.path, tags: { MUSICBRAINZ_TRACKID: currentTags?.tags?.MUSICBRAINZ_TRACKID } })}
+                  className="min-w-0 hover:[&>span]:text-accent-soft transition-colors"
+                  title="Open the track page"
+                >
+                  <ScrollingText text={displayTitle} />
+                </Link>
                 <AdvisoryMark value={currentTags?.tags?.ITUNESADVISORY} />
                 {techStr && (
                   <span className="text-[10px] font-mono text-zinc-500 shrink-0" title={techTip || "Bit depth/sample rate"}>
@@ -644,9 +702,9 @@ export default function PlayerBar() {
             <input
               type="range"
               min={0}
-              max={duration || 0}
+              max={effDuration || 0}
               step={0.05}
-              value={Math.min(time, duration || 0)}
+              value={Math.min(time, effDuration || 0)}
               onChange={(e) => {
                 const a = media();
                 if (!a) return;
@@ -657,7 +715,7 @@ export default function PlayerBar() {
               disabled={idle}
               title="Seek — ← / → nudge 5s"
             />
-            <span className="w-10 shrink-0">{fmtDuration(duration)}</span>
+            <span className="w-10 shrink-0">{fmtDuration(effDuration)}</span>
           </div>
           <div className="flex items-center gap-0.5">
             {/* like — far LEFT of the transport, mirroring the speed chip on
@@ -680,7 +738,7 @@ export default function PlayerBar() {
             >
               <Shuffle className="h-4 w-4" />
             </button>
-            <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(-1)} disabled={idle}>
+            <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(-1)} disabled={idle} title="Previous track">
               <SkipBack className="h-4 w-4" />
             </button>
             <button
@@ -692,7 +750,7 @@ export default function PlayerBar() {
             >
               {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
             </button>
-            <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(1)} disabled={idle}>
+            <button className="p-2 rounded-lg hover:bg-raise text-zinc-300" onClick={() => step(1)} disabled={idle} title="Next track">
               <SkipForward className="h-4 w-4" />
             </button>
             <button
@@ -948,7 +1006,7 @@ export default function PlayerBar() {
                 )}
               </div>
 
-              <TrackDownloadExport path={current?.path ?? ""} iconOnly disabled={!current} />
+              <TrackDownloadExport path={current?.path ?? ""} iconOnly disabled={!current} up />
             </div>
 
             {/* layer 2: the volume bar beneath the buttons */}
@@ -985,7 +1043,7 @@ export default function PlayerBar() {
               className={`p-2 rounded-lg hover:bg-raise text-zinc-400 hover:text-white shrink-0 ${
                 idle ? "opacity-40 pointer-events-none" : ""
               }`}
-              onClick={() => setFullscreen(true)}
+              onClick={() => openFullscreen()}
               disabled={idle}
               title="Fullscreen player with lyrics"
             >
@@ -1001,7 +1059,7 @@ export default function PlayerBar() {
         <div className="flex md:hidden h-full items-center gap-1 pr-2">
           <button
             className="self-stretch aspect-square rounded-l-[5px] overflow-hidden bg-raise shrink-0 flex items-center justify-center"
-            onClick={() => !idle && setFullscreen(true)}
+            onClick={() => !idle && openFullscreen()}
             title={idle ? "Nothing playing" : "Album art — tap for the fullscreen player"}
             disabled={idle}
           >
@@ -1015,7 +1073,13 @@ export default function PlayerBar() {
             {current ? (
               <>
                 <div className="flex items-baseline gap-1.5 min-w-0">
-                  <ScrollingText text={displayTitle} />
+                  <Link
+                    to={trackRef({ path: current.path, tags: { MUSICBRAINZ_TRACKID: currentTags?.tags?.MUSICBRAINZ_TRACKID } })}
+                    className="min-w-0 hover:[&>span]:text-accent-soft transition-colors"
+                    title="Open the track page"
+                  >
+                    <ScrollingText text={displayTitle} />
+                  </Link>
                   <AdvisoryMark value={currentTags?.tags?.ITUNESADVISORY} />
                 </div>
                 <div className="text-[11px] text-zinc-500 truncate">
@@ -1050,7 +1114,7 @@ export default function PlayerBar() {
           </button>
           <button
             className={`p-2 rounded-lg hover:bg-raise text-zinc-400 shrink-0 ${idle ? "opacity-40 pointer-events-none" : ""}`}
-            onClick={() => setFullscreen(true)}
+            onClick={() => openFullscreen()}
             disabled={idle}
             title="Fullscreen player"
           >
@@ -1059,16 +1123,20 @@ export default function PlayerBar() {
         </div>
 
         {/* music-video popout: the REAL decoder (with sound) behind every
-            video — visible during default playback, kept mounted (hidden)
-            while fullscreen so the fullscreen mirror it drives never loses
-            its clock. */}
+            video — visible during default playback. The fullscreen player
+            ADOPTS this same element (a plain DOM move, no remount), so there
+            is exactly one decoder, one network stream and no drift; on exit
+            it returns right here. */}
         {isVideo && current && (
-          <div className={fullscreen ? "hidden" : "absolute right-3 bottom-[5.25rem] z-30 w-80 max-w-[80vw] rounded-xl overflow-hidden border border-border bg-black shadow-2xl"}>
+          <div
+            ref={videoHomeRef}
+            className={fullscreen ? "hidden" : "absolute right-3 bottom-[5.25rem] z-30 w-80 max-w-[80vw] rounded-xl overflow-hidden border border-border bg-black shadow-2xl"}
+          >
             <div className="flex items-center gap-2 px-2.5 py-1.5 bg-zinc-950/90">
               <span className="text-[11px] text-zinc-300 break-words flex-1 min-w-0">{displayTitle}</span>
               <button
                 className="p-1 rounded hover:bg-white/10 text-zinc-400 hover:text-white shrink-0"
-                onClick={() => setFullscreen(true)}
+                onClick={() => openFullscreen()}
                 title="Open fullscreen player"
               >
                 <Maximize2 className="h-3.5 w-3.5" />
@@ -1084,6 +1152,7 @@ export default function PlayerBar() {
             <VideoPopout
               path={current.path}
               videoRef={videoRef}
+              preferTranscode={preferTranscode}
               onTime={onVideoTime}
               onMeta={(e) => {
                 // A transcode-fallback remount creates a fresh element with
@@ -1108,7 +1177,9 @@ export default function PlayerBar() {
               queuePos={`${index + 1}/${queue.length}`}
               playing={!!playing}
               time={time}
-              duration={duration}
+              duration={effDuration}
+              videoEl={videoRef}
+              videoHome={videoHomeRef}
               shuffle={shuffle}
               loop={loop}
               liked={liked}
@@ -1123,7 +1194,7 @@ export default function PlayerBar() {
               onToggleShuffle={() => setShuffle(!shuffle)}
               onToggleLoop={() => setLoop(!loop)}
               onToggleLike={toggleLike}
-              onClose={() => setFullscreen(false)}
+              onClose={closeFullscreen}
               getAudioTime={() => media()?.currentTime ?? 0}
               speed={speed}
               onSpeedChange={setSpeed}
@@ -1152,28 +1223,33 @@ export default function PlayerBar() {
 }
 
 /** Popout music-video player: a REAL <video> element (with sound) wired to
- * the player bar's clock, subtitles included. Remuxed MKV/MP4/WebM with
- * browser-decodable codecs play directly; exotic containers show a hint. */
+ * the player bar's clock, subtitles included. The codec probe picks direct
+ * bytes vs live transcode upfront; an onError retry still backs it up. */
 function VideoPopout({
   path,
   videoRef,
+  preferTranscode = false,
   onTime,
   onMeta,
   onEnded,
 }: {
   path: string;
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  preferTranscode?: boolean;
   onTime: (e: SyntheticEvent<HTMLVideoElement>) => void;
   onMeta: (e: SyntheticEvent<HTMLVideoElement>) => void;
   onEnded: (e?: SyntheticEvent<HTMLVideoElement>) => void;
 }) {
   const tracks = useSubtitleTracks(path);
   const [failed, setFailed] = useState(false);
-  const [transcoded, setTranscoded] = useState(false);
+  const [errorFallback, setErrorFallback] = useState(false);
   useEffect(() => {
     setFailed(false);
-    setTranscoded(false);
+    setErrorFallback(false);
   }, [path]);
+  // The probe decision and the onError fallback both force the live stream;
+  // derived, so a late-arriving probe result needs no state syncing.
+  const live = errorFallback || preferTranscode;
   if (failed) {
     return (
       <div className="p-3 text-[11px] text-zinc-400">
@@ -1183,9 +1259,9 @@ function VideoPopout({
   }
   return (
     <video
-      key={`${path}|${transcoded ? "x" : "direct"}`}
+      key={`${path}|${live ? "x" : "direct"}`}
       ref={videoRef}
-      src={api.videoStreamUrl(path, transcoded)}
+      src={api.videoStreamUrl(path, live)}
       controls
       autoPlay
       playsInline
@@ -1195,7 +1271,7 @@ function VideoPopout({
       onEnded={onEnded}
       onError={() => {
         // Direct bytes failed (MPEG-2/VC-1/etc.) — retry via live transcode.
-        if (!transcoded) setTranscoded(true);
+        if (!live) setErrorFallback(true);
         else setFailed(true);
       }}
       className="w-full aspect-video bg-black"

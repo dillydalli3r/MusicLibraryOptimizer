@@ -22,3 +22,14 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </StrictMode>
 );
+
+// Offline playback: the worker serves cached audio/video streams so
+// "Download" (cache in the app) keeps tracks playable without the server.
+// Needs a secure context (localhost qualifies; plain-LAN http does not).
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {
+      /* offline cache stays unavailable — streaming still works */
+    });
+  });
+}

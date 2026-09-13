@@ -881,11 +881,12 @@ def _naming_mismatch(ap, folder, script, release_type, tags):
 
     The naming script defines the target path WITHOUT the file extension
     (beets-style — the extension is preserved from the source file), so the
-    extension is appended before comparing. Returns the expected relative
-    path when the track's actual path (relative to the music folder) does
-    not match, else None. Both full and 8-char-truncated MusicBrainz IDs
-    are accepted so the short_folder_names setting can't produce false
-    failures.
+    extension is appended before comparing. Returns (kind, expected) where
+    kind is "ok" (exact match), "case" (matches except for LETTER CASE —
+    graded by grade_check_filename_case) or "path" (no match at all —
+    graded by grade_check_naming). Both full and 8-char-truncated
+    MusicBrainz IDs are accepted so the short_folder_names setting can't
+    produce false failures.
     """
     from mlo.naming import eval_script, track_variables
 
@@ -894,10 +895,18 @@ def _naming_mismatch(ap, folder, script, release_type, tags):
     ext = os.path.splitext(ap)[1]
     expected_full = eval_script(script, variables, shorter_ids=False) + ext
     expected_short = eval_script(script, variables, shorter_ids=True) + ext
+
+    def _seps(p):
+        # separator-normalized but CASE-SENSITIVE (exact compare)
+        return str(p).replace("/", os.sep).replace("\\", os.sep)
+
+    for exp in (expected_full, expected_short):
+        if exp and _seps(exp) == _seps(actual):
+            return ("ok", None)
     for exp in (expected_full, expected_short):
         if exp and _norm_path_case(exp) == _norm_path_case(actual):
-            return None
-    return expected_full or expected_short
+            return ("case", expected_full or expected_short)
+    return ("path", expected_full or expected_short)
 
 
 def _grade_album(album_dir, lyrics_format, cfg=None):
@@ -1139,7 +1148,8 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                         track["issues"].append(t)
 
         # File/folder names must match the naming script (the same script the
-        # organizer applies), relative to the music folder.
+        # organizer applies), relative to the music folder — exact match for
+        # PATH, and letter-case separately for PATH_CASE.
         if naming_check:
             try:
                 tags_map = af.all_tags() or {}
@@ -1147,16 +1157,21 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 tags_map = {}
             if album_release_type is None and tags_map.get("RELEASETYPE"):
                 album_release_type = tags_map.get("RELEASETYPE")
-            expected = _naming_mismatch(
+            kind, expected = _naming_mismatch(
                 ap, music_folder, naming_script,
                 tags_map.get("RELEASETYPE") or album_release_type,
                 tags_map,
             )
-            if expected is not None:
+            if kind == "path" and cfg.get("grade_check_naming", True):
                 total_checks += 1
                 failed_checks += 1
                 add_issue(f"PATH: expected '{expected}'", basename)
                 track["issues"].append("PATH")
+            elif kind == "case" and cfg.get("grade_check_filename_case", True):
+                total_checks += 1
+                failed_checks += 1
+                add_issue(f"PATH CASE: expected '{expected}' (run organize)", basename)
+                track["issues"].append("PATH_CASE")
 
         # Additional check for *all* tags in the file (including TITLE, ALBUM, etc.) for leading/trailing spaces and blank lines
         if cfg.get("grade_check_tag_spaces", True) or cfg.get("grade_check_tag_blank_lines", True):
@@ -1302,41 +1317,29 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
                 track["issues"].append("AUDIT")
 
         # MusicBrainz / RateYourMusic identity links — required for a PASS.
-        # Album, artist AND track level links must exist: they power the
-        # open-in-MB/RYM buttons, move-safe likes and re-import matching.
-        mb_album = str(
+        # Exactly two links are graded: the MusicBrainz RELEASE (falling
+        # back to its release group) and the RateYourMusic release-group
+        # page. Artist / recording / per-track RYM links stay optional —
+        # they power extra buttons but are not graded.
+        mb_release = str(
             af.get_tag("MUSICBRAINZ_ALBUMID") or af.get_tag("MUSICBRAINZ_RELEASEGROUPID") or ""
         ).strip()
-        mb_artist = str(af.get_tag("MUSICBRAINZ_ARTISTID") or "").strip()
-        mb_track = str(af.get_tag("MUSICBRAINZ_TRACKID") or "").strip()
-        rym_album = str(af.get_tag("RATEYOURMUSIC_ALBUM") or "").strip()
-        rym_artist = str(af.get_tag("RATEYOURMUSIC_ARTIST") or "").strip()
-        rym_track = str(af.get_tag("RATEYOURMUSIC_TRACK") or "").strip()
-        if should_write_audio_tag(cfg, "MUSICBRAINZ_TRACKID", filepath=ap) and cfg.get(
+        rym_release = str(af.get_tag("RATEYOURMUSIC_ALBUM") or "").strip()
+        if should_write_audio_tag(cfg, "MUSICBRAINZ_ALBUMID", filepath=ap) and cfg.get(
             "grade_check_mb_links", True
         ):
             total_checks += 1
-            missing = [
-                name for name, val in
-                (("album", mb_album), ("artist", mb_artist), ("track", mb_track))
-                if not val
-            ]
-            if missing:
+            if not mb_release:
                 failed_checks += 1
-                add_issue(f"Missing MusicBrainz {'/'.join(missing)} link (import from MusicBrainz)", basename)
+                add_issue("Missing MusicBrainz release link (import from MusicBrainz)", basename)
                 track["issues"].append("MB_LINK")
         if should_write_audio_tag(cfg, "RATEYOURMUSIC_ALBUM", filepath=ap) and cfg.get(
             "grade_check_rym_links", True
         ):
             total_checks += 1
-            missing = [
-                name for name, val in
-                (("album", rym_album), ("artist", rym_artist), ("track", rym_track))
-                if not val
-            ]
-            if missing:
+            if not rym_release:
                 failed_checks += 1
-                add_issue(f"Missing RateYourMusic {'/'.join(missing)} link", basename)
+                add_issue("Missing RateYourMusic release link", basename)
                 track["issues"].append("RYM_LINK")
 
         # Rip-log score (MEDIA=CD releases only, checked once MEDIA is
@@ -2415,6 +2418,19 @@ def _grade_album(album_dir, lyrics_format, cfg=None):
             if len(extra_imgs) > 4:
                 shown += f" (+{len(extra_imgs) - 4} more)"
             add_issue(f"Extra artwork not tied to any track: {shown}", "album")
+
+    # File extensions must be lowercase ("01 - Song.FLAC" fails). organize
+    # lowercases every extension it touches.
+    if cfg.get("grade_check_ext_case", True):
+        bad_ext = [f for f in sorted(all_files)
+                   if os.path.splitext(f)[1] != os.path.splitext(f)[1].lower()]
+        total_checks += 1
+        if bad_ext:
+            failed_checks += 1
+            shown = ", ".join(bad_ext[:6])
+            if len(bad_ext) > 6:
+                shown += f" (+{len(bad_ext) - 6} more)"
+            add_issue(f"File extension not lowercase: {shown}", "album")
 
     # Raw, un-remuxed video files (VOB/AVI/WMV/TS/...) fail grading — script
     # 11 normalizes them to MKV with every stream copied bit-exact. The

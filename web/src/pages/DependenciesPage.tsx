@@ -61,8 +61,8 @@ export default function DependenciesPage() {
     <div className="p-6 max-w-3xl mx-auto space-y-4">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <Wrench className="h-5 w-5 text-accent-soft" /> Dependencies
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Wrench className="h-6 w-6 text-accent" /> Dependencies
           </h1>
           <p className="text-xs text-zinc-400 mt-1 max-w-lg">
             External tools the scripts rely on. Missing ones are downloaded into the app's dependencies

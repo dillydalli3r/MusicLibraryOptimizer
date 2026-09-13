@@ -158,7 +158,7 @@ export default function OptimizationPage() {
             {forceMenu && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setForceMenu(false)} />
-                <div className="absolute left-0 top-full mt-1 z-50 bg-card border border-border rounded-lg p-2 w-60 shadow-2xl">
+                <div className="absolute left-0 top-full mt-1 z-50 bg-zinc-950 border border-border rounded-lg p-1.5 w-60 shadow-2xl">
                   <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-1 pb-1.5">
                     Force when Force is on
                   </div>

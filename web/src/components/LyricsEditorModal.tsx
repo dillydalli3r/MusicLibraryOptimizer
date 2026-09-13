@@ -47,8 +47,8 @@ interface Pending {
 }
 
 /** Enhanced lyric editor / creator: stamp line, word and SYLLABLE times
- * along the vocals (at any playback speed), let the AI acoustically
- * syllable-align the whole track, romanize foreign scripts for tagging,
+ * along the vocals (at any playback speed), auto-distribute word/syllable
+ * times inside stamped lines, romanize foreign scripts for tagging,
  * and save into the LYRICS tag / .lrc sidecar. The LYRICS field itself
  * always keeps the original language — romanization is stored separately
  * (TRANSLITERATION-<lang>-LATN), exactly like the Lyrics Translate
@@ -456,7 +456,7 @@ export default function LyricsEditorModal({
   // sidebar would draw over the modal).
   return createPortal(
     <div className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
-      <div className="glass rounded-2xl w-full max-w-6xl h-[92vh] flex flex-col shadow-2xl bg-zinc-950/90 overflow-hidden">
+      <div className="rounded-2xl w-full max-w-6xl h-[92vh] flex flex-col shadow-2xl bg-card border border-border overflow-hidden">
         {/* the editor owns a private decoder so stamping never fights the
             main player; playbackRate follows the speed control */}
         <audio
@@ -482,7 +482,9 @@ export default function LyricsEditorModal({
               <Keyboard className="h-4 w-4" />
             </button>
             {keysMenu && (
-              <div className="absolute right-0 top-full mt-1 z-40 bg-zinc-900 border border-border rounded-lg shadow-xl p-2 w-80 max-h-[70vh] overflow-auto">
+              <>
+              <div className="fixed inset-0 z-30" onClick={() => setKeysMenu(false)} />
+              <div className="absolute right-0 top-full mt-1 z-40 bg-zinc-950 border border-border rounded-lg shadow-2xl p-1.5 w-80 max-h-[70vh] overflow-auto">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 px-1 pb-1">Hotkeys</div>
                 {LYRICS_ACTIONS.map((a) => (
                   <div key={a.id} className="flex items-center gap-2 py-0.5">
@@ -510,6 +512,7 @@ export default function LyricsEditorModal({
                   <span className="text-[10px] text-zinc-600 px-1">saved in this browser</span>
                 </div>
               </div>
+              </>
             )}
           </div>
           <button className="p-2 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white" onClick={onClose} title="Close (Esc)">
